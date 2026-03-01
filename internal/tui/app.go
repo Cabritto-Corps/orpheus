@@ -1297,7 +1297,7 @@ func (m model) isTrackInActivePlaylist(trackID string) bool {
 func (m *model) rememberPlayedTrack(prevTrackID, nextTrackID string) {
 	prevTrackID = normalizeQueueID(prevTrackID)
 	nextTrackID = normalizeQueueID(nextTrackID)
-	if prevTrackID == "" || prevTrackID == nextTrackID || !m.isTrackInActivePlaylist(prevTrackID) {
+	if prevTrackID == "" || prevTrackID == nextTrackID {
 		return
 	}
 	if m.playedTrackIDs == nil {

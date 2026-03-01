@@ -395,17 +395,12 @@ func (p *AppPlayer) handleTUICommand(ctx context.Context, cmd TUICommand) error 
 		if p.state.tracks == nil {
 			return nil
 		}
-		// Always shuffle (or re-shuffle if already on).
-		// Unshuffle first when already shuffled so go-librespot generates a new seed.
-		if p.state.player.Options.ShufflingContext {
-			if err := p.state.tracks.ToggleShuffle(ctx, false); err != nil {
-				return fmt.Errorf("toggle shuffle off: %w", err)
-			}
+		// Toggle shuffle: turn off if already on, turn on if off.
+		newShuffle := !p.state.player.Options.ShufflingContext
+		if err := p.state.tracks.ToggleShuffle(ctx, newShuffle); err != nil {
+			return fmt.Errorf("toggle shuffle: %w", err)
 		}
-		if err := p.state.tracks.ToggleShuffle(ctx, true); err != nil {
-			return fmt.Errorf("toggle shuffle on: %w", err)
-		}
-		p.state.player.Options.ShufflingContext = true
+		p.state.player.Options.ShufflingContext = newShuffle
 		p.state.player.Track = p.state.tracks.CurrentTrack()
 		p.state.player.PrevTracks = p.state.tracks.PrevTracks()
 		p.state.player.NextTracks = p.state.tracks.NextTracks(ctx, nil)
