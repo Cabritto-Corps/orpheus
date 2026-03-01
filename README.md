@@ -8,6 +8,7 @@
 
 ### Preview
 
-- Currently this is the UI of orpheus (which will probably change a lot given time)
+- TUI is improved but still has a long way to go 
 
-![Orpheus Screenshot](orpheus.png)
+![Orpheus Screenshot](playlist_orpheus.png)
+![Orpheus Screenshot 2](queue_orpheus.png)

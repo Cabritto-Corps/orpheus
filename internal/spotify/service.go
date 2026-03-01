@@ -138,6 +138,7 @@ type PlaylistPage struct {
 
 type PlaylistTrackPage struct {
 	TrackIDs   []string
+	TrackInfos []QueueItem // parallel slice: name/artist/duration for each TrackID
 	Offset     int
 	Limit      int
 	NextOffset int
@@ -407,7 +408,7 @@ func NewClient(_ context.Context, tokenSource oauth2.TokenSource) *spotifyapi.Cl
 	var base http.RoundTripper = http.DefaultTransport
 	if t, ok := http.DefaultTransport.(*http.Transport); ok {
 		clone := t.Clone()
-		clone.ResponseHeaderTimeout = 0 // context deadlines own the timeout budget
+		clone.ResponseHeaderTimeout = 0
 		base = clone
 	}
 	apiClient := &http.Client{
@@ -533,16 +534,16 @@ func (s *Service) Status(ctx context.Context) (*PlaybackStatus, error) {
 		return nil, ErrNoActiveTrack
 	}
 	status := &PlaybackStatus{
-		DeviceName:    state.Device.Name,
-		DeviceID:      string(state.Device.ID),
-		TrackID:       string(state.Item.ID),
-		Volume:        int(state.Device.Volume),
-		TrackName:     state.Item.Name,
-		AlbumName:     state.Item.Album.Name,
-		Playing:       state.Playing,
-		ProgressMS:     int(state.Progress),
-		DurationMS:     int(state.Item.Duration),
-		ShuffleState:   state.ShuffleState,
+		DeviceName:   state.Device.Name,
+		DeviceID:     string(state.Device.ID),
+		TrackID:      string(state.Item.ID),
+		Volume:       int(state.Device.Volume),
+		TrackName:    state.Item.Name,
+		AlbumName:    state.Item.Album.Name,
+		Playing:      state.Playing,
+		ProgressMS:   int(state.Progress),
+		DurationMS:   int(state.Item.Duration),
+		ShuffleState: state.ShuffleState,
 	}
 	if len(state.Item.Artists) > 0 {
 		status.ArtistName = state.Item.Artists[0].Name
@@ -772,11 +773,18 @@ func (s *Service) ListPlaylistTrackIDsPage(ctx context.Context, playlistID strin
 	}
 
 	out.TrackIDs = make([]string, 0, len(page.Items))
+	out.TrackInfos = make([]QueueItem, 0, len(page.Items))
 	for _, item := range page.Items {
 		if item.Track.Track == nil || item.Track.Track.ID == "" {
 			continue
 		}
-		out.TrackIDs = append(out.TrackIDs, string(item.Track.Track.ID))
+		t := item.Track.Track
+		qi := QueueItem{ID: string(t.ID), Name: t.Name, DurationMS: int(t.Duration)}
+		if len(t.Artists) > 0 {
+			qi.Artist = t.Artists[0].Name
+		}
+		out.TrackIDs = append(out.TrackIDs, string(t.ID))
+		out.TrackInfos = append(out.TrackInfos, qi)
 	}
 	out.NextOffset = offset + len(page.Items)
 	out.HasMore = len(page.Items) >= limit
@@ -818,9 +826,6 @@ func (s *Service) PlayPlaylist(ctx context.Context, target, playlistURI string) 
 		return errors.New("playlist URI must not be empty")
 	}
 
-	// Use FindDeviceByName instead of EnsureDeviceActive here so we do not
-	// issue a separate TransferPlayback before PlayOpt. The Web API activates
-	// the target device when device_id is included in the play request.
 	device, err := s.FindDeviceByName(ctx, target)
 	if err != nil {
 		return err
@@ -926,8 +931,6 @@ func apiCallWithRetry[T any](ctx context.Context, fn func() (T, error)) (T, erro
 		if err == nil {
 			return value, nil
 		}
-		// Rate limits are intercepted at the transport layer (rateLimitTransport)
-		// before they reach this function, so only 5xx server errors reach here.
 		if isRetryableAPIError(err) && !isRateLimitError(err) && attempt+1 < apiRetryMaxAttempts {
 			if waitErr := waitForAPIRetry(ctx, err, attempt); waitErr != nil {
 				return zero, waitErr

@@ -44,12 +44,10 @@ func newKeys() keyMap {
 	}
 }
 
-// ShortHelp shows context-sensitive bindings in the footer.
 func (k keyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Select, k.PlayPause, k.Next, k.Prev, k.Shuffle, k.OpenPicker, k.Filter, k.ToggleHelp, k.Quit}
 }
 
-// FullHelp shows the expanded help view.
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Select, k.OpenPicker, k.CloseModal, k.Refresh, k.Filter},
@@ -58,7 +56,6 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	}
 }
 
-// newHelp constructs a help.Model styled to match the app colour scheme.
 func newHelp() help.Model {
 	h := help.New()
 	h.Styles.ShortKey = lipgloss.NewStyle().Foreground(colorBlue)

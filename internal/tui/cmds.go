@@ -11,9 +11,6 @@ import (
 	"orpheus/internal/spotify"
 )
 
-// imgSemaphore limits the number of concurrent cover-art HTTP fetches so we
-// don't overwhelm the CDN or the local connection pool when 100+ playlists
-// are loaded at once.  16 concurrent fetches is a reasonable sweet-spot.
 var imgSemaphore = make(chan struct{}, 8)
 
 const (
@@ -27,9 +24,6 @@ const (
 	preloadQueueMaxTimeout      = 3 * time.Minute
 )
 
-// ── Message types ─────────────────────────────────────────────────────────────
-
-// pollMsg carries the result of a playback status fetch and optional queue fetch.
 type pollMsg struct {
 	status       *spotify.PlaybackStatus
 	queue        []spotify.QueueItem
@@ -38,9 +32,8 @@ type pollMsg struct {
 	err          error
 }
 
-// actionMsg carries the result of a user-initiated playback action.
 type actionMsg struct {
-	action    string // semantic label for screen transitions
+	action    string
 	err       error
 	rollback  *spotify.PlaybackStatus
 	reconcile bool
@@ -54,7 +47,6 @@ type actionReconcileMsg struct {
 	queueFetched bool
 }
 
-// playlistsMsg carries the result of listing user playlists.
 type playlistsMsg struct {
 	items   []spotify.PlaylistSummary
 	offset  int
@@ -66,6 +58,7 @@ type playlistsMsg struct {
 type playlistTracksMsg struct {
 	playlistID string
 	trackIDs   []string
+	trackInfos []spotify.QueueItem
 	nextOffset int
 	hasMore    bool
 	token      int
@@ -77,13 +70,11 @@ type preloadQueueMsg struct {
 	err      error
 }
 
-// imageLoadedMsg carries the result of fetching a cover image.
 type imageLoadedMsg struct {
 	url string
 	err error
 }
 
-// tickMsg triggers a playback state poll.
 type tickMsg time.Time
 
 type navDebounceMsg struct {
@@ -96,9 +87,6 @@ type playbackStateMsg struct {
 	queueHasMore bool
 }
 
-// StartPlaybackStateListener runs a goroutine that reads from playbackStateCh,
-// converts updates to spotify status/queue, and sends playbackStateMsg via send.
-// It exits when ctx is done.
 func StartPlaybackStateListener(playbackStateCh <-chan *librespot.PlaybackStateUpdate, send func(tea.Msg), ctx context.Context) {
 	go func() {
 		for {
@@ -154,9 +142,6 @@ type currentUserIDMsg struct {
 	err    error
 }
 
-// ── Command factories ─────────────────────────────────────────────────────────
-
-// pollCmd fetches playback status and, when requested, queue in parallel.
 func (m model) pollCmd(fetchQueue bool) tea.Cmd {
 	if m.tuiCmdCh != nil {
 		return nil
@@ -199,8 +184,6 @@ func (m model) pollCmd(fetchQueue bool) tea.Cmd {
 	}
 }
 
-// actionCmd wraps a playback action and tags the result with an action label
-// used for screen transitions.
 func (m model) actionCmd(fn func(context.Context) error, action string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, actionRequestTimeout)
@@ -210,13 +193,47 @@ func (m model) actionCmd(fn func(context.Context) error, action string) tea.Cmd 
 }
 
 func (m model) actionWithReconcileCmd(fn func(context.Context) error, rollback *spotify.PlaybackStatus) tea.Cmd {
+	if m.service == nil {
+		return func() tea.Msg {
+			ctx, cancel := context.WithTimeout(m.ctx, actionRequestTimeout)
+			defer cancel()
+			if err := fn(ctx); err != nil {
+				return actionReconcileMsg{err: err, rollback: rollback}
+			}
+			return actionReconcileMsg{}
+		}
+	}
+	svc := m.service
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, actionRequestTimeout)
 		defer cancel()
+
 		if err := fn(ctx); err != nil {
 			return actionReconcileMsg{err: err, rollback: rollback}
 		}
-		return actionReconcileMsg{}
+
+		var status *spotify.PlaybackStatus
+		var statusErr error
+		var queue []spotify.QueueItem
+		var queueErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			status, statusErr = svc.Status(ctx)
+		}()
+		go func() {
+			defer wg.Done()
+			queue, queueErr = svc.GetQueue(ctx)
+		}()
+		wg.Wait()
+		if statusErr != nil {
+			return actionReconcileMsg{}
+		}
+		if queueErr != nil {
+			return actionReconcileMsg{status: status, queueFetched: false}
+		}
+		return actionReconcileMsg{status: status, queue: queue, queueFetched: true}
 	}
 }
 
@@ -329,28 +346,21 @@ func (m model) getCurrentUserIDCmd() tea.Cmd {
 	}
 }
 
-// loadImageCmd fetches, decodes, and half-block renders a cover image into the
-// shared cache.  All expensive work (HTTP fetch + resize + ANSI render) is done
-// inside the goroutine so View() only ever performs a cheap map lookup.
-//
-// The cmd is a no-op if the URL is empty or the image is already cached.
-// Concurrency is bounded by imgSemaphore so bulk pre-loads don't open hundreds
-// of simultaneous HTTP connections.
 func (m model) loadImageCmd(url string) tea.Cmd {
 	if url == "" {
 		return nil
 	}
-	cache := m.imgs // capture pointer; shared across all model copies
+	cache := m.imgs
 	if !cache.beginLoad(url) {
 		return nil
 	}
+	coverSizes := m.currentCoverSizes()
 	return func() tea.Msg {
 		defer cache.finishLoad(url)
 
 		ctx, cancel := context.WithTimeout(m.ctx, imageFetchTimeout)
 		defer cancel()
 
-		// Acquire slot with context timeout.
 		select {
 		case imgSemaphore <- struct{}{}:
 			defer func() { <-imgSemaphore }()
@@ -358,8 +368,8 @@ func (m model) loadImageCmd(url string) tea.Cmd {
 			return imageLoadedMsg{url: url, err: ctx.Err()}
 		}
 
-		// Another goroutine may have fetched the same URL while we were waiting.
 		if _, ok := cache.getImage(url); ok {
+			cache.preRenderCovers(url, coverSizes)
 			return imageLoadedMsg{url: url}
 		}
 
@@ -368,11 +378,11 @@ func (m model) loadImageCmd(url string) tea.Cmd {
 			return imageLoadedMsg{url: url, err: err}
 		}
 		cache.setImage(url, img)
+		cache.preRenderCovers(url, coverSizes)
 		return imageLoadedMsg{url: url}
 	}
 }
 
-// tickCmd schedules the next playback state poll.
 func (m model) tickCmd() tea.Cmd {
 	return tea.Tick(uiTickInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
@@ -411,32 +421,64 @@ func (m model) loadPlaylistTracksCmd(playlistID string, offset int, token int) t
 		ctx, cancel := context.WithTimeout(m.ctx, playlistTrackRequestTimeout)
 		defer cancel()
 		if offset == 0 {
-			all := make([]string, 0, playlistTrackPageSize)
-			pageOffset := 0
-			for len(all) < playlistTrackPreloadMax {
-				limit := min(playlistTrackPageSize, playlistTrackPreloadMax-len(all))
-				if limit <= 0 {
+			first, err := catalog.ListPlaylistTrackIDsPage(ctx, playlistID, 0, playlistTrackPageSize)
+			if err != nil {
+				return playlistTracksMsg{playlistID: playlistID, token: token, err: err}
+			}
+			all := append([]string(nil), first.TrackIDs...)
+			allInfos := append([]spotify.QueueItem(nil), first.TrackInfos...)
+
+			if !first.HasMore || first.NextOffset <= 0 || len(all) >= playlistTrackPreloadMax {
+				return playlistTracksMsg{
+					playlistID: playlistID,
+					trackIDs:   all,
+					trackInfos: allInfos,
+					nextOffset: len(all),
+					hasMore:    false,
+					token:      token,
+				}
+			}
+
+			type pageResult struct {
+				idx  int
+				page *spotify.PlaylistTrackPage
+				err  error
+			}
+			pageStart := first.NextOffset
+			var pageOffsets []int
+			for off := pageStart; off < playlistTrackPreloadMax; off += playlistTrackPageSize {
+				pageOffsets = append(pageOffsets, off)
+			}
+			results := make([]pageResult, len(pageOffsets))
+			var wg sync.WaitGroup
+			for i, off := range pageOffsets {
+				wg.Add(1)
+				go func(idx, pageOff int) {
+					defer wg.Done()
+					limit := min(playlistTrackPageSize, playlistTrackPreloadMax-pageOff)
+					pg, pErr := catalog.ListPlaylistTrackIDsPage(ctx, playlistID, pageOff, limit)
+					results[idx] = pageResult{idx: idx, page: pg, err: pErr}
+				}(i, off)
+			}
+			wg.Wait()
+
+			for _, r := range results {
+				if r.err != nil {
 					break
 				}
-				page, err := catalog.ListPlaylistTrackIDsPage(ctx, playlistID, pageOffset, limit)
-				if err != nil {
-					return playlistTracksMsg{playlistID: playlistID, token: token, err: err}
+				if r.page == nil {
+					break
 				}
-				all = append(all, page.TrackIDs...)
-				if !page.HasMore || len(page.TrackIDs) == 0 || page.NextOffset <= pageOffset {
-					return playlistTracksMsg{
-						playlistID: playlistID,
-						trackIDs:   all,
-						nextOffset: len(all),
-						hasMore:    false,
-						token:      token,
-					}
+				all = append(all, r.page.TrackIDs...)
+				allInfos = append(allInfos, r.page.TrackInfos...)
+				if !r.page.HasMore {
+					break
 				}
-				pageOffset = page.NextOffset
 			}
 			return playlistTracksMsg{
 				playlistID: playlistID,
 				trackIDs:   all,
+				trackInfos: allInfos,
 				nextOffset: len(all),
 				hasMore:    false,
 				token:      token,
@@ -464,6 +506,7 @@ func (m model) loadPlaylistTracksCmd(playlistID string, offset int, token int) t
 		return playlistTracksMsg{
 			playlistID: playlistID,
 			trackIDs:   page.TrackIDs,
+			trackInfos: page.TrackInfos,
 			nextOffset: nextOffset,
 			hasMore:    hasMore,
 			token:      token,

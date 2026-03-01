@@ -46,11 +46,19 @@ func LoadFromEnv() (Config, error) {
 	return cfg, nil
 }
 
+// ValidateForAuth checks that all fields required for the PKCE auth login flow
+// are present. The main TUI path does not require a client ID.
+func (c Config) ValidateForAuth() error {
+	if c.SpotifyClientID == "" {
+		return errors.New("spotify_client_id / SPOTIFY_CLIENT_ID is not set\n" +
+			"Register a free Spotify app at https://developer.spotify.com/dashboard,\n" +
+			"add http://127.0.0.1:8989/callback as a redirect URI, then set the env var.")
+	}
+	return nil
+}
+
 func (c Config) Validate() error {
 	var errs []error
-	if c.SpotifyClientID == "" {
-		errs = append(errs, errors.New("missing spotify_client_id or SPOTIFY_CLIENT_ID"))
-	}
 	if c.RedirectURI == "" {
 		errs = append(errs, errors.New("spotify_redirect_uri must not be empty"))
 	}

@@ -1,29 +1,25 @@
 package tui
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
 )
 
-// ── Palette ──────────────────────────────────────────────────────────────────
-
 const (
-	colorBlue       = lipgloss.Color("#4A90D9")
-	colorBlueLight  = lipgloss.Color("#7AB8E6")
-	colorOffWhite   = lipgloss.Color("#E8EAED")
-	colorGray       = lipgloss.Color("#9CA3AF")
-	colorMutedBlue  = lipgloss.Color("#5B7A9E")
-	colorError      = lipgloss.Color("#FF5757")
+	colorBlue      = lipgloss.Color("#4A90D9")
+	colorBlueLight = lipgloss.Color("#7AB8E6")
+	colorOffWhite  = lipgloss.Color("#E8EAED")
+	colorGray      = lipgloss.Color("#9CA3AF")
+	colorMutedBlue = lipgloss.Color("#5B7A9E")
+	colorDivider   = lipgloss.Color("#2A3A4A")
+	colorError     = lipgloss.Color("#FF5757")
 )
 
-// ── Header / chrome ──────────────────────────────────────────────────────────
-
 var (
-	styleHeaderDevice = lipgloss.NewStyle().
+	styleHeaderStatus = lipgloss.NewStyle().
 				Foreground(colorMutedBlue)
-
-	styleHeaderNowPlaying = lipgloss.NewStyle().
-				Foreground(colorGray)
 
 	styleHeaderPlaying = lipgloss.NewStyle().
 				Foreground(colorBlue).
@@ -31,9 +27,23 @@ var (
 
 	styleHeaderPaused = lipgloss.NewStyle().
 				Foreground(colorMutedBlue)
-)
 
-// ── Error / status ────────────────────────────────────────────────────────────
+	styleHeaderCenter = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(colorOffWhite)
+
+	styleHeaderSub = lipgloss.NewStyle().
+			Foreground(colorMutedBlue)
+
+	styleHeaderVolume = lipgloss.NewStyle().
+				Foreground(colorGray)
+
+	styleHeaderDevice = lipgloss.NewStyle().
+				Foreground(colorMutedBlue)
+
+	styleHeaderNowPlaying = lipgloss.NewStyle().
+				Foreground(colorGray)
+)
 
 var (
 	styleError = lipgloss.NewStyle().
@@ -43,31 +53,26 @@ var (
 			Foreground(colorMutedBlue)
 )
 
-// ── Panels ────────────────────────────────────────────────────────────────────
-
 var (
-	stylePanelBorder = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(colorMutedBlue)
+	styleDivider = lipgloss.NewStyle().
+			Foreground(colorDivider)
 
-	stylePanelBorderActive = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(colorBlue)
+	styleSectionLabel = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(colorMutedBlue)
 )
 
-func panelStyle(w, h int) lipgloss.Style {
-	return stylePanelBorder.
-		Width(w).
-		Height(h)
+func sectionDivider(w int) string {
+	return styleDivider.Render(strings.Repeat("─", w))
 }
 
-func activePanelStyle(w, h int) lipgloss.Style {
-	return stylePanelBorderActive.
-		Width(w).
-		Height(h)
+func verticalDivider(h int) string {
+	lines := make([]string, h)
+	for i := range lines {
+		lines[i] = styleDivider.Render("│")
+	}
+	return strings.Join(lines, "\n")
 }
-
-// ── Playlist browser / cover panel ───────────────────────────────────────────
 
 var (
 	styleCoverPlaceholder = lipgloss.NewStyle().
@@ -85,8 +90,6 @@ var (
 				Foreground(colorBlue)
 )
 
-// ── Playback / now-playing ────────────────────────────────────────────────────
-
 var (
 	styleTrackName = lipgloss.NewStyle().
 			Bold(true).
@@ -94,14 +97,28 @@ var (
 
 	styleArtistName = lipgloss.NewStyle().
 			Foreground(colorBlue)
-)
 
-// ── Queue ─────────────────────────────────────────────────────────────────────
+	styleAlbumName = lipgloss.NewStyle().
+			Foreground(colorMutedBlue)
+)
 
 var (
 	styleSectionTitle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(colorBlue)
+
+	styleQueueHeader = lipgloss.NewStyle().
+				Foreground(colorMutedBlue)
+
+	styleQueueCurrentTrack = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(colorBlue)
+
+	styleQueueCurrentArtist = lipgloss.NewStyle().
+				Foreground(colorBlueLight)
+
+	styleQueueCurrentDur = lipgloss.NewStyle().
+				Foreground(colorBlueLight)
 
 	styleQueueIndex = lipgloss.NewStyle().
 			Foreground(colorMutedBlue)
@@ -111,13 +128,14 @@ var (
 
 	styleQueueArtist = lipgloss.NewStyle().
 				Foreground(colorMutedBlue)
-)
 
-// ── Player bar ────────────────────────────────────────────────────────────────
+	styleQueueDuration = lipgloss.NewStyle().
+				Foreground(colorMutedBlue)
+)
 
 var (
 	stylePlayerSeparator = lipgloss.NewStyle().
-				Foreground(colorMutedBlue)
+				Foreground(colorDivider)
 
 	stylePlayerTrack = lipgloss.NewStyle().
 				Bold(true).
@@ -136,8 +154,6 @@ var (
 				Foreground(colorBlue)
 )
 
-// ── Modal ─────────────────────────────────────────────────────────────────────
-
 var (
 	styleModalBox = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -152,9 +168,6 @@ var (
 			Foreground(colorMutedBlue)
 )
 
-// ── List delegate ─────────────────────────────────────────────────────────────
-
-// newPlaylistDelegate returns a styled list delegate for playlist items.
 func newPlaylistDelegate() list.DefaultDelegate {
 	d := list.NewDefaultDelegate()
 	d.ShowDescription = true
@@ -192,7 +205,6 @@ func newPlaylistDelegate() list.DefaultDelegate {
 	return d
 }
 
-// newListStyles applies the app colour scheme to a list.Model's own Styles field.
 func applyListStyles(l *list.Model) {
 	l.Styles.Title = lipgloss.NewStyle().
 		Bold(true).
