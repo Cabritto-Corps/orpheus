@@ -162,6 +162,7 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 		}
 	}
 	p.state.tracks = ctxTracks
+	p.playedTrackURIs = make(map[string]struct{})
 	p.state.player.Track = ctxTracks.CurrentTrack()
 	p.state.player.PrevTracks = ctxTracks.PrevTracks()
 	p.state.player.NextTracks = ctxTracks.NextTracks(ctx, nil)
@@ -407,6 +408,9 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 			hasNextTrack = true
 			p.state.player.IsPaused = false
 		} else {
+			if p.state.player.Track != nil && p.state.player.Track.Uri != "" {
+				p.playedTrackURIs[normalizeSpotifyID(p.state.player.Track.Uri)] = struct{}{}
+			}
 			hasNextTrack = p.state.tracks.GoNext(ctx)
 			if !hasNextTrack {
 				hasNextTrack = p.state.tracks.GoStart(ctx)
