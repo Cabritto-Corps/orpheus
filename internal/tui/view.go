@@ -20,18 +20,22 @@ const (
 const chromeH = headerH + footerH + playerBarH + 1
 
 const (
-	iconPlay          = "▶"
-	iconPause         = ""
-	iconDevice        = "●"
-	iconVolume        = "▪"
-	iconPlaceholder   = "♪"
-	iconShuffle       = "⇄"
-	iconPlayNF        = "\uf04b"
-	iconPauseNF       = "\uf04c"
-	iconDeviceNF      = "\ue30c"
-	iconVolumeNF      = "\uf028"
-	iconPlaceholderNF = "\uf001"
-	iconShuffleNF     = "\uf074"
+	iconPlay            = "▶"
+	iconPause           = ""
+	iconDevice          = "●"
+	iconVolume          = "▪"
+	iconPlaceholder     = "♪"
+	iconShuffle         = "⇄"
+	iconRepeatContext   = "󰑖"
+	iconRepeatTrack     = "󰑘"
+	iconPlayNF          = "\uf04b"
+	iconPauseNF         = "\uf04c"
+	iconDeviceNF        = "\ue30c"
+	iconVolumeNF        = "\uf028"
+	iconPlaceholderNF   = "\uf001"
+	iconShuffleNF       = "\uf074"
+	iconRepeatContextNF = "󰑖"
+	iconRepeatTrackNF   = "󰑘"
 )
 
 func (m model) View() string {
@@ -83,6 +87,11 @@ func (m model) headerView() string {
 		rightL1 = volBar + " " + volText
 		if m.status.ShuffleState {
 			rightL1 += "  " + styleDimmed.Render(m.icon(iconShuffle, iconShuffleNF))
+		}
+		if m.status.RepeatTrack {
+			rightL1 += "  " + styleDimmed.Render(m.icon(iconRepeatTrack, iconRepeatTrackNF))
+		} else if m.status.RepeatContext {
+			rightL1 += "  " + styleDimmed.Render(m.icon(iconRepeatContext, iconRepeatContextNF))
 		}
 
 		availCenterW := max(10, w-lipgloss.Width(statusStr)-lipgloss.Width(rightL1)-2)
@@ -431,6 +440,9 @@ func (m model) playerBarView() string {
 }
 
 func (m model) modalView() string {
+	if m.modalKind == modalKindHelp {
+		return m.helpModalView()
+	}
 	modalW := min(m.width-8, 64)
 	listH := m.height - 12
 
@@ -446,6 +458,32 @@ func (m model) modalView() string {
 		Width(modalW).
 		Render(boxContent)
 
+	placed := lipgloss.Place(
+		m.width,
+		m.height-footerH-gapFooterH,
+		lipgloss.Center,
+		lipgloss.Center,
+		box,
+		lipgloss.WithWhitespaceChars("░"),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("#1a1a2a")),
+	)
+	return placed + "\n" + m.footerView()
+}
+
+func (m model) helpModalView() string {
+	modalW := min(m.width-8, 80)
+	innerH := m.height - 14
+	if innerH < 6 {
+		innerH = 6
+	}
+	title := styleModalTitle.Render("Help")
+	hint := styleModalHint.Render("? or esc close")
+	sep := styleModalHint.Render(strings.Repeat("─", modalW-2))
+	h := m.help
+	h.ShowAll = true
+	helpText := h.View(m.keys)
+	boxContent := title + "  " + hint + "\n" + sep + "\n" + helpText
+	box := styleModalBox.Width(modalW).Height(innerH).Render(boxContent)
 	placed := lipgloss.Place(
 		m.width,
 		m.height-footerH-gapFooterH,

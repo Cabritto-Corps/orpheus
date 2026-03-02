@@ -122,6 +122,8 @@ func PlaybackStateFromLibrespot(u *librespot.PlaybackStateUpdate) (*spotify.Play
 		ProgressMS:    u.ProgressMS,
 		DurationMS:    u.DurationMS,
 		ShuffleState:  u.ShuffleState,
+		RepeatContext: u.RepeatContext,
+		RepeatTrack:   u.RepeatTrack,
 	}
 	queue := make([]spotify.QueueItem, 0, len(u.Queue))
 	for _, e := range u.Queue {

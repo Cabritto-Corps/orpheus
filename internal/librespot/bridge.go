@@ -11,6 +11,7 @@ const (
 	TUICommandSkipPrev
 	TUICommandSetVolume
 	TUICommandShuffle
+	TUICommandCycleRepeat
 )
 
 type TUICommand struct {
@@ -40,6 +41,8 @@ type PlaybackStateUpdate struct {
 	ProgressMS    int
 	DurationMS    int
 	ShuffleState  bool
+	RepeatContext bool
+	RepeatTrack   bool
 	Queue         []PlaybackStateQueueEntry
 	QueueHasMore  bool
 }

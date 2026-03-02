@@ -18,6 +18,7 @@ import (
 )
 
 type screen string
+type modalKind string
 
 const (
 	screenPlaylist          screen = "playlist"
@@ -32,6 +33,10 @@ const (
 	navDebounceInterval            = 120 * time.Millisecond
 	volSeekDebounceInterval        = 150 * time.Millisecond
 	volSettleWindow                = 3 * time.Second
+
+	modalKindNone     modalKind = ""
+	modalKindPlaylist modalKind = "playlist"
+	modalKindHelp     modalKind = "help"
 )
 
 type model struct {
@@ -48,6 +53,7 @@ type model struct {
 
 	screen         screen
 	modal          bool
+	modalKind      modalKind
 	navToken       int
 	actionInFlight bool
 
@@ -138,6 +144,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		tuiCmdCh:            tuiCmdCh,
 		pollInterval:        cfg.PollInterval,
 		screen:              screenPlaylist,
+		modalKind:           modalKindNone,
 		playlistList:        browser,
 		modalList:           modal,
 		imgs:                newImgCache(),
@@ -376,6 +383,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenPlayback
 		case "play-from-modal":
 			m.modal = false
+			m.modalKind = modalKindNone
 		}
 		return m, m.pollCmd(true)
 
@@ -618,7 +626,13 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyMatches(msg, k.Quit):
 		return m, tea.Quit
 	case keyMatches(msg, k.ToggleHelp):
-		m.help.ShowAll = !m.help.ShowAll
+		if m.modal && m.modalKind == modalKindHelp {
+			m.modal = false
+			m.modalKind = modalKindNone
+			return m, nil
+		}
+		m.modal = true
+		m.modalKind = modalKindHelp
 		return m, nil
 	}
 
@@ -635,6 +649,15 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := m.keys
+	if m.modalKind == modalKindHelp {
+		switch {
+		case keyMatches(msg, k.CloseModal), keyMatches(msg, k.ToggleHelp):
+			m.modal = false
+			m.modalKind = modalKindNone
+			return m, nil
+		}
+		return m, nil
+	}
 	if m.modalList.FilterState() == list.Filtering {
 		var cmd tea.Cmd
 		m.modalList, cmd = m.modalList.Update(msg)
@@ -643,6 +666,7 @@ func (m model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case keyMatches(msg, k.CloseModal):
 		m.modal = false
+		m.modalKind = modalKindNone
 		m.modalList.ResetFilter()
 		return m, nil
 
@@ -698,6 +722,7 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case keyMatches(msg, k.OpenPicker):
 		m.modal = true
+		m.modalKind = modalKindPlaylist
 		m.modalList.ResetFilter()
 		m.modalList.Select(0)
 		return m, nil
@@ -811,6 +836,29 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.service.Shuffle(ctx, m.deviceName, nextShuffle)
 		}, rollback)
 
+	case keyMatches(msg, k.Loop):
+		if m.status == nil || m.actionInFlight {
+			return m, nil
+		}
+		rollback := cloneStatus(m.status)
+		m.status.RepeatContext, m.status.RepeatTrack = nextRepeatMode(m.status.RepeatContext, m.status.RepeatTrack)
+		m.actionFastPollUntil = time.Now().Add(2 * time.Second)
+		if m.tuiCmdCh != nil {
+			select {
+			case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandCycleRepeat}:
+			default:
+			}
+			return m, nil
+		}
+		if m.service == nil {
+			return m, nil
+		}
+		m.actionInFlight = true
+		state := repeatModeString(m.status.RepeatContext, m.status.RepeatTrack)
+		return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
+			return m.service.SetRepeat(ctx, m.deviceName, state)
+		}, rollback)
+
 	case keyMatches(msg, k.VolUp):
 		if m.actionInFlight || m.status == nil {
 			return m, nil
@@ -884,6 +932,7 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model, tea.Cmd) {
 	m.screen = screenPlayback
 	m.modal = false
+	m.modalKind = modalKindNone
 	m.playbackErr = nil
 	canReadTracks := m.shouldLoadPlaylistTracks() && m.canReadPlaylistTracks(sel.summary)
 	m.setActivePlaylist(sel.summary.ID, canReadTracks, sel.summary.OwnerID, sel.summary.Collaborative)
@@ -923,6 +972,26 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 
 func keyMatches(msg tea.KeyMsg, b key.Binding) bool {
 	return key.Matches(msg, b)
+}
+
+func nextRepeatMode(repeatContext, repeatTrack bool) (bool, bool) {
+	if repeatTrack {
+		return false, false
+	}
+	if repeatContext {
+		return false, true
+	}
+	return true, false
+}
+
+func repeatModeString(repeatContext, repeatTrack bool) string {
+	if repeatTrack {
+		return "track"
+	}
+	if repeatContext {
+		return "context"
+	}
+	return "off"
 }
 
 func clampInt(v, lo, hi int) int {

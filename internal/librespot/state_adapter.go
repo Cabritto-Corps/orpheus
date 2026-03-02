@@ -23,14 +23,16 @@ func (p *AppPlayer) BuildPlaybackStateUpdate() *PlaybackStateUpdate {
 		shuffle = true
 	}
 	out := &PlaybackStateUpdate{
-		DeviceName:   p.runtime.Cfg.DeviceName,
-		DeviceID:     p.runtime.DeviceId,
-		Volume:       int(vol),
-		Playing:      playing,
-		ProgressMS:   int(pos),
-		DurationMS:   0,
-		ShuffleState: shuffle,
-		Queue:        providedTracksToQueueEntries(p, p.state.player.NextTracks),
+		DeviceName:    p.runtime.Cfg.DeviceName,
+		DeviceID:      p.runtime.DeviceId,
+		Volume:        int(vol),
+		Playing:       playing,
+		ProgressMS:    int(pos),
+		DurationMS:    0,
+		ShuffleState:  shuffle,
+		RepeatContext: p.state.player.Options != nil && p.state.player.Options.RepeatingContext,
+		RepeatTrack:   p.state.player.Options != nil && p.state.player.Options.RepeatingTrack,
+		Queue:         providedTracksToQueueEntries(p, p.state.player.NextTracks),
 	}
 	deriveKey := p.currentDerivedQueueKey(shuffle)
 	if cachedQueue, hasMore, ok := p.getDerivedQueueCache(deriveKey); ok {

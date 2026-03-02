@@ -45,7 +45,18 @@ type AppPlayer struct {
 	primaryStream   *player.Stream
 	secondaryStream *player.Stream
 
-	prefetchTimer *time.Timer
+	prefetchTimer       *time.Timer
+	shuffleRefreshTimer *time.Timer
+	prefetchJobs        chan prefetchJob
+	prefetchDone        chan prefetchResult
+
+	transitionStreamMu    sync.Mutex
+	transitionStreamCache map[string]*player.Stream
+	transitionStreamOrder []string
+	prefetchPending       map[string]struct{}
+	prefetchGen           atomic.Uint64
+	shuffleRefreshPending bool
+	shuffleRefreshGen     uint64
 
 	queueMetaCache map[string]PlaybackStateQueueEntry
 	queueMetaMu    sync.RWMutex
@@ -66,6 +77,20 @@ type AppPlayer struct {
 	derivedQueueEntries []PlaybackStateQueueEntry
 	derivedQueueHasMore bool
 	derivedQueueValid   bool
+}
+
+type prefetchJob struct {
+	gen     uint64
+	nextURI string
+	target  golibrespot.SpotifyId
+}
+
+type prefetchResult struct {
+	gen     uint64
+	nextURI string
+	target  golibrespot.SpotifyId
+	stream  *player.Stream
+	err     error
 }
 
 func (p *AppPlayer) newApiResponseStatusTrack(media *golibrespot.Media, position int64) *ApiResponseStatusTrack {
@@ -424,9 +449,31 @@ func (p *AppPlayer) handleTUICommand(ctx context.Context, cmd TUICommand) error 
 			return fmt.Errorf("toggle shuffle on: %w", err)
 		}
 		p.state.player.Options.ShufflingContext = true
+		p.clearTransitionStreamCache()
+		p.bumpPrefetchGeneration()
+		p.clearSecondaryStream()
 		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
+		p.scheduleShuffleCacheRefresh()
 		p.updateState(ctx)
 		p.emitPlaybackState()
+		return nil
+	case TUICommandCycleRepeat:
+		if p.state == nil || p.state.player == nil || p.state.player.Options == nil {
+			return nil
+		}
+		repeatContext := false
+		repeatTrack := false
+		if p.state.player.Options.RepeatingTrack {
+			repeatContext = false
+			repeatTrack = false
+		} else if p.state.player.Options.RepeatingContext {
+			repeatContext = false
+			repeatTrack = true
+		} else {
+			repeatContext = true
+			repeatTrack = false
+		}
+		p.setOptions(ctx, &repeatContext, &repeatTrack, nil)
 		return nil
 	default:
 		return fmt.Errorf("unknown TUI command: %d", cmd.Kind)
@@ -540,6 +587,108 @@ func (p *AppPlayer) setDerivedQueueCache(key string, entries []PlaybackStateQueu
 	p.derivedQueueHasMore = hasMore
 	p.derivedQueueValid = true
 	p.derivedQueueMu.Unlock()
+}
+
+const transitionStreamCacheMax = 4
+
+func streamCacheKey(id golibrespot.SpotifyId) string {
+	return id.Uri()
+}
+
+func (p *AppPlayer) hasTransitionCachedStream(id golibrespot.SpotifyId) bool {
+	p.transitionStreamMu.Lock()
+	defer p.transitionStreamMu.Unlock()
+	_, ok := p.transitionStreamCache[streamCacheKey(id)]
+	return ok
+}
+
+func (p *AppPlayer) takeTransitionCachedStream(id golibrespot.SpotifyId) *player.Stream {
+	key := streamCacheKey(id)
+	p.transitionStreamMu.Lock()
+	defer p.transitionStreamMu.Unlock()
+	if p.transitionStreamCache == nil {
+		return nil
+	}
+	stream, ok := p.transitionStreamCache[key]
+	if !ok {
+		return nil
+	}
+	delete(p.transitionStreamCache, key)
+	for i := range p.transitionStreamOrder {
+		if p.transitionStreamOrder[i] == key {
+			p.transitionStreamOrder = append(p.transitionStreamOrder[:i], p.transitionStreamOrder[i+1:]...)
+			break
+		}
+	}
+	return stream
+}
+
+func (p *AppPlayer) putTransitionCachedStream(id golibrespot.SpotifyId, stream *player.Stream) bool {
+	if stream == nil {
+		return false
+	}
+	key := streamCacheKey(id)
+	p.transitionStreamMu.Lock()
+	defer p.transitionStreamMu.Unlock()
+	if p.transitionStreamCache == nil {
+		p.transitionStreamCache = make(map[string]*player.Stream, transitionStreamCacheMax)
+	}
+	if _, exists := p.transitionStreamCache[key]; exists {
+		return false
+	}
+	if len(p.transitionStreamOrder) >= transitionStreamCacheMax {
+		evict := p.transitionStreamOrder[0]
+		p.transitionStreamOrder = p.transitionStreamOrder[1:]
+		delete(p.transitionStreamCache, evict)
+	}
+	p.transitionStreamOrder = append(p.transitionStreamOrder, key)
+	p.transitionStreamCache[key] = stream
+	return true
+}
+
+func (p *AppPlayer) clearTransitionStreamCache() {
+	p.transitionStreamMu.Lock()
+	p.transitionStreamCache = make(map[string]*player.Stream, transitionStreamCacheMax)
+	p.transitionStreamOrder = nil
+	p.prefetchPending = make(map[string]struct{}, transitionStreamCacheMax)
+	p.transitionStreamMu.Unlock()
+}
+
+func (p *AppPlayer) bumpPrefetchGeneration() uint64 {
+	next := p.prefetchGen.Add(1)
+	p.transitionStreamMu.Lock()
+	p.prefetchPending = make(map[string]struct{}, transitionStreamCacheMax)
+	p.transitionStreamMu.Unlock()
+	return next
+}
+
+func (p *AppPlayer) hasPrefetchPending(id golibrespot.SpotifyId) bool {
+	key := streamCacheKey(id)
+	p.transitionStreamMu.Lock()
+	defer p.transitionStreamMu.Unlock()
+	_, ok := p.prefetchPending[key]
+	return ok
+}
+
+func (p *AppPlayer) markPrefetchPending(id golibrespot.SpotifyId) bool {
+	key := streamCacheKey(id)
+	p.transitionStreamMu.Lock()
+	defer p.transitionStreamMu.Unlock()
+	if p.prefetchPending == nil {
+		p.prefetchPending = make(map[string]struct{}, transitionStreamCacheMax)
+	}
+	if _, exists := p.prefetchPending[key]; exists {
+		return false
+	}
+	p.prefetchPending[key] = struct{}{}
+	return true
+}
+
+func (p *AppPlayer) clearPrefetchPending(id golibrespot.SpotifyId) {
+	key := streamCacheKey(id)
+	p.transitionStreamMu.Lock()
+	delete(p.prefetchPending, key)
+	p.transitionStreamMu.Unlock()
 }
 
 func (p *AppPlayer) startQueueMetadataResolve() {
@@ -823,6 +972,7 @@ func (p *AppPlayer) Close() {
 }
 
 func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
+	go p.runPrefetchWorker(ctx)
 	err := p.sess.Dealer().Connect(ctx)
 	if err != nil {
 		p.runtime.Log.WithError(err).Error("failed connecting to dealer")
@@ -880,6 +1030,10 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			p.handlePlayerEvent(ctx, &ev)
 		case <-p.prefetchTimer.C:
 			p.prefetchNext(ctx)
+		case <-p.shuffleRefreshTimer.C:
+			p.handleShuffleCacheRefresh(ctx)
+		case res := <-p.prefetchDone:
+			p.handlePrefetchResult(res)
 		case volume := <-p.volumeUpdate:
 			p.state.device.Volume = uint32(math.Round(float64(volume * player.MaxStateVolume)))
 			volumeTimer.Reset(100 * time.Millisecond)

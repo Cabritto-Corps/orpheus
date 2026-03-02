@@ -47,6 +47,7 @@ type API interface {
 	VolumeOpt(ctx context.Context, percent int, opt *spotifyapi.PlayOptions) error
 	SeekOpt(ctx context.Context, position int, opt *spotifyapi.PlayOptions) error
 	ShuffleOpt(ctx context.Context, shuffle bool, opt *spotifyapi.PlayOptions) error
+	RepeatOpt(ctx context.Context, state string, opt *spotifyapi.PlayOptions) error
 }
 
 type DeviceMode string
@@ -108,6 +109,8 @@ type PlaybackStatus struct {
 	ProgressMS    int
 	DurationMS    int
 	ShuffleState  bool
+	RepeatContext bool
+	RepeatTrack   bool
 }
 
 type QueueItem struct {
@@ -534,16 +537,18 @@ func (s *Service) Status(ctx context.Context) (*PlaybackStatus, error) {
 		return nil, ErrNoActiveTrack
 	}
 	status := &PlaybackStatus{
-		DeviceName:   state.Device.Name,
-		DeviceID:     string(state.Device.ID),
-		TrackID:      string(state.Item.ID),
-		Volume:       int(state.Device.Volume),
-		TrackName:    state.Item.Name,
-		AlbumName:    state.Item.Album.Name,
-		Playing:      state.Playing,
-		ProgressMS:   int(state.Progress),
-		DurationMS:   int(state.Item.Duration),
-		ShuffleState: state.ShuffleState,
+		DeviceName:    state.Device.Name,
+		DeviceID:      string(state.Device.ID),
+		TrackID:       string(state.Item.ID),
+		Volume:        int(state.Device.Volume),
+		TrackName:     state.Item.Name,
+		AlbumName:     state.Item.Album.Name,
+		Playing:       state.Playing,
+		ProgressMS:    int(state.Progress),
+		DurationMS:    int(state.Item.Duration),
+		ShuffleState:  state.ShuffleState,
+		RepeatContext: strings.EqualFold(state.RepeatState, "context"),
+		RepeatTrack:   strings.EqualFold(state.RepeatState, "track"),
 	}
 	if len(state.Item.Artists) > 0 {
 		status.ArtistName = state.Item.Artists[0].Name
@@ -631,6 +636,16 @@ func (s *Service) Seek(ctx context.Context, target string, positionMS int) error
 func (s *Service) Shuffle(ctx context.Context, target string, shuffle bool) error {
 	return s.withDeviceCommand(ctx, target, func(deviceID spotifyapi.ID) error {
 		return s.client.ShuffleOpt(ctx, shuffle, &spotifyapi.PlayOptions{DeviceID: &deviceID})
+	})
+}
+
+func (s *Service) SetRepeat(ctx context.Context, target string, state string) error {
+	state = strings.ToLower(strings.TrimSpace(state))
+	if state != "off" && state != "context" && state != "track" {
+		return errors.New("repeat state must be one of off, context, track")
+	}
+	return s.withDeviceCommand(ctx, target, func(deviceID spotifyapi.ID) error {
+		return s.client.RepeatOpt(ctx, state, &spotifyapi.PlayOptions{DeviceID: &deviceID})
 	})
 }
 
