@@ -116,6 +116,7 @@ func (p playlistItem) Description() string {
 
 func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand) model {
 	delegate := newPlaylistDelegate()
+	modalDelegate := newPlaylistModalDelegate(false)
 
 	browser := list.New(nil, delegate, 40, 20)
 	browser.Title = "Playlists"
@@ -123,15 +124,17 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 	browser.SetFilteringEnabled(true)
 	browser.SetShowFilter(true)
 	browser.SetShowHelp(false)
+	browser.FilterInput.Prompt = "Search: "
 	applyListStyles(&browser)
 
-	modal := list.New(nil, delegate, 40, 20)
+	modal := list.New(nil, modalDelegate, 40, 20)
 	modal.Title = ""
 	modal.SetShowTitle(false)
 	modal.SetShowStatusBar(false)
 	modal.SetFilteringEnabled(true)
 	modal.SetShowFilter(true)
 	modal.SetShowHelp(false)
+	modal.FilterInput.Prompt = "Search: "
 	applyListStyles(&modal)
 
 	h := newHelp()
@@ -158,6 +161,11 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		help:                h,
 		keys:                newKeys(),
 	}
+}
+
+func (m *model) syncModalDelegate() {
+	searching := m.modalList.FilterState() != list.Unfiltered
+	m.modalList.SetDelegate(newPlaylistModalDelegate(searching))
 }
 
 func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, playbackStateCh <-chan *librespot.PlaybackStateUpdate) error {
@@ -661,6 +669,7 @@ func (m model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.modalList.FilterState() == list.Filtering {
 		var cmd tea.Cmd
 		m.modalList, cmd = m.modalList.Update(msg)
+		m.syncModalDelegate()
 		return m, tea.Batch(cmd, m.scheduleNavDebounceCmd())
 	}
 	switch {
@@ -668,6 +677,7 @@ func (m model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modal = false
 		m.modalKind = modalKindNone
 		m.modalList.ResetFilter()
+		m.syncModalDelegate()
 		return m, nil
 
 	case keyMatches(msg, k.Select):
@@ -680,6 +690,7 @@ func (m model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.modalList, cmd = m.modalList.Update(msg)
+	m.syncModalDelegate()
 	return m, tea.Batch(cmd, m.scheduleNavDebounceCmd())
 }
 
@@ -724,6 +735,7 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modal = true
 		m.modalKind = modalKindPlaylist
 		m.modalList.ResetFilter()
+		m.syncModalDelegate()
 		m.modalList.Select(0)
 		return m, nil
 

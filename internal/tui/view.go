@@ -476,13 +476,19 @@ func (m model) helpModalView() string {
 	if innerH < 6 {
 		innerH = 6
 	}
+	contentW := max(12, modalW-4)
 	title := styleModalTitle.Render("Help")
 	hint := styleModalHint.Render("? or esc close")
-	sep := styleModalHint.Render(strings.Repeat("─", modalW-2))
+	header := lipgloss.PlaceHorizontal(contentW, lipgloss.Center, title+"  "+hint)
+	sep := styleModalHint.Render(strings.Repeat("─", contentW))
+
 	h := m.help
 	h.ShowAll = true
-	helpText := h.View(m.keys)
-	boxContent := title + "  " + hint + "\n" + sep + "\n" + helpText
+	helpText := centerBlockLines(h.View(m.keys), contentW)
+	helpAreaH := max(3, innerH-4)
+	helpBody := lipgloss.Place(contentW, helpAreaH, lipgloss.Center, lipgloss.Center, helpText)
+
+	boxContent := header + "\n" + sep + "\n\n" + helpBody
 	box := styleModalBox.Width(modalW).Height(innerH).Render(boxContent)
 	placed := lipgloss.Place(
 		m.width,
@@ -587,6 +593,14 @@ func centerText(s string, w int) string {
 	}
 	pad := (w - sw) / 2
 	return strings.Repeat(" ", pad) + s + strings.Repeat(" ", w-sw-pad)
+}
+
+func centerBlockLines(s string, w int) string {
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = centerText(lines[i], w)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m model) placeholderArt(cols, rows int) string {

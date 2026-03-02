@@ -205,6 +205,30 @@ func newPlaylistDelegate() list.DefaultDelegate {
 	return d
 }
 
+func newPlaylistModalDelegate(searching bool) list.DefaultDelegate {
+	d := newPlaylistDelegate()
+	d.ShowDescription = true
+	d.SetSpacing(0)
+
+	// Keep author text subtle in modal by default.
+	d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(colorGray)
+	d.Styles.SelectedDesc = d.Styles.SelectedDesc.Foreground(colorGray)
+	d.Styles.DimmedDesc = d.Styles.DimmedDesc.Foreground(colorGray)
+
+	if searching {
+		// In search mode, dim both lines while keeping different tones.
+		d.Styles.NormalTitle = d.Styles.NormalTitle.Foreground(colorGray)
+		d.Styles.SelectedTitle = d.Styles.SelectedTitle.Foreground(colorGray)
+		d.Styles.DimmedTitle = d.Styles.DimmedTitle.Foreground(colorMutedBlue)
+
+		d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(colorMutedBlue)
+		d.Styles.SelectedDesc = d.Styles.SelectedDesc.Foreground(colorMutedBlue)
+		d.Styles.DimmedDesc = d.Styles.DimmedDesc.Foreground(colorDivider)
+	}
+
+	return d
+}
+
 func applyListStyles(l *list.Model) {
 	l.Styles.Title = lipgloss.NewStyle().
 		Bold(true).
