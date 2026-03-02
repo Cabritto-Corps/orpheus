@@ -48,6 +48,9 @@ type AppPlayer struct {
 
 	queueMetaCache map[string]PlaybackStateQueueEntry
 	queueMetaMu    sync.RWMutex
+
+	playedTrackURIs map[string]struct{}
+	playedTrackMu   sync.RWMutex
 }
 
 func (p *AppPlayer) newApiResponseStatusTrack(media *golibrespot.Media, position int64) *ApiResponseStatusTrack {

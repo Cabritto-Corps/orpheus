@@ -407,6 +407,11 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 			hasNextTrack = true
 			p.state.player.IsPaused = false
 		} else {
+			if p.state.player.Track != nil && p.state.player.Track.Uri != "" {
+				p.playedTrackMu.Lock()
+				p.playedTrackURIs[normalizeSpotifyID(p.state.player.Track.Uri)] = struct{}{}
+				p.playedTrackMu.Unlock()
+			}
 			hasNextTrack = p.state.tracks.GoNext(ctx)
 			if !hasNextTrack {
 				hasNextTrack = p.state.tracks.GoStart(ctx)

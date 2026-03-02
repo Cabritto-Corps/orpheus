@@ -22,6 +22,7 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 		countryCode:    countryCode,
 		volumeUpdate:   volumeUpdate,
 		queueMetaCache: make(map[string]PlaybackStateQueueEntry),
+		playedTrackURIs: make(map[string]struct{}),
 	}
 	p.prefetchTimer = time.NewTimer(math.MaxInt64)
 	p.prefetchTimer.Stop()

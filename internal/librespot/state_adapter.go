@@ -32,9 +32,16 @@ func (p *AppPlayer) BuildPlaybackStateUpdate() *PlaybackStateUpdate {
 		ShuffleState: shuffle,
 		Queue:        providedTracksToQueueEntries(p, p.state.player.NextTracks),
 	}
-	if derivedQueue, hasMore, ok := p.derivedQueueFromTrackList(); ok {
-		out.Queue = derivedQueue
-		out.QueueHasMore = hasMore
+	if shuffle {
+		if derivedQueue, hasMore, ok := p.derivedQueueFromShuffledTrackList(); ok {
+			out.Queue = derivedQueue
+			out.QueueHasMore = hasMore
+		}
+	} else {
+		if derivedQueue, hasMore, ok := p.derivedQueueFromTrackList(); ok {
+			out.Queue = derivedQueue
+			out.QueueHasMore = hasMore
+		}
 	}
 	if p.state.player.Track != nil {
 		out.TrackID = normalizeSpotifyID(p.state.player.Track.Uri)
@@ -109,6 +116,100 @@ func (p *AppPlayer) derivedQueueFromTrackList() ([]PlaybackStateQueueEntry, bool
 		hasMore = true
 	}
 	return providedTracksToQueueEntries(p, next), hasMore, true
+}
+
+func trackQueueKey(uid, uri string) string {
+	uid = strings.TrimSpace(uid)
+	if uid != "" {
+		return "uid:" + uid
+	}
+	id := normalizeSpotifyID(uri)
+	if id == "" {
+		return ""
+	}
+	return "id:" + id
+}
+
+func (p *AppPlayer) derivedQueueFromShuffledTrackList() ([]PlaybackStateQueueEntry, bool, bool) {
+	if p.state == nil || p.state.player == nil {
+		return nil, false, false
+	}
+
+	outTracks := make([]*connectpb.ProvidedTrack, 0, queueOverrideMaxTracks)
+	seen := make(map[string]struct{}, queueOverrideMaxTracks)
+	markSeen := func(uid, uri string) {
+		if key := trackQueueKey(uid, uri); key != "" {
+			seen[key] = struct{}{}
+		}
+	}
+	isPlayed := func(uri string) bool {
+		p.playedTrackMu.RLock()
+		_, played := p.playedTrackURIs[normalizeSpotifyID(uri)]
+		p.playedTrackMu.RUnlock()
+		return played
+	}
+
+	for _, t := range p.state.player.PrevTracks {
+		if t == nil {
+			continue
+		}
+		markSeen(t.Uid, t.Uri)
+	}
+	if p.state.player.Track != nil {
+		markSeen(p.state.player.Track.Uid, p.state.player.Track.Uri)
+	}
+
+	for _, t := range p.state.player.NextTracks {
+		if t == nil {
+			continue
+		}
+		if isPlayed(t.Uri) {
+			continue
+		}
+		if key := trackQueueKey(t.Uid, t.Uri); key != "" {
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		outTracks = append(outTracks, t)
+		if len(outTracks) >= queueOverrideMaxTracks {
+			return providedTracksToQueueEntries(p, outTracks), true, true
+		}
+	}
+
+	if p.state.tracks == nil {
+		return providedTracksToQueueEntries(p, outTracks), false, true
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	all := p.state.tracks.AllTracks(ctx)
+	if len(all) == 0 {
+		return providedTracksToQueueEntries(p, outTracks), false, true
+	}
+
+	hasMore := false
+	for _, t := range all {
+		if t == nil {
+			continue
+		}
+		if isPlayed(t.Uri) {
+			continue
+		}
+		if key := trackQueueKey(t.Uid, t.Uri); key != "" {
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		if len(outTracks) >= queueOverrideMaxTracks {
+			hasMore = true
+			break
+		}
+		outTracks = append(outTracks, t)
+	}
+	return providedTracksToQueueEntries(p, outTracks), hasMore, true
 }
 
 func providedTracksToQueueEntries(p *AppPlayer, tracks []*connectpb.ProvidedTrack) []PlaybackStateQueueEntry {
