@@ -11,6 +11,7 @@ type keyMap struct {
 	Next       key.Binding
 	Prev       key.Binding
 	Shuffle    key.Binding
+	Loop       key.Binding
 	VolUp      key.Binding
 	VolDown    key.Binding
 	SeekBack   key.Binding
@@ -30,6 +31,7 @@ func newKeys() keyMap {
 		Next:       key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next")),
 		Prev:       key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "prev")),
 		Shuffle:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "shuffle")),
+		Loop:       key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "repeat")),
 		VolUp:      key.NewBinding(key.WithKeys("+", "="), key.WithHelp("+", "vol+")),
 		VolDown:    key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "vol-")),
 		SeekBack:   key.NewBinding(key.WithKeys("left"), key.WithHelp("←", "-5s")),
@@ -44,21 +46,18 @@ func newKeys() keyMap {
 	}
 }
 
-// ShortHelp shows context-sensitive bindings in the footer.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Select, k.PlayPause, k.Next, k.Prev, k.Shuffle, k.OpenPicker, k.Filter, k.ToggleHelp, k.Quit}
+	return []key.Binding{k.Select, k.PlayPause, k.Next, k.Prev, k.Shuffle, k.Loop, k.OpenPicker, k.Filter, k.ToggleHelp, k.Quit}
 }
 
-// FullHelp shows the expanded help view.
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Select, k.OpenPicker, k.CloseModal, k.Refresh, k.Filter},
-		{k.PlayPause, k.Next, k.Prev, k.Shuffle, k.VolUp, k.VolDown},
+		{k.PlayPause, k.Next, k.Prev, k.Shuffle, k.Loop, k.VolUp, k.VolDown},
 		{k.SeekBack, k.SeekFwd, k.ToggleHelp, k.Quit},
 	}
 }
 
-// newHelp constructs a help.Model styled to match the app colour scheme.
 func newHelp() help.Model {
 	h := help.New()
 	h.Styles.ShortKey = lipgloss.NewStyle().Foreground(colorBlue)

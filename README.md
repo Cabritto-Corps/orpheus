@@ -1,13 +1,16 @@
 # orpheus
 
-- This code is turboshit
-- This is a just a concept still, it is quite working but its slow and the UI is experimental to say the least
-- I will improve this later, but for now, it is what it is
-- Probably sometime instead of copying implementation from go-librespot i will fork it and make it a library and use it -> What I did was extract the internal from it and, instead of using its daemon, wrapping it in the TUI directly
-
+- This code is (kinda) turboshit
 
 ### Preview
 
-- Currently this is the UI of orpheus (which will probably change a lot given time)
+- TUI is improved but still has a long way to go
 
-![Orpheus Screenshot](orpheus.png)
+![Orpheus Screenshot](playlist_orpheus.png)
+![Orpheus Screenshot 2](queue_orpheus.png)
+
+### Notes
+
+- Probably sometime instead of copying implementation from go-librespot i will fork it and make it a library and use it -> What I did was extract the internal from it and, instead of using its daemon, wrapping it in the TUI directly
+
+>Already started making changes to the go-librespot to fit orpheus use case, expected to try and migrate everything on the end of the week if the implementation is good enough

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	golibrespot "github.com/devgianlu/go-librespot"
@@ -17,10 +18,10 @@ import (
 	"github.com/devgianlu/go-librespot/dealer"
 	"github.com/devgianlu/go-librespot/player"
 	connectpb "github.com/devgianlu/go-librespot/proto/spotify/connectstate"
-	"github.com/devgianlu/go-librespot/session"
-	"github.com/devgianlu/go-librespot/tracks"
 	extmetadatapb "github.com/devgianlu/go-librespot/proto/spotify/extendedmetadata"
 	metadatapb "github.com/devgianlu/go-librespot/proto/spotify/metadata"
+	"github.com/devgianlu/go-librespot/session"
+	"github.com/devgianlu/go-librespot/tracks"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -44,10 +45,52 @@ type AppPlayer struct {
 	primaryStream   *player.Stream
 	secondaryStream *player.Stream
 
-	prefetchTimer *time.Timer
+	prefetchTimer       *time.Timer
+	shuffleRefreshTimer *time.Timer
+	prefetchJobs        chan prefetchJob
+	prefetchDone        chan prefetchResult
+
+	transitionStreamMu    sync.Mutex
+	transitionStreamCache map[string]*player.Stream
+	transitionStreamOrder []string
+	prefetchPending       map[string]struct{}
+	prefetchGen           atomic.Uint64
+	shuffleRefreshPending bool
+	shuffleRefreshGen     uint64
 
 	queueMetaCache map[string]PlaybackStateQueueEntry
 	queueMetaMu    sync.RWMutex
+
+	playedTrackURIs map[string]struct{}
+	playedTrackMu   sync.RWMutex
+
+	queueResolveMu       sync.Mutex
+	queueResolveInFlight bool
+	namePreloadContext   string
+	namePreloadToken     uint64
+	namePreloadDone      bool
+
+	trackStateVersion atomic.Uint64
+
+	derivedQueueMu      sync.RWMutex
+	derivedQueueKey     string
+	derivedQueueEntries []PlaybackStateQueueEntry
+	derivedQueueHasMore bool
+	derivedQueueValid   bool
+}
+
+type prefetchJob struct {
+	gen     uint64
+	nextURI string
+	target  golibrespot.SpotifyId
+}
+
+type prefetchResult struct {
+	gen     uint64
+	nextURI string
+	target  golibrespot.SpotifyId
+	stream  *player.Stream
+	err     error
 }
 
 func (p *AppPlayer) newApiResponseStatusTrack(media *golibrespot.Media, position int64) *ApiResponseStatusTrack {
@@ -406,12 +449,31 @@ func (p *AppPlayer) handleTUICommand(ctx context.Context, cmd TUICommand) error 
 			return fmt.Errorf("toggle shuffle on: %w", err)
 		}
 		p.state.player.Options.ShufflingContext = true
-		p.state.player.Track = p.state.tracks.CurrentTrack()
-		p.state.player.PrevTracks = p.state.tracks.PrevTracks()
-		p.state.player.NextTracks = p.state.tracks.NextTracks(ctx, nil)
-		p.state.player.Index = p.state.tracks.Index()
+		p.clearTransitionStreamCache()
+		p.bumpPrefetchGeneration()
+		p.clearSecondaryStream()
+		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
+		p.scheduleShuffleCacheRefresh()
 		p.updateState(ctx)
 		p.emitPlaybackState()
+		return nil
+	case TUICommandCycleRepeat:
+		if p.state == nil || p.state.player == nil || p.state.player.Options == nil {
+			return nil
+		}
+		repeatContext := false
+		repeatTrack := false
+		if p.state.player.Options.RepeatingTrack {
+			repeatContext = false
+			repeatTrack = false
+		} else if p.state.player.Options.RepeatingContext {
+			repeatContext = false
+			repeatTrack = true
+		} else {
+			repeatContext = true
+			repeatTrack = false
+		}
+		p.setOptions(ctx, &repeatContext, &repeatTrack, nil)
 		return nil
 	default:
 		return fmt.Errorf("unknown TUI command: %d", cmd.Kind)
@@ -434,6 +496,336 @@ func (p *AppPlayer) setCachedQueueMeta(id string, e PlaybackStateQueueEntry) {
 		p.queueMetaCache = make(map[string]PlaybackStateQueueEntry)
 	}
 	p.queueMetaCache[id] = e
+	p.derivedQueueMu.Lock()
+	p.derivedQueueValid = false
+	p.derivedQueueEntries = nil
+	p.derivedQueueKey = ""
+	p.derivedQueueHasMore = false
+	p.derivedQueueMu.Unlock()
+}
+
+func (p *AppPlayer) resetQueueMetaForContext(contextKey string) {
+	p.queueMetaMu.Lock()
+	p.queueMetaCache = make(map[string]PlaybackStateQueueEntry)
+	p.queueMetaMu.Unlock()
+
+	p.queueResolveMu.Lock()
+	p.namePreloadContext = contextKey
+	p.namePreloadToken++
+	p.namePreloadDone = false
+	p.queueResolveInFlight = false
+	p.queueResolveMu.Unlock()
+
+	p.bumpTrackStateVersion()
+}
+
+func (p *AppPlayer) resetPlayedTrackSet() {
+	p.playedTrackMu.Lock()
+	p.playedTrackURIs = make(map[string]struct{})
+	p.playedTrackMu.Unlock()
+}
+
+func (p *AppPlayer) markPlayedTrack(uri string) {
+	id := normalizeSpotifyID(uri)
+	if id == "" {
+		return
+	}
+	p.playedTrackMu.Lock()
+	if p.playedTrackURIs == nil {
+		p.playedTrackURIs = make(map[string]struct{})
+	}
+	p.playedTrackURIs[id] = struct{}{}
+	p.playedTrackMu.Unlock()
+}
+
+func (p *AppPlayer) isPlayedTrack(uri string) bool {
+	id := normalizeSpotifyID(uri)
+	if id == "" {
+		return false
+	}
+	p.playedTrackMu.RLock()
+	_, ok := p.playedTrackURIs[id]
+	p.playedTrackMu.RUnlock()
+	return ok
+}
+
+func (p *AppPlayer) playedTrackCount() int {
+	p.playedTrackMu.RLock()
+	n := len(p.playedTrackURIs)
+	p.playedTrackMu.RUnlock()
+	return n
+}
+
+func (p *AppPlayer) bumpTrackStateVersion() {
+	p.trackStateVersion.Add(1)
+	p.derivedQueueMu.Lock()
+	p.derivedQueueValid = false
+	p.derivedQueueEntries = nil
+	p.derivedQueueKey = ""
+	p.derivedQueueHasMore = false
+	p.derivedQueueMu.Unlock()
+}
+
+func (p *AppPlayer) currentDerivedQueueKey(shuffle bool) string {
+	return fmt.Sprintf("v:%d|shuffle:%t|played:%d", p.trackStateVersion.Load(), shuffle, p.playedTrackCount())
+}
+
+func (p *AppPlayer) getDerivedQueueCache(key string) ([]PlaybackStateQueueEntry, bool, bool) {
+	p.derivedQueueMu.RLock()
+	defer p.derivedQueueMu.RUnlock()
+	if !p.derivedQueueValid || p.derivedQueueKey != key {
+		return nil, false, false
+	}
+	out := append([]PlaybackStateQueueEntry(nil), p.derivedQueueEntries...)
+	return out, p.derivedQueueHasMore, true
+}
+
+func (p *AppPlayer) setDerivedQueueCache(key string, entries []PlaybackStateQueueEntry, hasMore bool) {
+	p.derivedQueueMu.Lock()
+	p.derivedQueueKey = key
+	p.derivedQueueEntries = append([]PlaybackStateQueueEntry(nil), entries...)
+	p.derivedQueueHasMore = hasMore
+	p.derivedQueueValid = true
+	p.derivedQueueMu.Unlock()
+}
+
+const transitionStreamCacheMax = 4
+
+func streamCacheKey(id golibrespot.SpotifyId) string {
+	return id.Uri()
+}
+
+func (p *AppPlayer) hasTransitionCachedStream(id golibrespot.SpotifyId) bool {
+	p.transitionStreamMu.Lock()
+	defer p.transitionStreamMu.Unlock()
+	_, ok := p.transitionStreamCache[streamCacheKey(id)]
+	return ok
+}
+
+func (p *AppPlayer) takeTransitionCachedStream(id golibrespot.SpotifyId) *player.Stream {
+	key := streamCacheKey(id)
+	p.transitionStreamMu.Lock()
+	defer p.transitionStreamMu.Unlock()
+	if p.transitionStreamCache == nil {
+		return nil
+	}
+	stream, ok := p.transitionStreamCache[key]
+	if !ok {
+		return nil
+	}
+	delete(p.transitionStreamCache, key)
+	for i := range p.transitionStreamOrder {
+		if p.transitionStreamOrder[i] == key {
+			p.transitionStreamOrder = append(p.transitionStreamOrder[:i], p.transitionStreamOrder[i+1:]...)
+			break
+		}
+	}
+	return stream
+}
+
+func (p *AppPlayer) putTransitionCachedStream(id golibrespot.SpotifyId, stream *player.Stream) bool {
+	if stream == nil {
+		return false
+	}
+	key := streamCacheKey(id)
+	p.transitionStreamMu.Lock()
+	defer p.transitionStreamMu.Unlock()
+	if p.transitionStreamCache == nil {
+		p.transitionStreamCache = make(map[string]*player.Stream, transitionStreamCacheMax)
+	}
+	if _, exists := p.transitionStreamCache[key]; exists {
+		return false
+	}
+	if len(p.transitionStreamOrder) >= transitionStreamCacheMax {
+		evict := p.transitionStreamOrder[0]
+		p.transitionStreamOrder = p.transitionStreamOrder[1:]
+		delete(p.transitionStreamCache, evict)
+	}
+	p.transitionStreamOrder = append(p.transitionStreamOrder, key)
+	p.transitionStreamCache[key] = stream
+	return true
+}
+
+func (p *AppPlayer) clearTransitionStreamCache() {
+	p.transitionStreamMu.Lock()
+	p.transitionStreamCache = make(map[string]*player.Stream, transitionStreamCacheMax)
+	p.transitionStreamOrder = nil
+	p.prefetchPending = make(map[string]struct{}, transitionStreamCacheMax)
+	p.transitionStreamMu.Unlock()
+}
+
+func (p *AppPlayer) bumpPrefetchGeneration() uint64 {
+	next := p.prefetchGen.Add(1)
+	p.transitionStreamMu.Lock()
+	p.prefetchPending = make(map[string]struct{}, transitionStreamCacheMax)
+	p.transitionStreamMu.Unlock()
+	return next
+}
+
+func (p *AppPlayer) hasPrefetchPending(id golibrespot.SpotifyId) bool {
+	key := streamCacheKey(id)
+	p.transitionStreamMu.Lock()
+	defer p.transitionStreamMu.Unlock()
+	_, ok := p.prefetchPending[key]
+	return ok
+}
+
+func (p *AppPlayer) markPrefetchPending(id golibrespot.SpotifyId) bool {
+	key := streamCacheKey(id)
+	p.transitionStreamMu.Lock()
+	defer p.transitionStreamMu.Unlock()
+	if p.prefetchPending == nil {
+		p.prefetchPending = make(map[string]struct{}, transitionStreamCacheMax)
+	}
+	if _, exists := p.prefetchPending[key]; exists {
+		return false
+	}
+	p.prefetchPending[key] = struct{}{}
+	return true
+}
+
+func (p *AppPlayer) clearPrefetchPending(id golibrespot.SpotifyId) {
+	key := streamCacheKey(id)
+	p.transitionStreamMu.Lock()
+	delete(p.prefetchPending, key)
+	p.transitionStreamMu.Unlock()
+}
+
+func (p *AppPlayer) startQueueMetadataResolve() {
+	p.queueResolveMu.Lock()
+	if p.queueResolveInFlight {
+		p.queueResolveMu.Unlock()
+		return
+	}
+	p.queueResolveInFlight = true
+	p.queueResolveMu.Unlock()
+	go p.resolveQueueMetadataBatchAndEmit()
+}
+
+func (p *AppPlayer) shouldPreloadContextNames(contextKey string) (token uint64, ok bool) {
+	contextKey = strings.TrimSpace(contextKey)
+	if contextKey == "" {
+		return 0, false
+	}
+	p.queueResolveMu.Lock()
+	defer p.queueResolveMu.Unlock()
+	if p.namePreloadContext != contextKey {
+		p.namePreloadContext = contextKey
+		p.namePreloadToken++
+		p.namePreloadDone = false
+		p.queueResolveInFlight = false
+	}
+	if p.namePreloadDone || p.queueResolveInFlight {
+		return 0, false
+	}
+	p.queueResolveInFlight = true
+	return p.namePreloadToken, true
+}
+
+func (p *AppPlayer) finishContextNamePreload(contextKey string, token uint64) {
+	p.queueResolveMu.Lock()
+	defer p.queueResolveMu.Unlock()
+	if p.namePreloadContext == contextKey && p.namePreloadToken == token {
+		p.namePreloadDone = true
+	}
+	p.queueResolveInFlight = false
+}
+
+func (p *AppPlayer) isContextNamePreloadDone(contextKey string) bool {
+	p.queueResolveMu.Lock()
+	defer p.queueResolveMu.Unlock()
+	contextKey = strings.TrimSpace(contextKey)
+	if contextKey == "" {
+		return false
+	}
+	if p.namePreloadContext != contextKey {
+		p.namePreloadContext = contextKey
+		p.namePreloadToken++
+		p.namePreloadDone = false
+		p.queueResolveInFlight = false
+		return false
+	}
+	return p.namePreloadDone
+}
+
+func (p *AppPlayer) preloadContextQueueMetadata(trackList *tracks.List, contextKey string) {
+	token, ok := p.shouldPreloadContextNames(contextKey)
+	if !ok || trackList == nil {
+		return
+	}
+	go func(token uint64, contextKey string, list *tracks.List) {
+		defer p.finishContextNamePreload(contextKey, token)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		all := list.AllTracks(ctx)
+		if len(all) == 0 {
+			return
+		}
+		seen := make(map[string]struct{}, len(all))
+		toResolve := make([]string, 0, len(all))
+		for _, t := range all {
+			if t == nil {
+				continue
+			}
+			id := normalizeSpotifyID(t.Uri)
+			if id == "" {
+				continue
+			}
+			if _, exists := seen[id]; exists {
+				continue
+			}
+			seen[id] = struct{}{}
+			if p.getCachedQueueMeta(id) != nil {
+				continue
+			}
+			e := PlaybackStateQueueEntry{ID: id}
+			if t.Metadata != nil {
+				e.Name = metadataValue(t.Metadata, "title", "name", "track_name", "entity_name", "track_title")
+				e.Artist = metadataValue(t.Metadata, "artist_name", "artist", "artists", "show_name", "album_artist_name")
+				e.DurationMS = metadataDurationMS(t.Metadata)
+			}
+			if e.Name != "" {
+				if e.Artist == "" {
+					e.Artist = "-"
+				}
+				p.setCachedQueueMeta(id, e)
+				continue
+			}
+			toResolve = append(toResolve, t.Uri)
+		}
+		if len(toResolve) == 0 {
+			p.runtime.EmitPlaybackState(p.BuildPlaybackStateUpdate())
+			return
+		}
+		sem := make(chan struct{}, queueResolveConcurrency)
+		var wg sync.WaitGroup
+		var resolved atomic.Int32
+		for _, uri := range toResolve {
+			uri := uri
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				select {
+				case sem <- struct{}{}:
+					defer func() { <-sem }()
+				case <-ctx.Done():
+					return
+				}
+				e, ok := p.resolveQueueEntry(ctx, uri)
+				if !ok {
+					return
+				}
+				p.setCachedQueueMeta(e.ID, e)
+				resolved.Add(1)
+			}()
+		}
+		wg.Wait()
+		if resolved.Load() > 0 {
+			p.runtime.EmitPlaybackState(p.BuildPlaybackStateUpdate())
+		}
+	}(token, strings.TrimSpace(contextKey), trackList)
 }
 
 const queueResolveBatchLimit = 32
@@ -489,15 +881,25 @@ func (p *AppPlayer) resolveQueueEntry(ctx context.Context, uri string) (e Playba
 const queueResolveConcurrency = 10
 
 func (p *AppPlayer) resolveQueueMetadataBatchAndEmit() {
+	defer func() {
+		p.queueResolveMu.Lock()
+		p.queueResolveInFlight = false
+		p.queueResolveMu.Unlock()
+	}()
 	if p.state == nil || p.state.player == nil {
 		return
 	}
 	var toResolve []string
+	seen := make(map[string]struct{}, queueResolveBatchLimit)
 	for _, t := range p.state.player.NextTracks {
 		id := normalizeSpotifyID(t.Uri)
 		if id == "" {
 			continue
 		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
 		if p.getCachedQueueMeta(id) != nil {
 			continue
 		}
@@ -513,6 +915,7 @@ func (p *AppPlayer) resolveQueueMetadataBatchAndEmit() {
 	defer cancel()
 	sem := make(chan struct{}, queueResolveConcurrency)
 	var wg sync.WaitGroup
+	var resolved atomic.Int32
 	for _, uri := range toResolve {
 		uri := uri
 		wg.Add(1)
@@ -527,11 +930,14 @@ func (p *AppPlayer) resolveQueueMetadataBatchAndEmit() {
 			e, ok := p.resolveQueueEntry(ctx, uri)
 			if ok {
 				p.setCachedQueueMeta(e.ID, e)
-				p.emitPlaybackState()
+				resolved.Add(1)
 			}
 		}()
 	}
 	wg.Wait()
+	if resolved.Load() > 0 {
+		p.runtime.EmitPlaybackState(p.BuildPlaybackStateUpdate())
+	}
 }
 
 func (p *AppPlayer) emitPlaybackState() {
@@ -545,7 +951,13 @@ func (p *AppPlayer) emitPlaybackState() {
 			}
 		}
 		if hasUnknown {
-			go p.resolveQueueMetadataBatchAndEmit()
+			contextKey := ""
+			if p.state != nil && p.state.player != nil {
+				contextKey = p.state.player.ContextUri
+			}
+			if !p.isContextNamePreloadDone(contextKey) && p.state != nil {
+				p.preloadContextQueueMetadata(p.state.tracks, contextKey)
+			}
 		}
 		p.runtime.EmitPlaybackState(u)
 	}
@@ -560,6 +972,7 @@ func (p *AppPlayer) Close() {
 }
 
 func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
+	go p.runPrefetchWorker(ctx)
 	err := p.sess.Dealer().Connect(ctx)
 	if err != nil {
 		p.runtime.Log.WithError(err).Error("failed connecting to dealer")
@@ -617,6 +1030,10 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			p.handlePlayerEvent(ctx, &ev)
 		case <-p.prefetchTimer.C:
 			p.prefetchNext(ctx)
+		case <-p.shuffleRefreshTimer.C:
+			p.handleShuffleCacheRefresh(ctx)
+		case res := <-p.prefetchDone:
+			p.handlePrefetchResult(res)
 		case volume := <-p.volumeUpdate:
 			p.state.device.Volume = uint32(math.Round(float64(volume * player.MaxStateVolume)))
 			volumeTimer.Reset(100 * time.Millisecond)

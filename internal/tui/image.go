@@ -14,22 +14,18 @@ import (
 	"time"
 )
 
-// ── Cache ─────────────────────────────────────────────────────────────────────
-
 type coverKey struct {
 	url  string
 	cols int
 	rows int
 }
 
-// imgCache holds decoded images and pre-rendered half-block strings.
-// It is allocated once and shared via pointer across all model copies.
 type imgCache struct {
 	mu        sync.RWMutex
-	imgs      map[string]image.Image     // url -> decoded image
-	covers    map[coverKey]string        // (url, cols, rows) -> rendered half-block string
-	inflight  map[string]struct{}        // urls currently being fetched
-	rendering map[coverKey]chan struct{} // covers currently being rendered
+	imgs      map[string]image.Image
+	covers    map[coverKey]string
+	inflight  map[string]struct{}
+	rendering map[coverKey]chan struct{}
 }
 
 func newImgCache() *imgCache {
@@ -54,6 +50,34 @@ func (c *imgCache) setImage(url string, img image.Image) {
 	c.imgs[url] = img
 }
 
+func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
+	c.mu.RLock()
+	img, ok := c.imgs[url]
+	c.mu.RUnlock()
+	if !ok {
+		return
+	}
+	for _, sz := range coverSizes {
+		cols, rows := sz[0], sz[1]
+		if cols <= 0 || rows <= 0 {
+			continue
+		}
+		key := coverKey{url: url, cols: cols, rows: rows}
+		c.mu.RLock()
+		_, already := c.covers[key]
+		c.mu.RUnlock()
+		if already {
+			continue
+		}
+		s := renderHalfBlock(img, cols, rows)
+		c.mu.Lock()
+		if _, exists := c.covers[key]; !exists {
+			c.covers[key] = s
+		}
+		c.mu.Unlock()
+	}
+}
+
 func (c *imgCache) beginLoad(url string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -76,12 +100,9 @@ func (c *imgCache) finishLoad(url string) {
 	delete(c.inflight, url)
 }
 
-// cover returns the cached half-block string for the given url and dimensions,
-// rendering it from the cached image if necessary.
-// Returns ("", false) if the image has not been fetched yet.
 func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 	if url == "" || cols <= 0 || rows <= 0 {
-		return "", true // nothing to show, but not a cache miss
+		return "", true
 	}
 
 	key := coverKey{url: url, cols: cols, rows: rows}
@@ -94,7 +115,7 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 		img, ok := c.imgs[url]
 		if !ok {
 			c.mu.Unlock()
-			return "", false // fetch not complete yet
+			return "", false
 		}
 		if ch, rendering := c.rendering[key]; rendering {
 			c.mu.Unlock()
@@ -121,8 +142,6 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 	}
 }
 
-// ── Fetch ─────────────────────────────────────────────────────────────────────
-
 const imageFetchTimeout = 6 * time.Second
 
 var imageHTTPClient = &http.Client{
@@ -139,7 +158,6 @@ var imageHTTPClient = &http.Client{
 	},
 }
 
-// fetchImageFromBytes downloads and decodes an image from url.
 func fetchImageFromBytes(ctx context.Context, url string) (image.Image, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -162,11 +180,6 @@ func fetchImageFromBytes(ctx context.Context, url string) (image.Image, error) {
 	return img, nil
 }
 
-// ── Resize ────────────────────────────────────────────────────────────────────
-
-// resizeNN resizes src to (width × height) pixels using nearest-neighbour
-// sampling. Fast and dependency-free; quality is sufficient for pixel-art
-// terminal rendering.
 func resizeNN(src image.Image, width, height int) *image.RGBA {
 	dst := image.NewRGBA(image.Rect(0, 0, width, height))
 	sb := src.Bounds()
@@ -188,27 +201,15 @@ func resizeNN(src image.Image, width, height int) *image.RGBA {
 	return dst
 }
 
-// ── Half-block renderer ───────────────────────────────────────────────────────
-
-// renderHalfBlock converts img into a cols×rows character string using the ▀
-// (UPPER HALF BLOCK) trick:
-//
-//   - foreground colour = top pixel of the pair
-//   - background colour = bottom pixel of the pair
-//
-// Each character row encodes two image pixel rows, so the source image is
-// resized to (cols × rows*2) pixels before rendering. For a visually square
-// result in a typical terminal (cells ~2× taller than wide), use rows = cols/2.
 func renderHalfBlock(img image.Image, cols, rows int) string {
 	if cols <= 0 || rows <= 0 || img == nil {
 		return ""
 	}
 
-	// Resize once to the exact pixel grid we need.
 	px := resizeNN(img, cols, rows*2)
 
 	var sb strings.Builder
-	sb.Grow(cols * rows * 30) // rough pre-alloc: ~28 bytes per ▀ cell
+	sb.Grow(cols * rows * 30)
 
 	reset := "\x1b[0m"
 
@@ -217,7 +218,6 @@ func renderHalfBlock(img image.Image, cols, rows int) string {
 			top := px.RGBAAt(col, row*2)
 			bot := px.RGBAAt(col, row*2+1)
 
-			// Set foreground (top half) and background (bottom half).
 			fmt.Fprintf(&sb,
 				"\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm▀",
 				top.R, top.G, top.B,
@@ -233,10 +233,6 @@ func renderHalfBlock(img image.Image, cols, rows int) string {
 	return sb.String()
 }
 
-// squareDims computes image dimensions (cols, rows) for a panel with the given
-// inner width and height so that the rendered image appears square.
-// Terminal cells are approximately 2× taller than wide, so rows = cols/2 gives
-// a square visual result. The result is clamped to the available space.
 func squareDims(innerW, innerH int) (cols, rows int) {
 	if innerW <= 0 || innerH <= 0 {
 		return 0, 0

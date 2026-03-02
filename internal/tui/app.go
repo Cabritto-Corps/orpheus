@@ -17,9 +17,8 @@ import (
 	"orpheus/internal/spotify"
 )
 
-// ── Screen identifiers ────────────────────────────────────────────────────────
-
 type screen string
+type modalKind string
 
 const (
 	screenPlaylist          screen = "playlist"
@@ -33,9 +32,12 @@ const (
 	uiTickInterval                 = 200 * time.Millisecond
 	navDebounceInterval            = 120 * time.Millisecond
 	volSeekDebounceInterval        = 150 * time.Millisecond
-)
+	volSettleWindow                = 3 * time.Second
 
-// ── Model ─────────────────────────────────────────────────────────────────────
+	modalKindNone     modalKind = ""
+	modalKindPlaylist modalKind = "playlist"
+	modalKindHelp     modalKind = "help"
+)
 
 type model struct {
 	ctx        context.Context
@@ -44,27 +46,29 @@ type model struct {
 	deviceName string
 	tuiCmdCh   chan librespot.TUICommand
 
-	// Timing
-	pollInterval time.Duration
-	pollTick     int
-	pollElapsed  time.Duration
+	pollInterval        time.Duration
+	pollTick            int
+	pollElapsed         time.Duration
+	actionFastPollUntil time.Time
 
-	// Screen state
 	screen         screen
 	modal          bool
+	modalKind      modalKind
 	navToken       int
 	actionInFlight bool
 
 	volDebouncePending  int
 	volDebounceToken    int
+	volSentAt           time.Time
+	volSentTarget       int
 	seekDebouncePending int
 	seekDebounceToken   int
 
-	// Playback data
-	status          *spotify.PlaybackStatus
-	queue           []spotify.QueueItem
-	queueHasMore    bool
-	stableQueueLen  int // frozen at each track transition; drives "+ n more" display
+	status             *spotify.PlaybackStatus
+	queue              []spotify.QueueItem
+	queueHasMore       bool
+	stableQueueLen     int
+	pendingContextFrom string
 
 	activePlaylistID              string
 	activePlaylistOwnerID         string
@@ -75,33 +79,27 @@ type model struct {
 	activePlaylistTrackLoading    bool
 	activePlaylistLoadToken       int
 	preloadedTrackIDs             map[string]struct{}
+	trackCache                    map[string]spotify.QueueItem
 	playlistsLoading              bool
 	playlistsExhausted            bool
 	playlistsErr                  error
 	playlistsRetryCount           int
 	playbackErr                   error
-	preloadInFlight               bool
 	playlistTrackRetryCount       int
 	currentUserID                 string
 
-	// List components — browser and modal have separate scroll/filter state
 	playlistList list.Model
 	modalList    list.Model
 
-	// Image cache (pointer — shared across all model copies in the update cycle)
 	imgs *imgCache
 
-	// Layout
 	width     int
 	height    int
 	nerdFonts bool
 
-	// UI components
 	help help.Model
 	keys keyMap
 }
-
-// ── playlistItem ──────────────────────────────────────────────────────────────
 
 type playlistItem struct {
 	summary spotify.PlaylistSummary
@@ -116,28 +114,27 @@ func (p playlistItem) Description() string {
 	return "by " + p.summary.Owner
 }
 
-// ── Constructor ───────────────────────────────────────────────────────────────
-
 func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand) model {
 	delegate := newPlaylistDelegate()
+	modalDelegate := newPlaylistModalDelegate(false)
 
-	// Browser list (full-screen left panel)
 	browser := list.New(nil, delegate, 40, 20)
 	browser.Title = "Playlists"
 	browser.SetShowStatusBar(true)
 	browser.SetFilteringEnabled(true)
 	browser.SetShowFilter(true)
 	browser.SetShowHelp(false)
+	browser.FilterInput.Prompt = "Search: "
 	applyListStyles(&browser)
 
-	// Modal list (popup picker — separate scroll state, same items)
-	modal := list.New(nil, delegate, 40, 20)
+	modal := list.New(nil, modalDelegate, 40, 20)
 	modal.Title = ""
 	modal.SetShowTitle(false)
 	modal.SetShowStatusBar(false)
 	modal.SetFilteringEnabled(true)
 	modal.SetShowFilter(true)
 	modal.SetShowHelp(false)
+	modal.FilterInput.Prompt = "Search: "
 	applyListStyles(&modal)
 
 	h := newHelp()
@@ -150,20 +147,26 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		tuiCmdCh:            tuiCmdCh,
 		pollInterval:        cfg.PollInterval,
 		screen:              screenPlaylist,
+		modalKind:           modalKindNone,
 		playlistList:        browser,
 		modalList:           modal,
 		imgs:                newImgCache(),
 		preloadedTrackIDs:   make(map[string]struct{}),
+		trackCache:          make(map[string]spotify.QueueItem),
 		playlistsLoading:    true,
 		nerdFonts:           cfg.NerdFonts,
 		volDebouncePending:  -1,
 		seekDebouncePending: -1,
+		volSentTarget:       -1,
 		help:                h,
 		keys:                newKeys(),
 	}
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+func (m *model) syncModalDelegate() {
+	searching := m.modalList.FilterState() != list.Unfiltered
+	m.modalList.SetDelegate(newPlaylistModalDelegate(searching))
+}
 
 func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, playbackStateCh <-chan *librespot.PlaybackStateUpdate) error {
 	m := newModel(ctx, catalog, service, cfg, tuiCmdCh)
@@ -178,8 +181,6 @@ func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.
 	return err
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
-
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		m.getCurrentUserIDCmd(),
@@ -187,28 +188,23 @@ func (m model) Init() tea.Cmd {
 	)
 }
 
-// ── Update ────────────────────────────────────────────────────────────────────
-
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
-	// ── Window resize ──────────────────────────────────────────────────────
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 
 		leftW, _ := m.splitWidths()
-		listInnerW := leftW - 6 // border(2) + padding(2) + list margin(2)
+		listInnerW := leftW - 3
 		listInnerH := m.height - chromeH - 4
 
 		m.playlistList.SetSize(listInnerW, listInnerH)
-		// Modal list is sized dynamically in modalView on each render.
 		return m, tea.Batch(
 			m.loadVisiblePlaylistCoversCmd(),
 			m.maybeLoadMorePlaylistsCmd(m.playlistList),
 		)
 
-	// ── Periodic tick (poll or progress interpolation) ─────────────────────
 	case tickMsg:
 		m.interpolatePlaybackProgress(uiTickInterval)
 		if m.tuiCmdCh != nil {
@@ -221,7 +217,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if interval <= 0 {
 			interval = uiTickInterval
 		}
-		if m.status == nil || !m.status.Playing {
+		if !m.actionFastPollUntil.IsZero() && time.Now().Before(m.actionFastPollUntil) {
+			interval = uiTickInterval
+		} else if m.status == nil || !m.status.Playing {
 			interval = min(interval*2, 5*time.Second)
 		}
 		m.pollElapsed += uiTickInterval
@@ -233,85 +231,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		pollQueue := m.pollTick%queuePollEvery == 0
 		return m, tea.Batch(m.pollCmd(pollQueue), m.tickCmd())
 
-	// ── Playback state (pushed from librespot bridge) ──────────────────────
 	case playbackStateMsg:
-		prevStatus := m.status
-		prevAlbumURL := ""
-		if prevStatus != nil {
-			prevAlbumURL = prevStatus.AlbumImageURL
-		}
-		m.status = mergeStatusFromPrevious(prevStatus, m.queue, msg.status)
-		prevTrackID := ""
-		if prevStatus != nil {
-			prevTrackID = normalizeQueueID(prevStatus.TrackID)
-		}
-		nextTrackID := ""
-		if msg.status != nil {
-			nextTrackID = normalizeQueueID(msg.status.TrackID)
-		}
-		// Track transitions (or initial load) reset the stable tail baseline.
-		// Shuffle/seek/volume/metadata updates do not — the queue reorders but the count stays.
-		refreshQueue := len(m.queue) == 0 || (nextTrackID != "" && nextTrackID != prevTrackID)
-		m.queue = mergeQueueWithRest(m.queue, msg.queue)
-		if refreshQueue {
-			m.stableQueueLen = len(m.queue)
-			m.queueHasMore = msg.queueHasMore
-		}
-		m.playbackErr = nil
-		cmds := []tea.Cmd{}
-		if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
-			cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
-		}
-		return m, tea.Batch(cmds...)
+		return m.handlePlaybackStateMsg(msg)
 
-	// ── Playback state (polled from Web API) ─────────────────────────────────
 	case pollMsg:
-		if msg.err != nil {
-			if errors.Is(msg.err, spotify.ErrNoActiveTrack) {
-				m.status = nil
-				m.queue = nil
-				m.queueHasMore = false
-				m.stableQueueLen = 0
-				m.playbackErr = nil
-			} else {
-				m.playbackErr = msg.err
-				slog.Error("poll status failed", "error", msg.err)
-			}
-			return m, nil
-		}
-		m.pollElapsed = 0
-		prevAlbumURL := ""
-		if m.status != nil {
-			prevAlbumURL = m.status.AlbumImageURL
-		}
-		m.status = msg.status
-		m.playbackErr = nil
-		if msg.queueFetched {
-			m.queue = msg.queue
-			m.queueHasMore = false
-			m.stableQueueLen = len(m.queue)
-		}
-		if msg.queueErr != nil {
-			m.playbackErr = msg.queueErr
-			slog.Error("fetch queue failed", "error", msg.queueErr)
-		}
+		return m.handlePollMsg(msg)
 
-		cmds := make([]tea.Cmd, 0, 3)
-		if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
-			cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
-		}
-		if msg.queueFetched {
-			if toQueue := m.nextTracksToPreload(playlistTrackPreloadMax); len(toQueue) > 0 && !m.preloadInFlight {
-				m.preloadInFlight = true
-				cmds = append(cmds, m.preloadQueueCmd(toQueue))
-			}
-			if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
-		return m, tea.Batch(cmds...)
-
-	// ── Playlists loaded ───────────────────────────────────────────────────
 	case playlistsMsg:
 		m.playlistsLoading = false
 		if msg.err != nil {
@@ -403,7 +328,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			seen[trackID] = struct{}{}
 		}
-		for _, trackID := range msg.trackIDs {
+		for i, trackID := range msg.trackIDs {
 			if trackID == "" {
 				continue
 			}
@@ -412,33 +337,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			seen[trackID] = struct{}{}
 			m.activePlaylistTrackIDs = append(m.activePlaylistTrackIDs, trackID)
+			if i < len(msg.trackInfos) {
+				if info := msg.trackInfos[i]; info.Name != "" {
+					m.trackCache[trackID] = info
+				}
+			}
 		}
 		m.activePlaylistTrackNextOffset = msg.nextOffset
 		m.activePlaylistTrackHasMore = msg.hasMore
 		cmds := make([]tea.Cmd, 0, 2)
-		if toQueue := m.nextTracksToPreload(playlistTrackPreloadMax); len(toQueue) > 0 && !m.preloadInFlight {
-			m.preloadInFlight = true
-			cmds = append(cmds, m.preloadQueueCmd(toQueue))
-		}
 		if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 		return m, tea.Batch(cmds...)
-
-	case preloadQueueMsg:
-		m.preloadInFlight = false
-		if len(msg.trackIDs) > 0 {
-			if m.preloadedTrackIDs == nil {
-				m.preloadedTrackIDs = make(map[string]struct{}, len(msg.trackIDs))
-			}
-			for _, trackID := range msg.trackIDs {
-				m.preloadedTrackIDs[trackID] = struct{}{}
-			}
-		}
-		if msg.err != nil {
-			slog.Warn("queue preload partial failure", "queued", len(msg.trackIDs), "error", msg.err)
-		}
-		return m, nil
 
 	case navDebounceMsg:
 		if msg.token != m.navToken {
@@ -455,58 +366,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.maybeLoadMorePlaylistsCmd(m.playlistList),
 		)
 
-	// ── Image loaded ───────────────────────────────────────────────────────
 	case imageLoadedMsg:
-		if msg.err != nil {
-			// Image fetch failure is non-fatal; cover just shows placeholder.
-			return m, nil
-		}
-		// The image is already stored in m.imgs by the cmd; nothing else needed.
 		return m, nil
 
 	case actionReconcileMsg:
-		m.actionInFlight = false
-		if msg.err != nil {
-			m.playbackErr = msg.err
-			if msg.rollback != nil {
-				m.status = msg.rollback
-				slog.Error("playback action failed", "error", msg.err)
-			} else {
-				slog.Info("reconcile failed", "error", msg.err)
-			}
-			return m, nil
-		}
-		if msg.status == nil {
-			return m, m.reconcileCmd()
-		}
-		m.playbackErr = nil
-		m.pollElapsed = 0
-		prevAlbumURL := ""
-		if m.status != nil {
-			prevAlbumURL = m.status.AlbumImageURL
-		}
-		m.status = msg.status
-		if msg.queueFetched {
-			m.queue = msg.queue
-			m.queueHasMore = false
-			m.stableQueueLen = len(m.queue)
-		}
-		cmds := make([]tea.Cmd, 0, 3)
-		if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
-			cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
-		}
-		if msg.queueFetched {
-			if toQueue := m.nextTracksToPreload(playlistTrackPreloadMax); len(toQueue) > 0 && !m.preloadInFlight {
-				m.preloadInFlight = true
-				cmds = append(cmds, m.preloadQueueCmd(toQueue))
-			}
-			if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
-		return m, tea.Batch(cmds...)
+		return m.handleActionReconcileMsg(msg)
 
-	// ── Action result ──────────────────────────────────────────────────────
 	case actionMsg:
 		m.actionInFlight = false
 		if msg.err != nil {
@@ -526,6 +391,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenPlayback
 		case "play-from-modal":
 			m.modal = false
+			m.modalKind = modalKindNone
 		}
 		return m, m.pollCmd(true)
 
@@ -535,6 +401,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		target := m.volDebouncePending
 		m.volDebouncePending = -1
+		m.volSentTarget = target
+		m.volSentAt = time.Now()
+		m.actionFastPollUntil = time.Now().Add(3 * time.Second)
 		if m.tuiCmdCh != nil {
 			select {
 			case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandSetVolume, Volume: target}:
@@ -575,10 +444,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.service.Seek(ctx, m.deviceName, p)
 		}, rollback)
 
-	// ── Async filter results from bubbles list ─────────────────────────────
-	// filterItems() runs in a goroutine and sends FilterMatchesMsg back.
-	// We must forward it to whichever list is currently active so the
-	// displayed items update in real-time as the user types.
 	case list.FilterMatchesMsg:
 		if m.modal {
 			var cmd tea.Cmd
@@ -592,7 +457,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	// ── Keys ───────────────────────────────────────────────────────────────
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -600,45 +464,220 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// ── Key dispatch ──────────────────────────────────────────────────────────────
+func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd) {
+	prevStatus := m.status
+	prevAlbumURL := ""
+	if prevStatus != nil {
+		prevAlbumURL = prevStatus.AlbumImageURL
+	}
+	inVolSettle := m.volDebouncePending >= 0 ||
+		(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
+	if inVolSettle && msg.status != nil && prevStatus != nil {
+		msg.status.Volume = prevStatus.Volume
+	}
+	if inVolSettle && msg.status != nil && m.volSentTarget >= 0 {
+		msg.status.Volume = m.volSentTarget
+	}
+	// Check device confirmation using incoming volume BEFORE the override above.
+	// prevStatus.Volume was already set to the optimistic target by the key handler,
+	// so use the raw device report from msg.queue instead.
+	// We can't recover the pre-override value here; use timeout-only clear.
+	if m.volSentTarget >= 0 && time.Since(m.volSentAt) >= volSettleWindow {
+		m.volSentTarget = -1
+	}
+	m.status = mergeStatusFromPrevious(prevStatus, m.queue, msg.status)
+	prevTrackID := ""
+	if prevStatus != nil {
+		prevTrackID = normalizeQueueID(prevStatus.TrackID)
+	}
+	nextTrackID := ""
+	if msg.status != nil {
+		nextTrackID = normalizeQueueID(msg.status.TrackID)
+	}
+	refreshQueue := len(m.queue) == 0 || (nextTrackID != "" && nextTrackID != prevTrackID)
+	if nextTrackID != m.pendingContextFrom {
+		m.pendingContextFrom = ""
+	}
+	prevShuffleState := false
+	if prevStatus != nil {
+		prevShuffleState = prevStatus.ShuffleState
+	}
+	shuffleChanged := m.status != nil && m.status.ShuffleState != prevShuffleState
+	m.applyMergedQueue(msg.queue, msg.queueHasMore, refreshQueue || shuffleChanged, true)
+	m.playbackErr = nil
+	cmds := []tea.Cmd{}
+	if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
+		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		if errors.Is(msg.err, spotify.ErrNoActiveTrack) {
+			m.status = nil
+			m.queue = nil
+			m.queueHasMore = false
+			m.stableQueueLen = 0
+			m.playbackErr = nil
+		} else {
+			m.playbackErr = msg.err
+			slog.Error("poll status failed", "error", msg.err)
+		}
+		return m, nil
+	}
+	m.pollElapsed = 0
+	prevAlbumURL := ""
+	if m.status != nil {
+		prevAlbumURL = m.status.AlbumImageURL
+	}
+	inVolSettle := m.volDebouncePending >= 0 ||
+		(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
+	incomingVol := -1
+	if msg.status != nil {
+		incomingVol = msg.status.Volume
+	}
+	if inVolSettle && msg.status != nil && m.volSentTarget >= 0 {
+		msg.status.Volume = m.volSentTarget
+	}
+	// Clear guard only when the device actually reports the target (real confirmation),
+	// not after the override above, which would always match.
+	m.clearVolumeSettleTarget(incomingVol)
+	m.status = msg.status
+	m.playbackErr = nil
+	if msg.queueFetched {
+		incomingTrack := ""
+		if msg.status != nil {
+			incomingTrack = normalizeQueueID(msg.status.TrackID)
+		}
+		if m.shouldApplyIncomingQueue(incomingTrack) {
+			m.applyMergedQueue(msg.queue, false, true, true)
+		}
+	}
+	if msg.queueErr != nil {
+		m.playbackErr = msg.queueErr
+		slog.Error("fetch queue failed", "error", msg.queueErr)
+	}
+
+	cmds := make([]tea.Cmd, 0, 3)
+	if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
+		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
+	}
+	if msg.queueFetched {
+		if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.Cmd) {
+	m.actionInFlight = false
+	if msg.err != nil {
+		m.playbackErr = msg.err
+		if m.volDebouncePending < 0 {
+			m.volSentTarget = -1
+		}
+		if msg.rollback != nil {
+			m.status = msg.rollback
+			slog.Error("playback action failed", "error", msg.err)
+		} else {
+			slog.Info("reconcile failed", "error", msg.err)
+		}
+		return m, nil
+	}
+	if msg.status == nil {
+		return m, m.reconcileCmd()
+	}
+	m.playbackErr = nil
+	m.pollElapsed = 0
+	prevAlbumURL := ""
+	if m.status != nil {
+		prevAlbumURL = m.status.AlbumImageURL
+	}
+	inVolSettle := m.volDebouncePending >= 0 ||
+		(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
+	reconciledVol := -1
+	if msg.status != nil {
+		reconciledVol = msg.status.Volume
+	}
+	if inVolSettle && msg.status != nil && m.volSentTarget >= 0 {
+		msg.status.Volume = m.volSentTarget
+	}
+	m.clearVolumeSettleTarget(reconciledVol)
+	m.status = msg.status
+	if msg.queueFetched {
+		incomingTrack := ""
+		if msg.status != nil {
+			incomingTrack = normalizeQueueID(msg.status.TrackID)
+		}
+		if m.shouldApplyIncomingQueue(incomingTrack) {
+			m.applyMergedQueue(msg.queue, false, true, true)
+		}
+	}
+	cmds := make([]tea.Cmd, 0, 3)
+	if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
+		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
+	}
+	if msg.queueFetched {
+		if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return m, tea.Batch(cmds...)
+}
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := m.keys
 
-	// Global keys (work everywhere).
 	switch {
 	case keyMatches(msg, k.Quit):
 		return m, tea.Quit
 	case keyMatches(msg, k.ToggleHelp):
-		m.help.ShowAll = !m.help.ShowAll
+		if m.modal && m.modalKind == modalKindHelp {
+			m.modal = false
+			m.modalKind = modalKindNone
+			return m, nil
+		}
+		m.modal = true
+		m.modalKind = modalKindHelp
 		return m, nil
 	}
 
-	// Modal is open: only modal navigation + close/select.
 	if m.modal {
 		return m.handleModalKey(msg)
 	}
 
-	// Playlist browser screen.
 	if m.screen == screenPlaylist {
 		return m.handlePlaylistKey(msg)
 	}
 
-	// Playback screen.
 	return m.handlePlaybackKey(msg)
 }
 
 func (m model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := m.keys
+	if m.modalKind == modalKindHelp {
+		switch {
+		case keyMatches(msg, k.CloseModal), keyMatches(msg, k.ToggleHelp):
+			m.modal = false
+			m.modalKind = modalKindNone
+			return m, nil
+		}
+		return m, nil
+	}
 	if m.modalList.FilterState() == list.Filtering {
 		var cmd tea.Cmd
 		m.modalList, cmd = m.modalList.Update(msg)
+		m.syncModalDelegate()
 		return m, tea.Batch(cmd, m.scheduleNavDebounceCmd())
 	}
 	switch {
 	case keyMatches(msg, k.CloseModal):
 		m.modal = false
+		m.modalKind = modalKindNone
 		m.modalList.ResetFilter()
+		m.syncModalDelegate()
 		return m, nil
 
 	case keyMatches(msg, k.Select):
@@ -651,6 +690,7 @@ func (m model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.modalList, cmd = m.modalList.Update(msg)
+	m.syncModalDelegate()
 	return m, tea.Batch(cmd, m.scheduleNavDebounceCmd())
 }
 
@@ -677,7 +717,6 @@ func (m model) handlePlaylistKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.selectAndPlayPlaylist(sel, "play-from-browser")
 	}
 
-	// Forward to list (handles navigation, filtering, pagination).
 	var cmd tea.Cmd
 	m.playlistList, cmd = m.playlistList.Update(msg)
 	return m, tea.Batch(cmd, m.scheduleNavDebounceCmd())
@@ -694,7 +733,9 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case keyMatches(msg, k.OpenPicker):
 		m.modal = true
+		m.modalKind = modalKindPlaylist
 		m.modalList.ResetFilter()
+		m.syncModalDelegate()
 		m.modalList.Select(0)
 		return m, nil
 
@@ -719,6 +760,7 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status.Playing = shouldPlay
 		}
 		m.actionInFlight = true
+		m.actionFastPollUntil = time.Now().Add(2 * time.Second)
 		return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
 			if shouldPlay {
 				return m.service.Play(ctx, m.deviceName)
@@ -749,6 +791,7 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.actionInFlight = true
+		m.actionFastPollUntil = time.Now().Add(2 * time.Second)
 		return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
 			return m.service.Next(ctx, m.deviceName)
 		}, rollback)
@@ -770,6 +813,7 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status.Playing = true
 		}
 		m.actionInFlight = true
+		m.actionFastPollUntil = time.Now().Add(2 * time.Second)
 		return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
 			return m.service.Previous(ctx, m.deviceName)
 		}, rollback)
@@ -779,6 +823,9 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			select {
 			case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandShuffle}:
 			default:
+			}
+			for id := range m.preloadedTrackIDs {
+				delete(m.preloadedTrackIDs, id)
 			}
 			return m, nil
 		}
@@ -791,9 +838,37 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			nextShuffle = !m.status.ShuffleState
 			m.status.ShuffleState = nextShuffle
 		}
+		// Invalidate preloaded tracks so they don't corrupt the new playback order.
+		for id := range m.preloadedTrackIDs {
+			delete(m.preloadedTrackIDs, id)
+		}
+		m.stableQueueLen = len(m.queue)
 		m.actionInFlight = true
 		return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
 			return m.service.Shuffle(ctx, m.deviceName, nextShuffle)
+		}, rollback)
+
+	case keyMatches(msg, k.Loop):
+		if m.status == nil || m.actionInFlight {
+			return m, nil
+		}
+		rollback := cloneStatus(m.status)
+		m.status.RepeatContext, m.status.RepeatTrack = nextRepeatMode(m.status.RepeatContext, m.status.RepeatTrack)
+		m.actionFastPollUntil = time.Now().Add(2 * time.Second)
+		if m.tuiCmdCh != nil {
+			select {
+			case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandCycleRepeat}:
+			default:
+			}
+			return m, nil
+		}
+		if m.service == nil {
+			return m, nil
+		}
+		m.actionInFlight = true
+		state := repeatModeString(m.status.RepeatContext, m.status.RepeatTrack)
+		return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
+			return m.service.SetRepeat(ctx, m.deviceName, state)
 		}, rollback)
 
 	case keyMatches(msg, k.VolUp):
@@ -866,13 +941,19 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// ── Utilities ─────────────────────────────────────────────────────────────────
-
 func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model, tea.Cmd) {
 	m.screen = screenPlayback
+	m.modal = false
+	m.modalKind = modalKindNone
 	m.playbackErr = nil
 	canReadTracks := m.shouldLoadPlaylistTracks() && m.canReadPlaylistTracks(sel.summary)
 	m.setActivePlaylist(sel.summary.ID, canReadTracks, sel.summary.OwnerID, sel.summary.Collaborative)
+	if m.status != nil {
+		m.pendingContextFrom = normalizeQueueID(m.status.TrackID)
+	}
+	m.queue = nil
+	m.queueHasMore = false
+	m.stableQueueLen = 0
 	if m.tuiCmdCh != nil {
 		select {
 		case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandPlayContext, URI: sel.summary.URI}:
@@ -892,6 +973,7 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 		}, action),
 		m.loadImageCmd(sel.summary.ImageURL),
 	}
+	m.actionFastPollUntil = time.Now().Add(3 * time.Second)
 	if canReadTracks {
 		m.activePlaylistTrackLoading = true
 		m.activePlaylistLoadToken++
@@ -900,9 +982,28 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 	return m, tea.Batch(cmds...)
 }
 
-// keyMatches delegates to key.Matches which handles modifier combos correctly.
 func keyMatches(msg tea.KeyMsg, b key.Binding) bool {
 	return key.Matches(msg, b)
+}
+
+func nextRepeatMode(repeatContext, repeatTrack bool) (bool, bool) {
+	if repeatTrack {
+		return false, false
+	}
+	if repeatContext {
+		return false, true
+	}
+	return true, false
+}
+
+func repeatModeString(repeatContext, repeatTrack bool) string {
+	if repeatTrack {
+		return "track"
+	}
+	if repeatContext {
+		return "context"
+	}
+	return "off"
 }
 
 func clampInt(v, lo, hi int) int {
@@ -934,6 +1035,45 @@ func (m *model) interpolatePlaybackProgress(step time.Duration) {
 	}
 	next := m.status.ProgressMS + int(step/time.Millisecond)
 	m.status.ProgressMS = min(next, m.status.DurationMS)
+}
+
+func (m *model) clearVolumeSettleTarget(observed int) {
+	if m.volSentTarget < 0 {
+		return
+	}
+	if observed >= 0 && observed == m.volSentTarget {
+		m.volSentTarget = -1
+		return
+	}
+	if time.Since(m.volSentAt) >= volSettleWindow {
+		m.volSentTarget = -1
+	}
+}
+
+func (m *model) shouldApplyIncomingQueue(incomingTrack string) bool {
+	if m.pendingContextFrom == "" {
+		return true
+	}
+	if incomingTrack == m.pendingContextFrom {
+		m.queue = nil
+		m.stableQueueLen = 0
+		m.queueHasMore = false
+		return false
+	}
+	m.pendingContextFrom = ""
+	return true
+}
+
+func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool) {
+	preserveTail := !(m.status != nil && m.status.ShuffleState)
+	m.queue = mergeQueueWithRest(m.queue, incoming, m.trackCache, preserveTail)
+	if updateStable {
+		m.stableQueueLen = len(m.queue)
+	}
+	if updateHasMore {
+		m.queueHasMore = queueHasMore
+	}
+	m.rebuildPreloadedFromQueue()
 }
 
 func (m model) loadVisiblePlaylistCoversCmd() tea.Cmd {
@@ -1056,7 +1196,7 @@ func normalizeQueueID(id string) string {
 	return id
 }
 
-func mergeQueueNames(prev, next []spotify.QueueItem) []spotify.QueueItem {
+func mergeQueueNames(prev, next []spotify.QueueItem, cache map[string]spotify.QueueItem) []spotify.QueueItem {
 	if len(next) == 0 {
 		return next
 	}
@@ -1082,21 +1222,60 @@ func mergeQueueNames(prev, next []spotify.QueueItem) []spotify.QueueItem {
 				out[i].DurationMS = p.DurationMS
 			}
 		}
+		if (out[i].Name == "" || out[i].Artist == "") && cache != nil {
+			if c, ok := cache[key]; ok {
+				if out[i].Name == "" && c.Name != "" {
+					out[i].Name = c.Name
+				}
+				if out[i].Artist == "" && c.Artist != "" {
+					out[i].Artist = c.Artist
+				}
+				if out[i].DurationMS <= 0 && c.DurationMS > 0 {
+					out[i].DurationMS = c.DurationMS
+				}
+			}
+		}
 	}
 	return out
 }
 
 const librespotQueueWindow = 32
 
-func mergeQueueWithRest(prev, next []spotify.QueueItem) []spotify.QueueItem {
-	merged := mergeQueueNames(prev, next)
-	if len(next) > librespotQueueWindow || len(prev) <= librespotQueueWindow {
+func mergeQueueWithRest(prev, next []spotify.QueueItem, cache map[string]spotify.QueueItem, preserveTail bool) []spotify.QueueItem {
+	merged := mergeQueueNames(prev, next, cache)
+	if !preserveTail || len(next) > librespotQueueWindow || len(prev) <= librespotQueueWindow {
 		return merged
 	}
+	seen := make(map[string]struct{}, len(merged))
+	for _, q := range merged {
+		if q.ID != "" {
+			seen[normalizeQueueID(q.ID)] = struct{}{}
+		}
+	}
 	for i := librespotQueueWindow; i < len(prev); i++ {
+		if prev[i].ID != "" {
+			if _, dup := seen[normalizeQueueID(prev[i].ID)]; dup {
+				continue
+			}
+		}
 		merged = append(merged, prev[i])
 	}
 	return merged
+}
+
+func (m *model) rebuildPreloadedFromQueue() {
+	if m.preloadedTrackIDs == nil {
+		m.preloadedTrackIDs = make(map[string]struct{}, len(m.queue))
+	} else {
+		for k := range m.preloadedTrackIDs {
+			delete(m.preloadedTrackIDs, k)
+		}
+	}
+	for _, q := range m.queue {
+		if q.ID != "" {
+			m.preloadedTrackIDs[normalizeQueueID(q.ID)] = struct{}{}
+		}
+	}
 }
 
 func (m *model) maybeLoadMorePlaylistsCmd(activeList list.Model) tea.Cmd {
@@ -1143,10 +1322,12 @@ func (m *model) setActivePlaylist(playlistID string, canReadTracks bool, ownerID
 	m.playlistTrackRetryCount = 0
 	if m.preloadedTrackIDs == nil {
 		m.preloadedTrackIDs = make(map[string]struct{})
-		return
 	}
 	for id := range m.preloadedTrackIDs {
 		delete(m.preloadedTrackIDs, id)
+	}
+	for id := range m.trackCache {
+		delete(m.trackCache, id)
 	}
 }
 
@@ -1154,9 +1335,10 @@ func (m *model) maybeLoadMorePlaylistTracksCmd(limit int) tea.Cmd {
 	if !m.shouldLoadPlaylistTracks() || limit <= 0 || m.activePlaylistID == "" || !m.activePlaylistTrackHasMore || m.activePlaylistTrackLoading || m.status == nil || m.status.TrackID == "" {
 		return nil
 	}
+	currentNorm := normalizeQueueID(m.status.TrackID)
 	currentIndex := -1
 	for i, trackID := range m.activePlaylistTrackIDs {
-		if trackID == m.status.TrackID {
+		if normalizeQueueID(trackID) == currentNorm {
 			currentIndex = i
 			break
 		}
@@ -1187,10 +1369,14 @@ func (m model) nextTracksToPreload(limit int) []string {
 	if limit <= 0 || m.status == nil || m.status.TrackID == "" || len(m.activePlaylistTrackIDs) == 0 || m.activePlaylistID == "" {
 		return nil
 	}
+	if m.status.ShuffleState {
+		return nil
+	}
 
+	currentNorm := normalizeQueueID(m.status.TrackID)
 	currentIndex := -1
 	for i, trackID := range m.activePlaylistTrackIDs {
-		if trackID == m.status.TrackID {
+		if normalizeQueueID(trackID) == currentNorm {
 			currentIndex = i
 			break
 		}
@@ -1202,13 +1388,13 @@ func (m model) nextTracksToPreload(limit int) []string {
 	blocked := make(map[string]struct{}, len(m.queue)+len(m.preloadedTrackIDs)+1)
 	for _, q := range m.queue {
 		if q.ID != "" {
-			blocked[q.ID] = struct{}{}
+			blocked[normalizeQueueID(q.ID)] = struct{}{}
 		}
 	}
 	for trackID := range m.preloadedTrackIDs {
-		blocked[trackID] = struct{}{}
+		blocked[normalizeQueueID(trackID)] = struct{}{}
 	}
-	blocked[m.status.TrackID] = struct{}{}
+	blocked[currentNorm] = struct{}{}
 
 	out := make([]string, 0, limit)
 	for i := currentIndex + 1; i < len(m.activePlaylistTrackIDs) && len(out) < limit; i++ {
@@ -1216,11 +1402,12 @@ func (m model) nextTracksToPreload(limit int) []string {
 		if trackID == "" {
 			continue
 		}
-		if _, exists := blocked[trackID]; exists {
+		norm := normalizeQueueID(trackID)
+		if _, exists := blocked[norm]; exists {
 			continue
 		}
 		out = append(out, trackID)
-		blocked[trackID] = struct{}{}
+		blocked[norm] = struct{}{}
 	}
 	return out
 }

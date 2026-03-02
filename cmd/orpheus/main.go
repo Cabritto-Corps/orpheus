@@ -38,49 +38,51 @@ func main() {
 		return
 	}
 
-	cfg, err := config.LoadFromEnv()
-	if err != nil {
-		slog.Error("startup configuration failed", "error", err)
-		os.Exit(1)
-	}
-	authManager, err := auth.NewPKCEManager(cfg, auth.NewFileTokenStore(cfg.TokenPath))
-	if err != nil {
-		slog.Error("oauth setup failed", "error", err)
-		os.Exit(1)
-	}
-
 	if len(os.Args) >= 3 && os.Args[1] == "auth" && os.Args[2] == "login" {
+		cfg, err := config.LoadFromEnv()
+		if err != nil {
+			slog.Error("startup configuration failed", "error", err)
+			os.Exit(1)
+		}
+		if err := cfg.ValidateForAuth(); err != nil {
+			fmt.Fprintln(os.Stderr, "orpheus auth login: "+err.Error())
+			os.Exit(1)
+		}
+		authManager, err := auth.NewPKCEManager(cfg, auth.NewFileTokenStore(cfg.TokenPath))
+		if err != nil {
+			slog.Error("oauth setup failed", "error", err)
+			os.Exit(1)
+		}
 		runAuthLogin(authManager, cfg)
 		return
 	}
-	if len(os.Args) >= 2 && os.Args[1] == "auth" && (len(os.Args) < 3 || os.Args[2] != "login") {
+	if len(os.Args) >= 2 && os.Args[1] == "auth" {
 		slog.Error("unknown auth command", "usage", "orpheus auth login")
 		os.Exit(1)
 	}
-	rootCtx, rootCancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer rootCancel()
-	oauthCtx := context.WithValue(rootCtx, oauth2.HTTPClient, oauthHTTPClient())
-
-	token, err := ensureUsableTokenWithRetry(oauthCtx, authManager)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			session, sessionErr := authManager.BeginAuth()
-			if sessionErr != nil {
-				slog.Error("failed to create oauth session", "error", sessionErr)
-				os.Exit(1)
-			}
-			slog.Error("oauth token missing; run login flow", "next_step", "orpheus auth login", "authorization_url", session.AuthURL)
-			os.Exit(1)
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			slog.Error("oauth token refresh timed out", "error", err, "timeout", tokenRefreshTimeout, "next_step", "check network/connectivity and rerun")
-			os.Exit(1)
-		}
-		slog.Error("failed to refresh oauth token; re-auth may be required", "error", err, "next_step", "orpheus auth login")
-		os.Exit(1)
-	}
-
 	if len(os.Args) >= 2 && os.Args[1] == "check" {
+		cfg, err := config.LoadFromEnv()
+		if err != nil {
+			slog.Error("startup configuration failed", "error", err)
+			os.Exit(1)
+		}
+		if err := cfg.ValidateForAuth(); err != nil {
+			fmt.Fprintln(os.Stderr, "orpheus check: "+err.Error())
+			os.Exit(1)
+		}
+		authManager, err := auth.NewPKCEManager(cfg, auth.NewFileTokenStore(cfg.TokenPath))
+		if err != nil {
+			slog.Error("oauth setup failed", "error", err)
+			os.Exit(1)
+		}
+		rootCtx, rootCancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer rootCancel()
+		oauthCtx := context.WithValue(rootCtx, oauth2.HTTPClient, oauthHTTPClient())
+		token, err := ensureUsableTokenWithRetry(oauthCtx, authManager)
+		if err != nil {
+			slog.Error("failed to load token; run orpheus auth login first", "error", err)
+			os.Exit(1)
+		}
 		runCheck(oauthCtx, authManager, token, cfg)
 		return
 	}
@@ -336,7 +338,14 @@ func runLibrespotTUI() error {
 		if authMgr, authErr := auth.NewPKCEManager(cfg, auth.NewFileTokenStore(cfg.TokenPath)); authErr == nil {
 			if token, tokenErr := authMgr.LoadToken(); tokenErr == nil && token != nil {
 				oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, oauthHTTPClient())
-				ts := authMgr.TokenSource(oauthCtx, token)
+				baseTS := authMgr.TokenSource(oauthCtx, token)
+				// Wrap in a notifying source so any auto-refreshed token is
+				// immediately persisted to disk. Without this, the refresh token
+				// rotates but the new token is never saved, causing auth failures
+				// on the next launch.
+				ts := auth.NewNotifyingTokenSourceWithInitial(baseTS, func(t *oauth2.Token) {
+					_ = authMgr.SaveToken(t)
+				}, token.AccessToken)
 				spotifyClient := spotify.NewClient(oauthCtx, ts)
 				catalog = spotify.NewService(spotifyClient, spotify.Options{})
 			}
