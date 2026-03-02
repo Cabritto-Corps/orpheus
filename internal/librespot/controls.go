@@ -65,6 +65,17 @@ func (p *AppPlayer) schedulePrefetchNext() {
 	}
 }
 
+func (p *AppPlayer) syncPlayerTrackState(ctx context.Context, trackList *tracks.List, nextHint []*connectpb.ContextTrack) {
+	if p.state == nil || p.state.player == nil || trackList == nil {
+		return
+	}
+	p.state.player.Track = trackList.CurrentTrack()
+	p.state.player.PrevTracks = trackList.PrevTracks()
+	p.state.player.NextTracks = trackList.NextTracks(ctx, nextHint)
+	p.state.player.Index = trackList.Index()
+	p.bumpTrackStateVersion()
+}
+
 func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -162,11 +173,10 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 		}
 	}
 	p.state.tracks = ctxTracks
-	p.playedTrackURIs = make(map[string]struct{})
-	p.state.player.Track = ctxTracks.CurrentTrack()
-	p.state.player.PrevTracks = ctxTracks.PrevTracks()
-	p.state.player.NextTracks = ctxTracks.NextTracks(ctx, nil)
-	p.state.player.Index = ctxTracks.Index()
+	p.resetPlayedTrackSet()
+	p.resetQueueMetaForContext(strings.TrimSpace(spotCtx.Uri))
+	p.syncPlayerTrackState(ctx, ctxTracks, nil)
+	p.preloadContextQueueMetadata(ctxTracks, spotCtx.Uri)
 	if err := p.loadCurrentTrack(ctx, paused, drop); err != nil {
 		return fmt.Errorf("failed loading current track (load context): %w", err)
 	}
@@ -244,10 +254,7 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 			return
 		}
 		p.state.player.Options.ShufflingContext = *shufflingContext
-		p.state.player.Track = p.state.tracks.CurrentTrack()
-		p.state.player.PrevTracks = p.state.tracks.PrevTracks()
-		p.state.player.NextTracks = p.state.tracks.NextTracks(ctx, nil)
-		p.state.player.Index = p.state.tracks.Index()
+		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
 		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeShuffleContext, Data: ApiEventDataShuffleContext{Value: *shufflingContext}})
 		requiresUpdate = true
 	}
@@ -356,10 +363,7 @@ func (p *AppPlayer) skipPrev(ctx context.Context, allowSeeking bool) error {
 	if p.state.tracks != nil {
 		p.runtime.Log.Debug("skip previous track")
 		p.state.tracks.GoPrev()
-		p.state.player.Track = p.state.tracks.CurrentTrack()
-		p.state.player.PrevTracks = p.state.tracks.PrevTracks()
-		p.state.player.NextTracks = p.state.tracks.NextTracks(ctx, nil)
-		p.state.player.Index = p.state.tracks.Index()
+		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
 	}
 	p.state.player.Timestamp = time.Now().UnixMilli()
 	p.state.player.PositionAsOfTimestamp = 0
@@ -379,10 +383,7 @@ func (p *AppPlayer) skipNext(ctx context.Context, track *connectpb.ContextTrack)
 		}
 		p.state.player.Timestamp = time.Now().UnixMilli()
 		p.state.player.PositionAsOfTimestamp = 0
-		p.state.player.Track = p.state.tracks.CurrentTrack()
-		p.state.player.PrevTracks = p.state.tracks.PrevTracks()
-		p.state.player.NextTracks = p.state.tracks.NextTracks(ctx, nil)
-		p.state.player.Index = p.state.tracks.Index()
+		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
 		if err := p.loadCurrentTrack(ctx, p.state.player.IsPaused, true); err != nil {
 			return err
 		}
@@ -409,7 +410,7 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 			p.state.player.IsPaused = false
 		} else {
 			if p.state.player.Track != nil && p.state.player.Track.Uri != "" {
-				p.playedTrackURIs[normalizeSpotifyID(p.state.player.Track.Uri)] = struct{}{}
+				p.markPlayedTrack(p.state.player.Track.Uri)
 			}
 			hasNextTrack = p.state.tracks.GoNext(ctx)
 			if !hasNextTrack {
@@ -420,10 +421,7 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 			}
 			p.state.player.IsPaused = !hasNextTrack
 		}
-		p.state.player.Track = p.state.tracks.CurrentTrack()
-		p.state.player.PrevTracks = p.state.tracks.PrevTracks()
-		p.state.player.NextTracks = p.state.tracks.NextTracks(ctx, nil)
-		p.state.player.Index = p.state.tracks.Index()
+		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
 		uri = p.state.player.Track.Uri
 	}
 	p.state.player.Timestamp = time.Now().UnixMilli()
@@ -442,8 +440,8 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 		}
 		p.runtime.Log.Debugf("resolving autoplay station for %d tracks", len(prevTrackUris))
 		spotCtx, err := p.sess.Spclient().ContextResolveAutoplay(ctx, &playerpb.AutoplayContextRequest{
-			ContextUri:      proto.String(p.state.player.ContextUri),
-			RecentTrackUri:  prevTrackUris,
+			ContextUri:     proto.String(p.state.player.ContextUri),
+			RecentTrackUri: prevTrackUris,
 		})
 		if err != nil {
 			p.runtime.Log.WithError(err).Warnf("failed resolving station for %s", p.state.player.ContextUri)
@@ -493,7 +491,7 @@ func (p *AppPlayer) updateVolume(newVal uint32) {
 	case <-p.volumeUpdate:
 	default:
 	}
-	p.volumeUpdate <- float32(newVal)/player.MaxStateVolume
+	p.volumeUpdate <- float32(newVal) / player.MaxStateVolume
 }
 
 func (p *AppPlayer) volumeUpdated(ctx context.Context) {

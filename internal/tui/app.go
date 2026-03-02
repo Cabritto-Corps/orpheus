@@ -79,7 +79,6 @@ type model struct {
 	playlistsErr                  error
 	playlistsRetryCount           int
 	playbackErr                   error
-	preloadInFlight               bool
 	playlistTrackRetryCount       int
 	currentUserID                 string
 
@@ -218,133 +217,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.pollCmd(pollQueue), m.tickCmd())
 
 	case playbackStateMsg:
-		prevStatus := m.status
-		prevAlbumURL := ""
-		if prevStatus != nil {
-			prevAlbumURL = prevStatus.AlbumImageURL
-		}
-		inVolSettle := m.volDebouncePending >= 0 ||
-			(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
-		if inVolSettle && msg.status != nil && prevStatus != nil {
-			msg.status.Volume = prevStatus.Volume
-		}
-		if inVolSettle && msg.status != nil && m.volSentTarget >= 0 {
-			msg.status.Volume = m.volSentTarget
-		}
-		// Check device confirmation using incoming volume BEFORE the override above.
-		// prevStatus.Volume was already set to the optimistic target by the key handler,
-		// so use the raw device report from msg.queue instead.
-		// We can't recover the pre-override value here; use timeout-only clear.
-		if m.volSentTarget >= 0 && time.Since(m.volSentAt) >= volSettleWindow {
-			m.volSentTarget = -1
-		}
-		m.status = mergeStatusFromPrevious(prevStatus, m.queue, msg.status)
-		prevTrackID := ""
-		if prevStatus != nil {
-			prevTrackID = normalizeQueueID(prevStatus.TrackID)
-		}
-		nextTrackID := ""
-		if msg.status != nil {
-			nextTrackID = normalizeQueueID(msg.status.TrackID)
-		}
-		refreshQueue := len(m.queue) == 0 || (nextTrackID != "" && nextTrackID != prevTrackID)
-		if nextTrackID != m.pendingContextFrom {
-			m.pendingContextFrom = ""
-		}
-		prevShuffleState := false
-		if prevStatus != nil {
-			prevShuffleState = prevStatus.ShuffleState
-		}
-		shuffleChanged := m.status != nil && m.status.ShuffleState != prevShuffleState
-		preserveTail := !(m.status != nil && m.status.ShuffleState)
-		m.queue = mergeQueueWithRest(m.queue, msg.queue, m.trackCache, preserveTail)
-		if refreshQueue || shuffleChanged {
-			m.stableQueueLen = len(m.queue)
-			m.queueHasMore = msg.queueHasMore
-		}
-		m.rebuildPreloadedFromQueue()
-		m.playbackErr = nil
-		cmds := []tea.Cmd{}
-		if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
-			cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
-		}
-		return m, tea.Batch(cmds...)
+		return m.handlePlaybackStateMsg(msg)
 
 	case pollMsg:
-		if msg.err != nil {
-			if errors.Is(msg.err, spotify.ErrNoActiveTrack) {
-				m.status = nil
-				m.queue = nil
-				m.queueHasMore = false
-				m.stableQueueLen = 0
-				m.playbackErr = nil
-			} else {
-				m.playbackErr = msg.err
-				slog.Error("poll status failed", "error", msg.err)
-			}
-			return m, nil
-		}
-		m.pollElapsed = 0
-		prevAlbumURL := ""
-		if m.status != nil {
-			prevAlbumURL = m.status.AlbumImageURL
-		}
-		inVolSettle := m.volDebouncePending >= 0 ||
-			(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
-		incomingVol := -1
-		if msg.status != nil {
-			incomingVol = msg.status.Volume
-		}
-		if inVolSettle && msg.status != nil && m.volSentTarget >= 0 {
-			msg.status.Volume = m.volSentTarget
-		}
-		// Clear guard only when the device actually reports the target (real confirmation),
-		// not after the override above, which would always match.
-		if m.volSentTarget >= 0 && incomingVol == m.volSentTarget {
-			m.volSentTarget = -1
-		} else if m.volSentTarget >= 0 && time.Since(m.volSentAt) >= volSettleWindow {
-			m.volSentTarget = -1
-		}
-		m.status = msg.status
-		m.playbackErr = nil
-		if msg.queueFetched {
-			incomingTrack := ""
-			if msg.status != nil {
-				incomingTrack = normalizeQueueID(msg.status.TrackID)
-			}
-			if m.pendingContextFrom != "" {
-				if incomingTrack == m.pendingContextFrom {
-					// Stale poll from old playlist context — keep cleared.
-					m.queue = nil
-					m.stableQueueLen = 0
-					m.queueHasMore = false
-				} else {
-					m.pendingContextFrom = ""
-				}
-			}
-			if m.pendingContextFrom == "" {
-				preserveTail := !(m.status != nil && m.status.ShuffleState)
-				m.queue = mergeQueueWithRest(m.queue, msg.queue, m.trackCache, preserveTail)
-				m.queueHasMore = false
-				m.stableQueueLen = len(m.queue)
-				m.rebuildPreloadedFromQueue()
-			}
-		}
-		if msg.queueErr != nil {
-			m.playbackErr = msg.queueErr
-			slog.Error("fetch queue failed", "error", msg.queueErr)
-		}
-
-		cmds := make([]tea.Cmd, 0, 3)
-		if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
-			cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
-		}
-		if msg.queueFetched {
-			if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
-		return m, tea.Batch(cmds...)
+		return m.handlePollMsg(msg)
 
 	case playlistsMsg:
 		m.playlistsLoading = false
@@ -460,21 +336,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
-	case preloadQueueMsg:
-		m.preloadInFlight = false
-		if len(msg.trackIDs) > 0 {
-			if m.preloadedTrackIDs == nil {
-				m.preloadedTrackIDs = make(map[string]struct{}, len(msg.trackIDs))
-			}
-			for _, trackID := range msg.trackIDs {
-				m.preloadedTrackIDs[trackID] = struct{}{}
-			}
-		}
-		if msg.err != nil {
-			slog.Warn("queue preload partial failure", "queued", len(msg.trackIDs), "error", msg.err)
-		}
-		return m, nil
-
 	case navDebounceMsg:
 		if msg.token != m.navToken {
 			return m, nil
@@ -494,76 +355,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case actionReconcileMsg:
-		m.actionInFlight = false
-		if msg.err != nil {
-			m.playbackErr = msg.err
-			if m.volDebouncePending < 0 {
-				m.volSentTarget = -1
-			}
-			if msg.rollback != nil {
-				m.status = msg.rollback
-				slog.Error("playback action failed", "error", msg.err)
-			} else {
-				slog.Info("reconcile failed", "error", msg.err)
-			}
-			return m, nil
-		}
-		if msg.status == nil {
-			return m, m.reconcileCmd()
-		}
-		m.playbackErr = nil
-		m.pollElapsed = 0
-		prevAlbumURL := ""
-		if m.status != nil {
-			prevAlbumURL = m.status.AlbumImageURL
-		}
-		inVolSettle := m.volDebouncePending >= 0 ||
-			(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
-		reconciledVol := -1
-		if msg.status != nil {
-			reconciledVol = msg.status.Volume
-		}
-		if inVolSettle && msg.status != nil && m.volSentTarget >= 0 {
-			msg.status.Volume = m.volSentTarget
-		}
-		if m.volSentTarget >= 0 && reconciledVol == m.volSentTarget {
-			m.volSentTarget = -1
-		} else if m.volSentTarget >= 0 && time.Since(m.volSentAt) >= volSettleWindow {
-			m.volSentTarget = -1
-		}
-		m.status = msg.status
-		if msg.queueFetched {
-			incomingTrack := ""
-			if msg.status != nil {
-				incomingTrack = normalizeQueueID(msg.status.TrackID)
-			}
-			if m.pendingContextFrom != "" {
-				if incomingTrack == m.pendingContextFrom {
-					m.queue = nil
-					m.stableQueueLen = 0
-					m.queueHasMore = false
-				} else {
-					m.pendingContextFrom = ""
-				}
-			}
-			if m.pendingContextFrom == "" {
-				preserveTail := !(m.status != nil && m.status.ShuffleState)
-				m.queue = mergeQueueWithRest(m.queue, msg.queue, m.trackCache, preserveTail)
-				m.queueHasMore = false
-				m.stableQueueLen = len(m.queue)
-				m.rebuildPreloadedFromQueue()
-			}
-		}
-		cmds := make([]tea.Cmd, 0, 3)
-		if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
-			cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
-		}
-		if msg.queueFetched {
-			if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
-		return m, tea.Batch(cmds...)
+		return m.handleActionReconcileMsg(msg)
 
 	case actionMsg:
 		m.actionInFlight = false
@@ -654,6 +446,169 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd) {
+	prevStatus := m.status
+	prevAlbumURL := ""
+	if prevStatus != nil {
+		prevAlbumURL = prevStatus.AlbumImageURL
+	}
+	inVolSettle := m.volDebouncePending >= 0 ||
+		(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
+	if inVolSettle && msg.status != nil && prevStatus != nil {
+		msg.status.Volume = prevStatus.Volume
+	}
+	if inVolSettle && msg.status != nil && m.volSentTarget >= 0 {
+		msg.status.Volume = m.volSentTarget
+	}
+	// Check device confirmation using incoming volume BEFORE the override above.
+	// prevStatus.Volume was already set to the optimistic target by the key handler,
+	// so use the raw device report from msg.queue instead.
+	// We can't recover the pre-override value here; use timeout-only clear.
+	if m.volSentTarget >= 0 && time.Since(m.volSentAt) >= volSettleWindow {
+		m.volSentTarget = -1
+	}
+	m.status = mergeStatusFromPrevious(prevStatus, m.queue, msg.status)
+	prevTrackID := ""
+	if prevStatus != nil {
+		prevTrackID = normalizeQueueID(prevStatus.TrackID)
+	}
+	nextTrackID := ""
+	if msg.status != nil {
+		nextTrackID = normalizeQueueID(msg.status.TrackID)
+	}
+	refreshQueue := len(m.queue) == 0 || (nextTrackID != "" && nextTrackID != prevTrackID)
+	if nextTrackID != m.pendingContextFrom {
+		m.pendingContextFrom = ""
+	}
+	prevShuffleState := false
+	if prevStatus != nil {
+		prevShuffleState = prevStatus.ShuffleState
+	}
+	shuffleChanged := m.status != nil && m.status.ShuffleState != prevShuffleState
+	m.applyMergedQueue(msg.queue, msg.queueHasMore, refreshQueue || shuffleChanged, true)
+	m.playbackErr = nil
+	cmds := []tea.Cmd{}
+	if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
+		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		if errors.Is(msg.err, spotify.ErrNoActiveTrack) {
+			m.status = nil
+			m.queue = nil
+			m.queueHasMore = false
+			m.stableQueueLen = 0
+			m.playbackErr = nil
+		} else {
+			m.playbackErr = msg.err
+			slog.Error("poll status failed", "error", msg.err)
+		}
+		return m, nil
+	}
+	m.pollElapsed = 0
+	prevAlbumURL := ""
+	if m.status != nil {
+		prevAlbumURL = m.status.AlbumImageURL
+	}
+	inVolSettle := m.volDebouncePending >= 0 ||
+		(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
+	incomingVol := -1
+	if msg.status != nil {
+		incomingVol = msg.status.Volume
+	}
+	if inVolSettle && msg.status != nil && m.volSentTarget >= 0 {
+		msg.status.Volume = m.volSentTarget
+	}
+	// Clear guard only when the device actually reports the target (real confirmation),
+	// not after the override above, which would always match.
+	m.clearVolumeSettleTarget(incomingVol)
+	m.status = msg.status
+	m.playbackErr = nil
+	if msg.queueFetched {
+		incomingTrack := ""
+		if msg.status != nil {
+			incomingTrack = normalizeQueueID(msg.status.TrackID)
+		}
+		if m.shouldApplyIncomingQueue(incomingTrack) {
+			m.applyMergedQueue(msg.queue, false, true, true)
+		}
+	}
+	if msg.queueErr != nil {
+		m.playbackErr = msg.queueErr
+		slog.Error("fetch queue failed", "error", msg.queueErr)
+	}
+
+	cmds := make([]tea.Cmd, 0, 3)
+	if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
+		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
+	}
+	if msg.queueFetched {
+		if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.Cmd) {
+	m.actionInFlight = false
+	if msg.err != nil {
+		m.playbackErr = msg.err
+		if m.volDebouncePending < 0 {
+			m.volSentTarget = -1
+		}
+		if msg.rollback != nil {
+			m.status = msg.rollback
+			slog.Error("playback action failed", "error", msg.err)
+		} else {
+			slog.Info("reconcile failed", "error", msg.err)
+		}
+		return m, nil
+	}
+	if msg.status == nil {
+		return m, m.reconcileCmd()
+	}
+	m.playbackErr = nil
+	m.pollElapsed = 0
+	prevAlbumURL := ""
+	if m.status != nil {
+		prevAlbumURL = m.status.AlbumImageURL
+	}
+	inVolSettle := m.volDebouncePending >= 0 ||
+		(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
+	reconciledVol := -1
+	if msg.status != nil {
+		reconciledVol = msg.status.Volume
+	}
+	if inVolSettle && msg.status != nil && m.volSentTarget >= 0 {
+		msg.status.Volume = m.volSentTarget
+	}
+	m.clearVolumeSettleTarget(reconciledVol)
+	m.status = msg.status
+	if msg.queueFetched {
+		incomingTrack := ""
+		if msg.status != nil {
+			incomingTrack = normalizeQueueID(msg.status.TrackID)
+		}
+		if m.shouldApplyIncomingQueue(incomingTrack) {
+			m.applyMergedQueue(msg.queue, false, true, true)
+		}
+	}
+	cmds := make([]tea.Cmd, 0, 3)
+	if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
+		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
+	}
+	if msg.queueFetched {
+		if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return m, tea.Batch(cmds...)
 }
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -835,7 +790,6 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			for id := range m.preloadedTrackIDs {
 				delete(m.preloadedTrackIDs, id)
 			}
-			m.preloadInFlight = false
 			return m, nil
 		}
 		if m.actionInFlight {
@@ -851,7 +805,6 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		for id := range m.preloadedTrackIDs {
 			delete(m.preloadedTrackIDs, id)
 		}
-		m.preloadInFlight = false
 		m.stableQueueLen = len(m.queue)
 		m.actionInFlight = true
 		return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
@@ -1001,6 +954,45 @@ func (m *model) interpolatePlaybackProgress(step time.Duration) {
 	}
 	next := m.status.ProgressMS + int(step/time.Millisecond)
 	m.status.ProgressMS = min(next, m.status.DurationMS)
+}
+
+func (m *model) clearVolumeSettleTarget(observed int) {
+	if m.volSentTarget < 0 {
+		return
+	}
+	if observed >= 0 && observed == m.volSentTarget {
+		m.volSentTarget = -1
+		return
+	}
+	if time.Since(m.volSentAt) >= volSettleWindow {
+		m.volSentTarget = -1
+	}
+}
+
+func (m *model) shouldApplyIncomingQueue(incomingTrack string) bool {
+	if m.pendingContextFrom == "" {
+		return true
+	}
+	if incomingTrack == m.pendingContextFrom {
+		m.queue = nil
+		m.stableQueueLen = 0
+		m.queueHasMore = false
+		return false
+	}
+	m.pendingContextFrom = ""
+	return true
+}
+
+func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool) {
+	preserveTail := !(m.status != nil && m.status.ShuffleState)
+	m.queue = mergeQueueWithRest(m.queue, incoming, m.trackCache, preserveTail)
+	if updateStable {
+		m.stableQueueLen = len(m.queue)
+	}
+	if updateHasMore {
+		m.queueHasMore = queueHasMore
+	}
+	m.rebuildPreloadedFromQueue()
 }
 
 func (m model) loadVisiblePlaylistCoversCmd() tea.Cmd {

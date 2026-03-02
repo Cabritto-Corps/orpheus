@@ -19,10 +19,16 @@ const (
 	catalogRequestTimeout       = 60 * time.Second
 	playlistPageRequestTimeout  = 90 * time.Second
 	playlistTrackRequestTimeout = 45 * time.Second
-	preloadQueueBaseTimeout     = 12 * time.Second
-	preloadQueuePerTrackTimeout = 250 * time.Millisecond
-	preloadQueueMaxTimeout      = 3 * time.Minute
+	statusQueueCacheTTL         = 120 * time.Millisecond
 )
+
+var statusQueueCache struct {
+	mu     sync.RWMutex
+	at     time.Time
+	status *spotify.PlaybackStatus
+	queue  []spotify.QueueItem
+	valid  bool
+}
 
 type pollMsg struct {
 	status       *spotify.PlaybackStatus
@@ -63,11 +69,6 @@ type playlistTracksMsg struct {
 	hasMore    bool
 	token      int
 	err        error
-}
-
-type preloadQueueMsg struct {
-	trackIDs []string
-	err      error
 }
 
 type imageLoadedMsg struct {
@@ -142,6 +143,63 @@ type currentUserIDMsg struct {
 	err    error
 }
 
+func cloneStatusSnapshot(status *spotify.PlaybackStatus) *spotify.PlaybackStatus {
+	if status == nil {
+		return nil
+	}
+	cp := *status
+	return &cp
+}
+
+func cloneQueueSnapshot(queue []spotify.QueueItem) []spotify.QueueItem {
+	if len(queue) == 0 {
+		return nil
+	}
+	cp := make([]spotify.QueueItem, len(queue))
+	copy(cp, queue)
+	return cp
+}
+
+func fetchStatusAndQueue(ctx context.Context, svc *spotify.Service, allowCached bool) (*spotify.PlaybackStatus, []spotify.QueueItem, error, error) {
+	if svc == nil {
+		return nil, nil, nil, nil
+	}
+	if allowCached {
+		statusQueueCache.mu.RLock()
+		if statusQueueCache.valid && time.Since(statusQueueCache.at) <= statusQueueCacheTTL {
+			status := cloneStatusSnapshot(statusQueueCache.status)
+			queue := cloneQueueSnapshot(statusQueueCache.queue)
+			statusQueueCache.mu.RUnlock()
+			return status, queue, nil, nil
+		}
+		statusQueueCache.mu.RUnlock()
+	}
+	var status *spotify.PlaybackStatus
+	var statusErr error
+	var queue []spotify.QueueItem
+	var queueErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		status, statusErr = svc.Status(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		queue, queueErr = svc.GetQueue(ctx)
+	}()
+	wg.Wait()
+	if statusErr == nil && queueErr == nil {
+		statusQueueCache.mu.Lock()
+		statusQueueCache.status = cloneStatusSnapshot(status)
+		statusQueueCache.queue = cloneQueueSnapshot(queue)
+		statusQueueCache.at = time.Now()
+		statusQueueCache.valid = true
+		statusQueueCache.mu.Unlock()
+	}
+	return status, queue, statusErr, queueErr
+}
+
 func (m model) pollCmd(fetchQueue bool) tea.Cmd {
 	if m.tuiCmdCh != nil {
 		return nil
@@ -157,22 +215,7 @@ func (m model) pollCmd(fetchQueue bool) tea.Cmd {
 			}
 			return pollMsg{status: status}
 		}
-
-		var status *spotify.PlaybackStatus
-		var statusErr error
-		var queue []spotify.QueueItem
-		var queueErr error
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			status, statusErr = m.service.Status(ctx)
-		}()
-		go func() {
-			defer wg.Done()
-			queue, queueErr = m.service.GetQueue(ctx)
-		}()
-		wg.Wait()
+		status, queue, statusErr, queueErr := fetchStatusAndQueue(ctx, m.service, true)
 
 		if statusErr != nil {
 			return pollMsg{err: statusErr}
@@ -212,21 +255,7 @@ func (m model) actionWithReconcileCmd(fn func(context.Context) error, rollback *
 			return actionReconcileMsg{err: err, rollback: rollback}
 		}
 
-		var status *spotify.PlaybackStatus
-		var statusErr error
-		var queue []spotify.QueueItem
-		var queueErr error
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			status, statusErr = svc.Status(ctx)
-		}()
-		go func() {
-			defer wg.Done()
-			queue, queueErr = svc.GetQueue(ctx)
-		}()
-		wg.Wait()
+		status, queue, statusErr, queueErr := fetchStatusAndQueue(ctx, svc, false)
 		if statusErr != nil {
 			return actionReconcileMsg{}
 		}
@@ -244,21 +273,7 @@ func (m model) reconcileCmd() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, actionRequestTimeout)
 		defer cancel()
-		var status *spotify.PlaybackStatus
-		var statusErr error
-		var queue []spotify.QueueItem
-		var queueErr error
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			status, statusErr = m.service.Status(ctx)
-		}()
-		go func() {
-			defer wg.Done()
-			queue, queueErr = m.service.GetQueue(ctx)
-		}()
-		wg.Wait()
+		status, queue, statusErr, queueErr := fetchStatusAndQueue(ctx, m.service, true)
 		if statusErr != nil {
 			return actionReconcileMsg{err: statusErr}
 		}
@@ -511,22 +526,5 @@ func (m model) loadPlaylistTracksCmd(playlistID string, offset int, token int) t
 			hasMore:    hasMore,
 			token:      token,
 		}
-	}
-}
-
-func (m model) preloadQueueCmd(trackIDs []string) tea.Cmd {
-	if m.service == nil || len(trackIDs) == 0 {
-		return nil
-	}
-	toQueue := append([]string(nil), trackIDs...)
-	return func() tea.Msg {
-		timeout := preloadQueueBaseTimeout + time.Duration(len(toQueue))*preloadQueuePerTrackTimeout
-		if timeout > preloadQueueMaxTimeout {
-			timeout = preloadQueueMaxTimeout
-		}
-		ctx, cancel := context.WithTimeout(m.ctx, timeout)
-		defer cancel()
-		queued, err := m.service.QueueTracks(ctx, m.deviceName, toQueue)
-		return preloadQueueMsg{trackIDs: queued, err: err}
 	}
 }

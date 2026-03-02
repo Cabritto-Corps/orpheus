@@ -32,15 +32,21 @@ func (p *AppPlayer) BuildPlaybackStateUpdate() *PlaybackStateUpdate {
 		ShuffleState: shuffle,
 		Queue:        providedTracksToQueueEntries(p, p.state.player.NextTracks),
 	}
-	if shuffle {
+	deriveKey := p.currentDerivedQueueKey(shuffle)
+	if cachedQueue, hasMore, ok := p.getDerivedQueueCache(deriveKey); ok {
+		out.Queue = cachedQueue
+		out.QueueHasMore = hasMore
+	} else if shuffle {
 		if derivedQueue, hasMore, ok := p.derivedQueueFromShuffledTrackList(); ok {
 			out.Queue = derivedQueue
 			out.QueueHasMore = hasMore
+			p.setDerivedQueueCache(deriveKey, derivedQueue, hasMore)
 		}
 	} else {
 		if derivedQueue, hasMore, ok := p.derivedQueueFromTrackList(); ok {
 			out.Queue = derivedQueue
 			out.QueueHasMore = hasMore
+			p.setDerivedQueueCache(deriveKey, derivedQueue, hasMore)
 		}
 	}
 	if p.state.player.Track != nil {
@@ -142,10 +148,7 @@ func (p *AppPlayer) derivedQueueFromShuffledTrackList() ([]PlaybackStateQueueEnt
 			seen[key] = struct{}{}
 		}
 	}
-	isPlayed := func(uri string) bool {
-		_, played := p.playedTrackURIs[normalizeSpotifyID(uri)]
-		return played
-	}
+	isPlayed := func(uri string) bool { return p.isPlayedTrack(uri) }
 
 	for _, t := range p.state.player.PrevTracks {
 		if t == nil {
