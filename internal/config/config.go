@@ -30,7 +30,7 @@ func LoadFromEnv() (Config, error) {
 	cfg := Config{
 		SpotifyClientID:      envAny("spotify_client_id", "SPOTIFY_CLIENT_ID"),
 		RedirectURI:          envDefault("spotify_redirect_uri", "http://127.0.0.1:8989/callback"),
-		Scopes:               splitCSV(envDefault("spotify_scopes", "streaming,user-read-playback-state,user-modify-playback-state,user-read-currently-playing,playlist-read-private,playlist-read-collaborative")),
+		Scopes:               splitCSV(envDefault("spotify_scopes", "streaming,user-read-playback-state,user-modify-playback-state,user-read-currently-playing,playlist-read-private,playlist-read-collaborative,user-library-read")),
 		DeviceName:           envDefault("spotify_device_name", "orpheus"),
 		DeviceResolutionMode: envDefault("orpheus_device_resolution_mode", "strict"),
 		AllowActiveFallback:  envBool("orpheus_allow_active_fallback", false),

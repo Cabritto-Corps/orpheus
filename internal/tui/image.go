@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"bytes"
+	"container/list"
 	"context"
 	"fmt"
 	"image"
 	"image/color"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -21,26 +24,37 @@ type coverKey struct {
 }
 
 type imgCache struct {
-	mu        sync.RWMutex
-	imgs      map[string]image.Image
-	covers    map[coverKey]string
-	inflight  map[string]struct{}
-	rendering map[coverKey]chan struct{}
+	mu         sync.RWMutex
+	imgs       map[string]image.Image
+	covers     map[coverKey]string
+	inflight   map[string]struct{}
+	rendering  map[coverKey]chan struct{}
+	imgLRU     *list.List
+	imgElems   map[string]*list.Element
+	coverLRU   *list.List
+	coverElems map[coverKey]*list.Element
 }
 
 func newImgCache() *imgCache {
 	return &imgCache{
-		imgs:      make(map[string]image.Image),
-		covers:    make(map[coverKey]string),
-		inflight:  make(map[string]struct{}),
-		rendering: make(map[coverKey]chan struct{}),
+		imgs:       make(map[string]image.Image),
+		covers:     make(map[coverKey]string),
+		inflight:   make(map[string]struct{}),
+		rendering:  make(map[coverKey]chan struct{}),
+		imgLRU:     list.New(),
+		imgElems:   make(map[string]*list.Element),
+		coverLRU:   list.New(),
+		coverElems: make(map[coverKey]*list.Element),
 	}
 }
 
 func (c *imgCache) getImage(url string) (image.Image, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	img, ok := c.imgs[url]
+	if ok {
+		c.touchImageLocked(url)
+	}
 	return img, ok
 }
 
@@ -48,6 +62,8 @@ func (c *imgCache) setImage(url string, img image.Image) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.imgs[url] = img
+	c.touchImageLocked(url)
+	c.evictImagesLocked()
 }
 
 func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
@@ -67,12 +83,17 @@ func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
 		_, already := c.covers[key]
 		c.mu.RUnlock()
 		if already {
+			c.mu.Lock()
+			c.touchCoverLocked(key)
+			c.mu.Unlock()
 			continue
 		}
 		s := renderHalfBlock(img, cols, rows)
 		c.mu.Lock()
 		if _, exists := c.covers[key]; !exists {
 			c.covers[key] = s
+			c.touchCoverLocked(key)
+			c.evictCoversLocked()
 		}
 		c.mu.Unlock()
 	}
@@ -100,6 +121,14 @@ func (c *imgCache) finishLoad(url string) {
 	delete(c.inflight, url)
 }
 
+func (c *imgCache) invalidateCovers() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.covers = make(map[coverKey]string)
+	c.coverLRU = list.New()
+	c.coverElems = make(map[coverKey]*list.Element)
+}
+
 func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 	if url == "" || cols <= 0 || rows <= 0 {
 		return "", true
@@ -109,6 +138,7 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 	for {
 		c.mu.Lock()
 		if s, ok := c.covers[key]; ok {
+			c.touchCoverLocked(key)
 			c.mu.Unlock()
 			return s, true
 		}
@@ -131,18 +161,89 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 		c.mu.Lock()
 		delete(c.rendering, key)
 		if existing, ok := c.covers[key]; ok {
+			c.touchCoverLocked(key)
 			c.mu.Unlock()
 			close(ch)
 			return existing, true
 		}
 		c.covers[key] = s
+		c.touchCoverLocked(key)
+		c.evictCoversLocked()
 		c.mu.Unlock()
 		close(ch)
 		return s, true
 	}
 }
 
-const imageFetchTimeout = 6 * time.Second
+const (
+	imageFetchTimeout     = 6 * time.Second
+	maxCachedImages       = 256
+	maxCachedCoverRenders = 512
+)
+
+func (c *imgCache) touchImageLocked(url string) {
+	if elem, ok := c.imgElems[url]; ok {
+		c.imgLRU.MoveToBack(elem)
+		return
+	}
+	c.imgElems[url] = c.imgLRU.PushBack(url)
+}
+
+func (c *imgCache) touchCoverLocked(key coverKey) {
+	if elem, ok := c.coverElems[key]; ok {
+		c.coverLRU.MoveToBack(elem)
+		return
+	}
+	c.coverElems[key] = c.coverLRU.PushBack(key)
+}
+
+func (c *imgCache) evictImagesLocked() {
+	for len(c.imgs) > maxCachedImages {
+		front := c.imgLRU.Front()
+		if front == nil {
+			return
+		}
+		url, ok := front.Value.(string)
+		if !ok {
+			c.imgLRU.Remove(front)
+			continue
+		}
+		c.imgLRU.Remove(front)
+		delete(c.imgElems, url)
+		delete(c.imgs, url)
+		c.deleteCoversForURLLocked(url)
+	}
+}
+
+func (c *imgCache) evictCoversLocked() {
+	for len(c.covers) > maxCachedCoverRenders {
+		front := c.coverLRU.Front()
+		if front == nil {
+			return
+		}
+		key, ok := front.Value.(coverKey)
+		if !ok {
+			c.coverLRU.Remove(front)
+			continue
+		}
+		c.coverLRU.Remove(front)
+		delete(c.coverElems, key)
+		delete(c.covers, key)
+	}
+}
+
+func (c *imgCache) deleteCoversForURLLocked(url string) {
+	for key := range c.covers {
+		if key.url != url {
+			continue
+		}
+		delete(c.covers, key)
+		if elem, ok := c.coverElems[key]; ok {
+			c.coverLRU.Remove(elem)
+			delete(c.coverElems, key)
+		}
+	}
+}
 
 var imageHTTPClient = &http.Client{
 	Transport: &http.Transport{
@@ -158,7 +259,7 @@ var imageHTTPClient = &http.Client{
 	},
 }
 
-func fetchImageFromBytes(ctx context.Context, url string) (image.Image, error) {
+func fetchImage(ctx context.Context, url string) (image.Image, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build image request: %w", err)
@@ -173,7 +274,11 @@ func fetchImageFromBytes(ctx context.Context, url string) (image.Image, error) {
 		return nil, fmt.Errorf("fetch image: unexpected status %s", resp.Status)
 	}
 
-	img, _, err := image.Decode(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read image body: %w", err)
+	}
+	img, _, err := image.Decode(bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("decode image: %w", err)
 	}

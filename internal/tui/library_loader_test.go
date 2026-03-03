@@ -1,0 +1,106 @@
+package tui
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	"orpheus/internal/config"
+	"orpheus/internal/spotify"
+)
+
+type fakeCatalog struct {
+	playlists func(offset, limit int) (*spotify.PlaylistPage, error)
+	albums    func(offset, limit int) (*spotify.PlaylistPage, error)
+}
+
+func (f fakeCatalog) ListUserPlaylistsPage(_ context.Context, offset, limit int) (*spotify.PlaylistPage, error) {
+	return f.playlists(offset, limit)
+}
+
+func (f fakeCatalog) ListSavedAlbumsPage(_ context.Context, offset, limit int) (*spotify.PlaylistPage, error) {
+	return f.albums(offset, limit)
+}
+
+func (f fakeCatalog) ListPlaylistTrackIDsPage(_ context.Context, _ string, offset, limit int) (*spotify.PlaylistTrackPage, error) {
+	return &spotify.PlaylistTrackPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+}
+
+func (f fakeCatalog) CurrentUserID(_ context.Context) (string, error) { return "u", nil }
+
+func TestLoadPlaylistsCmdInitialInterleavesAlbums(t *testing.T) {
+	catalog := fakeCatalog{
+		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			items := make([]spotify.PlaylistSummary, 0, limit)
+			for i := 0; i < limit; i++ {
+				items = append(items, spotify.PlaylistSummary{
+					ID:   fmt.Sprintf("p-%d", offset+i),
+					Name: "Playlist",
+					Kind: spotify.ContextKindPlaylist,
+				})
+			}
+			return &spotify.PlaylistPage{Items: items, Offset: offset, Limit: limit, NextOffset: offset + len(items), HasMore: true}, nil
+		},
+		albums: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			items := make([]spotify.PlaylistSummary, 0, limit)
+			for i := 0; i < limit; i++ {
+				items = append(items, spotify.PlaylistSummary{
+					ID:   fmt.Sprintf("a-%d", offset+i),
+					Name: "Album",
+					Kind: spotify.ContextKindAlbum,
+				})
+			}
+			return &spotify.PlaylistPage{Items: items, Offset: offset, Limit: limit, NextOffset: offset + len(items), HasMore: true}, nil
+		},
+	}
+	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	msg, ok := m.loadPlaylistsCmd(0, playlistLoadBatchSize)().(playlistsMsg)
+	if !ok {
+		t.Fatalf("expected playlistsMsg")
+	}
+	if msg.err != nil {
+		t.Fatalf("unexpected error: %v", msg.err)
+	}
+	foundAlbum := false
+	for _, it := range msg.items {
+		if it.Kind == spotify.ContextKindAlbum {
+			foundAlbum = true
+			break
+		}
+	}
+	if !foundAlbum {
+		t.Fatalf("expected at least one album in initial library load")
+	}
+}
+
+func TestLoadPlaylistsCmdInitialAlbumsForbiddenSetsHintFlag(t *testing.T) {
+	catalog := fakeCatalog{
+		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			items := make([]spotify.PlaylistSummary, 0, limit)
+			for i := 0; i < limit; i++ {
+				items = append(items, spotify.PlaylistSummary{
+					ID:   fmt.Sprintf("p-%d", offset+i),
+					Name: "Playlist",
+					Kind: spotify.ContextKindPlaylist,
+				})
+			}
+			return &spotify.PlaylistPage{Items: items, Offset: offset, Limit: limit, NextOffset: offset + len(items), HasMore: false}, nil
+		},
+		albums: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return nil, errors.New("forbidden")
+		},
+	}
+	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	msg, ok := m.loadPlaylistsCmd(0, playlistLoadBatchSize)().(playlistsMsg)
+	if !ok {
+		t.Fatalf("expected playlistsMsg")
+	}
+	if msg.err != nil {
+		t.Fatalf("expected no fatal error, got %v", msg.err)
+	}
+	if !msg.albumsForbidden {
+		t.Fatalf("expected albumsForbidden flag when album API is forbidden")
+	}
+}

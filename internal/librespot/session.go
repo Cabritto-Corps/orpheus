@@ -44,7 +44,7 @@ func parseDeviceType(val string) (devicespb.DeviceType, error) {
 	return devicespb.DeviceType(enum), nil
 }
 
-func ensureDeviceID(state *golibrespot.AppState, configDir string) error {
+func ensureDeviceID(state *golibrespot.AppState) error {
 	if state.DeviceId != "" {
 		return nil
 	}
@@ -75,7 +75,7 @@ func NewSession(ctx context.Context, log golibrespot.Logger, opts SessionOptions
 		return nil, nil, fmt.Errorf("read app state: %w", err)
 	}
 
-	if err := ensureDeviceID(appState, opts.ConfigDir); err != nil {
+	if err := ensureDeviceID(appState); err != nil {
 		return nil, nil, fmt.Errorf("ensure device id: %w", err)
 	}
 
@@ -98,9 +98,9 @@ func NewSession(ctx context.Context, log golibrespot.Logger, opts SessionOptions
 	}
 
 	sessOpts := &session.Options{
-		Log:        log,
-		DeviceType: deviceType,
-		DeviceId:   appState.DeviceId,
+		Log:         log,
+		DeviceType:  deviceType,
+		DeviceId:    appState.DeviceId,
 		Credentials: creds,
 		ClientToken: opts.ClientToken,
 		Resolver:    resolver,

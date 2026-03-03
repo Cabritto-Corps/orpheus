@@ -1,6 +1,6 @@
 # orpheus
 
-- This code is (kinda) turboshit
+- This code is (kinda, not so) turboshit
 
 ### Preview
 

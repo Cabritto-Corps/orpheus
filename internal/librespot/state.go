@@ -12,13 +12,13 @@ import (
 )
 
 type State struct {
-	active       bool
-	activeSince  time.Time
-	device       *connectpb.DeviceInfo
-	player       *connectpb.PlayerState
-	tracks       *tracks.List
-	queueID      uint64
-	lastCommand  *dealer.RequestPayload
+	active                bool
+	activeSince           time.Time
+	device                *connectpb.DeviceInfo
+	player                *connectpb.PlayerState
+	tracks                *tracks.List
+	queueID               uint64
+	lastCommand           *dealer.RequestPayload
 	lastTransferTimestamp int64
 }
 
@@ -93,36 +93,36 @@ func (p *AppPlayer) initState() {
 			CanPlay:               true,
 			Volume:                player.MaxStateVolume,
 			Name:                  cfg.DeviceName,
-			DeviceId:               p.runtime.DeviceId,
-			DeviceType:             p.runtime.DeviceType,
-			DeviceSoftwareVersion:  golibrespot.VersionString(),
-			ClientId:               golibrespot.ClientIdHex,
-			SpircVersion:           "3.2.6",
+			DeviceId:              p.runtime.DeviceId,
+			DeviceType:            p.runtime.DeviceType,
+			DeviceSoftwareVersion: golibrespot.VersionString(),
+			ClientId:              golibrespot.ClientIdHex,
+			SpircVersion:          "3.2.6",
 			Capabilities: &connectpb.Capabilities{
-				CanBePlayer:                  true,
-				RestrictToLocal:              false,
-				GaiaEqConnectId:             true,
-				SupportsLogout:               cfg.ZeroconfEnabled,
-				IsObservable:                 true,
-				VolumeSteps:                  int32(cfg.VolumeSteps),
-				SupportedTypes:               []string{"audio/track", "audio/episode"},
-				CommandAcks:                  true,
-				SupportsRename:               false,
-				Hidden:                       false,
-				DisableVolume:                false,
-				ConnectDisabled:              false,
-				SupportsPlaylistV2:           true,
-				IsControllable:               true,
-				SupportsExternalEpisodes:     false,
-				SupportsSetBackendMetadata:    true,
-				SupportsTransferCommand:      true,
-				SupportsCommandRequest:       true,
-				IsVoiceEnabled:               false,
-				NeedsFullPlayerState:         false,
-				SupportsGzipPushes:           true,
-				SupportsSetOptionsCommand:    true,
-				SupportsHifi:                  nil,
-				ConnectCapabilities:          "",
+				CanBePlayer:                true,
+				RestrictToLocal:            false,
+				GaiaEqConnectId:            true,
+				SupportsLogout:             cfg.ZeroconfEnabled,
+				IsObservable:               true,
+				VolumeSteps:                int32(cfg.VolumeSteps),
+				SupportedTypes:             []string{"audio/track", "audio/episode"},
+				CommandAcks:                true,
+				SupportsRename:             false,
+				Hidden:                     false,
+				DisableVolume:              false,
+				ConnectDisabled:            false,
+				SupportsPlaylistV2:         true,
+				IsControllable:             true,
+				SupportsExternalEpisodes:   false,
+				SupportsSetBackendMetadata: true,
+				SupportsTransferCommand:    true,
+				SupportsCommandRequest:     true,
+				IsVoiceEnabled:             false,
+				NeedsFullPlayerState:       false,
+				SupportsGzipPushes:         true,
+				SupportsSetOptionsCommand:  true,
+				SupportsHifi:               nil,
+				ConnectCapabilities:        "",
 			},
 		},
 	}
@@ -142,7 +142,7 @@ func (p *AppPlayer) putConnectState(ctx context.Context, reason connectpb.PutSta
 	putStateReq := &connectpb.PutStateRequest{
 		ClientSideTimestamp: uint64(time.Now().UnixMilli()),
 		MemberType:          connectpb.MemberType_CONNECT_STATE,
-		PutStateReason:     reason,
+		PutStateReason:      reason,
 	}
 	if t := p.state.activeSince; !t.IsZero() {
 		putStateReq.StartedPlayingAt = uint64(t.UnixMilli())

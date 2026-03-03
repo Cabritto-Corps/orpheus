@@ -8,29 +8,29 @@ import (
 )
 
 var (
-	ErrNoSession          = errors.New("no session")
-	ErrBadRequest         = errors.New("bad request")
-	ErrForbidden          = errors.New("forbidden")
-	ErrNotFound           = errors.New("not found")
-	ErrMethodNotAllowed   = errors.New("method not allowed")
-	ErrTooManyRequests    = errors.New("the app has exceeded its rate limits")
+	ErrNoSession        = errors.New("no session")
+	ErrBadRequest       = errors.New("bad request")
+	ErrForbidden        = errors.New("forbidden")
+	ErrNotFound         = errors.New("not found")
+	ErrMethodNotAllowed = errors.New("method not allowed")
+	ErrTooManyRequests  = errors.New("the app has exceeded its rate limits")
 )
 
 type ApiEventType string
 
 const (
-	ApiEventTypePlaying   ApiEventType = "playing"
-	ApiEventTypeNotPlaying ApiEventType = "not_playing"
-	ApiEventTypeWillPlay  ApiEventType = "will_play"
-	ApiEventTypePaused    ApiEventType = "paused"
-	ApiEventTypeActive    ApiEventType = "active"
-	ApiEventTypeInactive  ApiEventType = "inactive"
-	ApiEventTypeMetadata  ApiEventType = "metadata"
-	ApiEventTypeVolume    ApiEventType = "volume"
-	ApiEventTypeSeek      ApiEventType = "seek"
-	ApiEventTypeStopped   ApiEventType = "stopped"
-	ApiEventTypeRepeatTrack   ApiEventType = "repeat_track"
-	ApiEventTypeRepeatContext ApiEventType = "repeat_context"
+	ApiEventTypePlaying        ApiEventType = "playing"
+	ApiEventTypeNotPlaying     ApiEventType = "not_playing"
+	ApiEventTypeWillPlay       ApiEventType = "will_play"
+	ApiEventTypePaused         ApiEventType = "paused"
+	ApiEventTypeActive         ApiEventType = "active"
+	ApiEventTypeInactive       ApiEventType = "inactive"
+	ApiEventTypeMetadata       ApiEventType = "metadata"
+	ApiEventTypeVolume         ApiEventType = "volume"
+	ApiEventTypeSeek           ApiEventType = "seek"
+	ApiEventTypeStopped        ApiEventType = "stopped"
+	ApiEventTypeRepeatTrack    ApiEventType = "repeat_track"
+	ApiEventTypeRepeatContext  ApiEventType = "repeat_context"
 	ApiEventTypeShuffleContext ApiEventType = "shuffle_context"
 )
 
@@ -44,16 +44,16 @@ type ApiEventDataMetadata ApiResponseStatusTrack
 type ApiEventDataVolume ApiResponseVolume
 
 type ApiEventDataPlaying struct {
-	ContextUri  string `json:"context_uri"`
-	Uri         string `json:"uri"`
-	Resume      bool   `json:"resume"`
-	PlayOrigin  string `json:"play_origin"`
+	ContextUri string `json:"context_uri"`
+	Uri        string `json:"uri"`
+	Resume     bool   `json:"resume"`
+	PlayOrigin string `json:"play_origin"`
 }
 
 type ApiEventDataWillPlay struct {
-	ContextUri  string `json:"context_uri"`
-	Uri         string `json:"uri"`
-	PlayOrigin  string `json:"play_origin"`
+	ContextUri string `json:"context_uri"`
+	Uri        string `json:"uri"`
+	PlayOrigin string `json:"play_origin"`
 }
 
 type ApiEventDataNotPlaying struct {
@@ -106,19 +106,19 @@ type ApiResponseStatusTrack struct {
 }
 
 type ApiResponseStatus struct {
-	Username       string                 `json:"username"`
-	DeviceId       string                 `json:"device_id"`
-	DeviceType     string                 `json:"device_type"`
-	DeviceName     string                 `json:"device_name"`
-	PlayOrigin     string                 `json:"play_origin"`
-	Stopped        bool                   `json:"stopped"`
-	Paused         bool                   `json:"paused"`
-	Buffering      bool                   `json:"buffering"`
-	Volume         uint32                 `json:"volume"`
-	VolumeSteps    uint32                 `json:"volume_steps"`
-	RepeatContext  bool                   `json:"repeat_context"`
-	RepeatTrack    bool                   `json:"repeat_track"`
-	ShuffleContext bool                   `json:"shuffle_context"`
+	Username       string                  `json:"username"`
+	DeviceId       string                  `json:"device_id"`
+	DeviceType     string                  `json:"device_type"`
+	DeviceName     string                  `json:"device_name"`
+	PlayOrigin     string                  `json:"play_origin"`
+	Stopped        bool                    `json:"stopped"`
+	Paused         bool                    `json:"paused"`
+	Buffering      bool                    `json:"buffering"`
+	Volume         uint32                  `json:"volume"`
+	VolumeSteps    uint32                  `json:"volume_steps"`
+	RepeatContext  bool                    `json:"repeat_context"`
+	RepeatTrack    bool                    `json:"repeat_track"`
+	ShuffleContext bool                    `json:"shuffle_context"`
 	Track          *ApiResponseStatusTrack `json:"track"`
 }
 
@@ -156,4 +156,3 @@ func getBestImageIdForSize(images []*metadatapb.Image, size string) []byte {
 	}
 	return images[0].FileId
 }
-

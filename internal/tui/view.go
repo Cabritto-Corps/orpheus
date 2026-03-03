@@ -13,7 +13,6 @@ const (
 	headerH    = 2
 	footerH    = 1
 	playerBarH = 1
-	gapH       = 0
 	gapFooterH = 0
 )
 
@@ -24,18 +23,16 @@ const (
 	iconPause           = ""
 	iconDevice          = "●"
 	iconVolume          = "▪"
-	iconPlaceholder     = "♪"
-	iconShuffle         = "⇄"
-	iconRepeatContext   = "󰑖"
-	iconRepeatTrack     = "󰑘"
+	iconShuffle         = ""
+	iconRepeatContext   = ""
+	iconRepeatTrack     = ""
 	iconPlayNF          = "\uf04b"
 	iconPauseNF         = "\uf04c"
 	iconDeviceNF        = "\ue30c"
 	iconVolumeNF        = "\uf028"
-	iconPlaceholderNF   = "\uf001"
 	iconShuffleNF       = "\uf074"
-	iconRepeatContextNF = "󰑖"
-	iconRepeatTrackNF   = "󰑘"
+	iconRepeatContextNF = ""
+	iconRepeatTrackNF   = ""
 )
 
 func (m model) View() string {
@@ -99,7 +96,7 @@ func (m model) headerView() string {
 		if trackName == "" {
 			trackName = "Unknown track"
 		}
-		centerL1 = styleHeaderCenter.Render(truncate(trackName, min(40, availCenterW)))
+		centerL1 = styleHeaderCenter.Render(truncate(trackName, availCenterW))
 	} else {
 		statusStr = styleHeaderPaused.Render("Orpheus")
 		centerL1 = styleHeaderSub.Render("no active playback")
@@ -117,9 +114,9 @@ func (m model) headerView() string {
 		}
 		parts := artist
 		if album != "" {
-			parts += "  •  " + truncate(album, 30)
+			parts += "  •  " + album
 		}
-		centerL2 = styleHeaderSub.Render(truncate(parts, 55))
+		centerL2 = styleHeaderSub.Render(truncate(parts, max(1, w-2)))
 	}
 	line2 := layoutThreeZone(w, "", centerL2, "")
 
@@ -180,7 +177,7 @@ func (m model) playlistScreenView() string {
 }
 
 func (m model) playlistBrowserPanel(w, h int) string {
-	label := styleSectionLabel.Render("Playlists")
+	label := styleSectionLabel.Render("Library")
 	labelLine := label + "\n" + sectionDivider(w-1)
 	innerH := h - 2
 
@@ -193,10 +190,13 @@ func (m model) playlistBrowserPanel(w, h int) string {
 		}
 		inner = styleError.Render(truncate(errStr, w-2)) + rateHint + "\n" + styleDimmed.Render("r to retry")
 	} else if m.playlistsLoading && len(m.playlistList.Items()) == 0 {
-		inner = styleDimmed.Render("loading playlists...")
+		inner = styleDimmed.Render("loading library...")
 	} else {
 		m.playlistList.SetSize(w-1, innerH)
 		inner = m.playlistList.View()
+	}
+	if m.albumsForbidden {
+		inner += "\n" + styleDimmed.Render("saved albums unavailable: re-run 'orpheus auth login' (needs user-library-read)")
 	}
 
 	if m.playbackErr != nil {
@@ -227,7 +227,7 @@ func (m model) coverPreviewPanel(w, h int) string {
 		if s, cached := m.imgs.cover(pl.summary.ImageURL, coverCols, coverRows); cached {
 			coverStr = s
 		} else {
-			coverStr = styleCoverPlaceholder.Render(centerText("loading...", coverCols))
+			coverStr = m.placeholderArt(coverCols, coverRows)
 		}
 	} else {
 		coverStr = m.placeholderArt(coverCols, coverRows)
@@ -235,11 +235,15 @@ func (m model) coverPreviewPanel(w, h int) string {
 
 	meta := ""
 	if pl, ok := m.selectedPlaylist(); ok {
+		ownerLine := "playlist by " + truncate(pl.summary.Owner, innerW)
+		if pl.summary.Kind == spotify.ContextKindAlbum {
+			ownerLine = "album by " + truncate(pl.summary.Owner, innerW)
+		}
 		meta = "\n" +
 			stylePlaylistName.Render(truncate(pl.summary.Name, innerW)) + "\n" +
-			stylePlaylistOwner.Render("by "+truncate(pl.summary.Owner, innerW))
+			stylePlaylistOwner.Render(ownerLine)
 	} else {
-		meta = "\n" + styleDimmed.Render("select a playlist")
+		meta = "\n" + styleDimmed.Render("select an item")
 	}
 
 	content := labelLine + "\n " + strings.ReplaceAll(coverStr+meta, "\n", "\n ")
@@ -271,7 +275,7 @@ func (m model) albumCoverPanel(w, h int) string {
 		if s, cached := m.imgs.cover(m.status.AlbumImageURL, coverCols, coverRows); cached {
 			coverStr = s
 		} else {
-			coverStr = styleCoverPlaceholder.Render(centerText("loading...", coverCols))
+			coverStr = m.placeholderArt(coverCols, coverRows)
 		}
 	} else {
 		coverStr = m.placeholderArt(coverCols, coverRows)
@@ -308,8 +312,9 @@ func (m model) queuePanel(w, h int) string {
 	contentLines := h - 4
 
 	idxW := 3
-	artistW := min(22, w/3)
-	titleW := max(8, w-idxW-artistW-3)
+	contentW := max(12, w-idxW-4)
+	artistW := min(26, max(8, contentW*2/5))
+	titleW := max(4, contentW-artistW)
 
 	colHeader := styleQueueHeader.Render(
 		strings.Repeat(" ", 1+idxW+1) + fmt.Sprintf("%-*s  %-*s", titleW, "Title", artistW, "Artist"),
@@ -448,7 +453,7 @@ func (m model) modalView() string {
 
 	m.modalList.SetSize(modalW-4, listH)
 
-	title := styleModalTitle.Render("Switch Playlist")
+	title := styleModalTitle.Render("Switch Item")
 	hint := styleModalHint.Render("enter play  •  esc close  •  / search")
 	sep := styleModalHint.Render(strings.Repeat("─", modalW-2))
 
@@ -515,16 +520,28 @@ func (m model) currentCoverSizes() [][2]int {
 	bodyH := m.height - chromeH - 1
 	leftW, _ := m.splitWidths()
 
+	var sizes [][2]int
+
 	innerW := leftW - 2
 	innerH := bodyH - 2
-	metaLines := 7
-	if innerW > 0 && innerH > metaLines {
-		cols, rows := squareDims(innerW, innerH-metaLines)
-		if cols > 0 && rows > 0 {
-			return [][2]int{{cols, rows}}
+	if innerW > 0 && innerH > 7 {
+		if cols, rows := squareDims(innerW, innerH-7); cols > 0 && rows > 0 {
+			sizes = append(sizes, [2]int{cols, rows})
 		}
 	}
-	return nil
+
+	previewInnerW := leftW - 1 - 2
+	previewInnerH := bodyH - 2
+	if previewInnerW > 0 && previewInnerH > 3 {
+		if cols, rows := squareDims(previewInnerW, previewInnerH-3); cols > 0 && rows > 0 {
+			candidate := [2]int{cols, rows}
+			if len(sizes) == 0 || sizes[0] != candidate {
+				sizes = append(sizes, candidate)
+			}
+		}
+	}
+
+	return sizes
 }
 
 func (m model) icon(unicode, nerd string) string {
@@ -552,38 +569,33 @@ func (m model) renderProgressBar(pct float64, width int) string {
 		lipgloss.NewStyle().Foreground(colorDivider).Render(strings.Repeat("░", empty))
 }
 
-func (m model) volumeBar(vol int) string {
-	const w = 8
-	volChar := m.icon(iconVolume, iconVolumeNF)
-	filled := int(float64(vol) / 100.0 * float64(w))
-	if filled > w {
-		filled = w
-	}
-	return lipgloss.NewStyle().Foreground(colorBlue).Render(strings.Repeat(volChar, filled)) +
-		lipgloss.NewStyle().Foreground(colorMutedBlue).Render(strings.Repeat(volChar, w-filled))
-}
-
 func fmtDuration(ms int) string {
 	s := ms / 1000
 	return fmt.Sprintf("%d:%02d", s/60, s%60)
 }
 
-func queueDuration(ms int) string {
-	if ms <= 0 {
-		return "--:--"
-	}
-	return fmtDuration(ms)
-}
-
 func truncate(s string, max int) string {
-	runes := []rune(s)
-	if len(runes) <= max {
+	if max <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= max {
 		return s
 	}
 	if max <= 1 {
 		return "…"
 	}
-	return string(runes[:max-1]) + "…"
+	limit := max - 1
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w+rw > limit {
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	return b.String() + "…"
 }
 
 func centerText(s string, w int) string {
@@ -608,27 +620,16 @@ func (m model) placeholderArt(cols, rows int) string {
 		return ""
 	}
 	style := lipgloss.NewStyle().Foreground(colorDivider)
-	note := m.icon(iconPlaceholder, iconPlaceholderNF)
 	top := style.Render("╭" + strings.Repeat("─", cols-2) + "╮")
 	mid := style.Render("│" + strings.Repeat(" ", cols-2) + "│")
-	inner := strings.TrimSpace(centerText(note, cols))
-	if inner == "" {
-		inner = " "
-	}
-	noteRow := style.Render("│" + inner + "│")
 	bot := style.Render("╰" + strings.Repeat("─", cols-2) + "╯")
 
 	midRows := rows - 2
-	noteAt := midRows / 2
 	var sb strings.Builder
 	sb.WriteString(top)
 	for i := 0; i < midRows; i++ {
 		sb.WriteByte('\n')
-		if i == noteAt {
-			sb.WriteString(noteRow)
-		} else {
-			sb.WriteString(mid)
-		}
+		sb.WriteString(mid)
 	}
 	sb.WriteByte('\n')
 	sb.WriteString(bot)
