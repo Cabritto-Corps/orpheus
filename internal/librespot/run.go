@@ -8,6 +8,8 @@ import (
 
 	"github.com/devgianlu/go-librespot/player"
 	"github.com/devgianlu/go-librespot/session"
+
+	"orpheus/internal/cache"
 )
 
 func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) (*AppPlayer, error) {
@@ -23,7 +25,7 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 		volumeUpdate:    volumeUpdate,
 		prefetchJobs:    make(chan prefetchJob, 8),
 		prefetchDone:    make(chan prefetchResult, 8),
-		queueMetaCache:  make(map[string]PlaybackStateQueueEntry),
+		queueMetaCache:  cache.NewLRU[string, PlaybackStateQueueEntry](8192),
 		playedTrackURIs: make(map[string]struct{}),
 	}
 	p.prefetchTimer = time.NewTimer(math.MaxInt64)

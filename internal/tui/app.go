@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"orpheus/internal/cache"
 	"orpheus/internal/config"
 	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
@@ -29,6 +30,7 @@ const (
 	playlistTrackPreloadMax        = 500
 	coverPreloadWindow             = 14
 	imageLoadRetryMax              = 4
+	trackMetadataTTL               = 2 * time.Hour
 	uiTickInterval                 = 200 * time.Millisecond
 	navDebounceInterval            = 120 * time.Millisecond
 	volSeekDebounceInterval        = 150 * time.Millisecond
@@ -75,6 +77,13 @@ type model struct {
 	queueHasMore       bool
 	stableQueueLen     int
 	pendingContextFrom string
+	transportTransitionPending   bool
+	transportTransitionFromTrack string
+	transportTransitionStartedAt time.Time
+	transportRecoveryPending    bool
+	transportStuckCount         int
+	inputQueue                  []playbackInput
+	executorState               commandExecutorState
 
 	activePlaylistID              string
 	activePlaylistOwnerID         string
@@ -85,7 +94,7 @@ type model struct {
 	activePlaylistTrackLoading    bool
 	activePlaylistLoadToken       int
 	preloadedTrackIDs             map[string]struct{}
-	trackCache                    map[string]spotify.QueueItem
+	trackCache                    *cache.TTL[string, spotify.QueueItem]
 	imageRetryCount               map[string]int
 	imageRetryToken               map[string]int
 	playlistsLoading              bool
@@ -166,7 +175,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		modalList:           modal,
 		imgs:                newImgCache(),
 		preloadedTrackIDs:   make(map[string]struct{}),
-		trackCache:          make(map[string]spotify.QueueItem),
+		trackCache:          cache.NewTTL[string, spotify.QueueItem](4096, trackMetadataTTL),
 		imageRetryCount:     make(map[string]int),
 		imageRetryToken:     make(map[string]int),
 		playlistsLoading:    true,
@@ -238,10 +247,6 @@ func (m model) Init() tea.Cmd {
 
 func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd) {
 	prevStatus := m.status
-	prevAlbumURL := ""
-	if prevStatus != nil {
-		prevAlbumURL = prevStatus.AlbumImageURL
-	}
 	inVolSettle := m.volDebouncePending >= 0 ||
 		(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
 	if inVolSettle && msg.status != nil && prevStatus != nil {
@@ -263,7 +268,6 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 		msg.status.ProgressMS = m.clampSeekTarget(m.seekSettleProgress())
 	}
 	m.clearSeekSettleTarget(incomingProgress)
-	m.status = mergeStatusFromPrevious(prevStatus, m.queue, msg.status)
 	prevTrackID := ""
 	if prevStatus != nil {
 		prevTrackID = normalizeQueueID(prevStatus.TrackID)
@@ -284,12 +288,20 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	if prevStatus != nil {
 		prevShuffleState = prevStatus.ShuffleState
 	}
-	shuffleChanged := m.status != nil && m.status.ShuffleState != prevShuffleState
+	shuffleChanged := msg.status != nil && msg.status.ShuffleState != prevShuffleState
 	m.applyMergedQueue(msg.queue, msg.queueHasMore, refreshQueue || shuffleChanged, true)
+	m.status = mergeStatusFromPrevious(prevStatus, m.queue, msg.status, m.trackCache)
+	m.maybeClearTransportTransition(m.status)
 	m.playbackErr = nil
 	cmds := []tea.Cmd{}
-	if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
+	if shouldQueueAlbumImageLoad(prevStatus, m.status) {
 		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
+	}
+	if cmd := m.consumeTransportRecoveryCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := m.pumpInputExecutor(); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -306,13 +318,14 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 			m.playbackErr = msg.err
 			slog.Error("poll status failed", "error", msg.err)
 		}
-		return m, nil
+		m.transportTransitionPending = false
+		m.syncExecutorState()
+		return m, m.pumpInputExecutor()
 	}
 	m.pollElapsed = 0
-	prevAlbumURL := ""
+	prevStatus := m.status
 	prevTrackID := ""
 	if m.status != nil {
-		prevAlbumURL = m.status.AlbumImageURL
 		prevTrackID = normalizeQueueID(m.status.TrackID)
 	}
 	inVolSettle := m.volDebouncePending >= 0 ||
@@ -343,6 +356,7 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.status = msg.status
+	m.maybeClearTransportTransition(m.status)
 	m.playbackErr = nil
 	if msg.queueFetched {
 		incomingTrack := ""
@@ -357,9 +371,10 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 		m.playbackErr = msg.queueErr
 		slog.Error("fetch queue failed", "error", msg.queueErr)
 	}
+	m.status = mergeStatusFromPrevious(prevStatus, m.queue, m.status, m.trackCache)
 
 	cmds := make([]tea.Cmd, 0, 3)
-	if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
+	if shouldQueueAlbumImageLoad(prevStatus, m.status) {
 		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
 	}
 	if msg.queueFetched {
@@ -367,12 +382,21 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	}
+	if cmd := m.consumeTransportRecoveryCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := m.pumpInputExecutor(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	return m, tea.Batch(cmds...)
 }
 
 func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.Cmd) {
 	m.actionInFlight = false
+	m.syncExecutorState()
 	if msg.err != nil {
+		m.transportTransitionPending = false
+		m.syncExecutorState()
 		m.playbackErr = msg.err
 		m.seekSentTarget = -1
 		if m.volDebouncePending < 0 {
@@ -384,17 +408,16 @@ func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.
 		} else {
 			slog.Info("reconcile failed", "error", msg.err)
 		}
-		return m, nil
+		return m, m.pumpInputExecutor()
 	}
 	if msg.status == nil {
 		return m, m.reconcileCmd()
 	}
 	m.playbackErr = nil
 	m.pollElapsed = 0
-	prevAlbumURL := ""
+	prevStatus := m.status
 	prevTrackID := ""
 	if m.status != nil {
-		prevAlbumURL = m.status.AlbumImageURL
 		prevTrackID = normalizeQueueID(m.status.TrackID)
 	}
 	inVolSettle := m.volDebouncePending >= 0 ||
@@ -423,6 +446,7 @@ func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.
 		}
 	}
 	m.status = msg.status
+	m.maybeClearTransportTransition(m.status)
 	if msg.queueFetched {
 		incomingTrack := ""
 		if msg.status != nil {
@@ -432,14 +456,21 @@ func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.
 			m.applyMergedQueue(msg.queue, false, true, true)
 		}
 	}
+	m.status = mergeStatusFromPrevious(prevStatus, m.queue, m.status, m.trackCache)
 	cmds := make([]tea.Cmd, 0, 3)
-	if m.status != nil && m.status.AlbumImageURL != prevAlbumURL {
+	if shouldQueueAlbumImageLoad(prevStatus, m.status) {
 		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
 	}
 	if msg.queueFetched {
 		if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	}
+	if cmd := m.consumeTransportRecoveryCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := m.pumpInputExecutor(); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -566,193 +597,35 @@ func (m model) handlePlaylistKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := m.keys
+	var action playbackInputKind
 	switch {
 	case keyMatches(msg, k.Refresh):
-		if m.tuiCmdCh != nil {
-			return m, nil
-		}
-		return m, m.pollCmd(true)
-
+		action = playbackInputRefresh
 	case keyMatches(msg, k.OpenPicker):
-		m.modal = true
-		m.modalKind = modalKindPlaylist
-		m.modalList.ResetFilter()
-		m.syncModalDelegate()
-		m.modalList.Select(0)
-		return m, nil
-
+		action = playbackInputOpenPicker
 	case keyMatches(msg, k.PlayPause):
-		if m.tuiCmdCh != nil {
-			kind := librespot.TUICommandResume
-			if m.status != nil && m.status.Playing {
-				kind = librespot.TUICommandPause
-			}
-			select {
-			case m.tuiCmdCh <- librespot.TUICommand{Kind: kind}:
-			default:
-			}
-			return m, nil
-		}
-		if m.actionInFlight {
-			return m, nil
-		}
-		rollback := cloneStatus(m.status)
-		shouldPlay := rollback == nil || !rollback.Playing
-		if m.status != nil {
-			m.status.Playing = shouldPlay
-		}
-		m.beginReconcileAction(reconcileActionWindow)
-		return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
-			if shouldPlay {
-				return m.service.Play(ctx, m.deviceName)
-			}
-			return m.service.Pause(ctx, m.deviceName)
-		}, rollback)
-
+		action = playbackInputPlayPause
 	case keyMatches(msg, k.Next):
-		if m.tuiCmdCh != nil {
-			select {
-			case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandSkipNext}:
-			default:
-			}
-			return m, nil
-		}
-		if m.actionInFlight {
-			return m, nil
-		}
-		rollback := cloneStatus(m.status)
-		m.applyOptimisticSkip(true)
-		m.beginReconcileAction(reconcileActionWindow)
-		return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
-			return m.service.Next(ctx, m.deviceName)
-		}, rollback)
-
+		action = playbackInputNext
 	case keyMatches(msg, k.Prev):
-		if m.tuiCmdCh != nil {
-			select {
-			case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandSkipPrev}:
-			default:
-			}
-			return m, nil
-		}
-		if m.actionInFlight {
-			return m, nil
-		}
-		rollback := cloneStatus(m.status)
-		m.applyOptimisticSkip(false)
-		m.beginReconcileAction(reconcileActionWindow)
-		return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
-			return m.service.Previous(ctx, m.deviceName)
-		}, rollback)
-
+		action = playbackInputPrev
 	case keyMatches(msg, k.Shuffle):
-		if m.tuiCmdCh != nil {
-			select {
-			case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandShuffle}:
-			default:
-			}
-			m.clearPreloadedTracks()
-			return m, nil
-		}
-		if m.actionInFlight {
-			return m, nil
-		}
-		rollback := cloneStatus(m.status)
-		nextShuffle := true
-		if m.status != nil {
-			nextShuffle = !m.status.ShuffleState
-			m.status.ShuffleState = nextShuffle
-		}
-		// Invalidate preloaded tracks so they don't corrupt the new playback order.
-		m.clearPreloadedTracks()
-		m.stableQueueLen = len(m.queue)
-		m.beginReconcileAction(0)
-		return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
-			return m.service.Shuffle(ctx, m.deviceName, nextShuffle)
-		}, rollback)
-
+		action = playbackInputShuffle
 	case keyMatches(msg, k.Loop):
-		if m.status == nil || m.actionInFlight {
-			return m, nil
-		}
-		rollback := cloneStatus(m.status)
-		m.status.RepeatContext, m.status.RepeatTrack = nextRepeatMode(m.status.RepeatContext, m.status.RepeatTrack)
-		if m.tuiCmdCh != nil {
-			select {
-			case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandCycleRepeat}:
-			default:
-			}
-			return m, nil
-		}
-		if m.service == nil {
-			return m, nil
-		}
-		m.beginReconcileAction(reconcileActionWindow)
-		state := repeatModeString(m.status.RepeatContext, m.status.RepeatTrack)
-		return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
-			return m.service.SetRepeat(ctx, m.deviceName, state)
-		}, rollback)
-
+		action = playbackInputLoop
 	case keyMatches(msg, k.VolUp):
-		if m.actionInFlight || m.status == nil {
-			return m, nil
-		}
-		target := 50
-		if m.volDebouncePending >= 0 {
-			target = clampInt(m.volDebouncePending+5, 0, 100)
-		} else {
-			target = clampInt(m.status.Volume+5, 0, 100)
-		}
-		m.status.Volume = target
-		m.volDebouncePending = target
-		m.volDebounceToken++
-		return m, m.volDebounceCmd(m.volDebounceToken)
-
+		action = playbackInputVolUp
 	case keyMatches(msg, k.VolDown):
-		if m.actionInFlight || m.status == nil {
-			return m, nil
-		}
-		target := 50
-		if m.volDebouncePending >= 0 {
-			target = clampInt(m.volDebouncePending-5, 0, 100)
-		} else {
-			target = clampInt(m.status.Volume-5, 0, 100)
-		}
-		m.status.Volume = target
-		m.volDebouncePending = target
-		m.volDebounceToken++
-		return m, m.volDebounceCmd(m.volDebounceToken)
-
+		action = playbackInputVolDown
 	case keyMatches(msg, k.SeekBack):
-		if m.actionInFlight || m.status == nil {
-			return m, nil
-		}
-		current := m.seekSettleProgress()
-		target := m.clampSeekTarget(current - 5000)
-		if target == current {
-			return m, nil
-		}
-		m.status.ProgressMS = target
-		m.seekDebouncePending = target
-		m.seekDebounceToken++
-		return m, m.seekDebounceCmd(m.seekDebounceToken)
-
+		action = playbackInputSeekBack
 	case keyMatches(msg, k.SeekFwd):
-		if m.actionInFlight || m.status == nil {
-			return m, nil
-		}
-		current := m.seekSettleProgress()
-		target := m.clampSeekTarget(current + 5000)
-		if target == current {
-			return m, nil
-		}
-		m.status.ProgressMS = target
-		m.seekDebouncePending = target
-		m.seekDebounceToken++
-		return m, m.seekDebounceCmd(m.seekDebounceToken)
+		action = playbackInputSeekFwd
+	default:
+		return m, nil
 	}
-
-	return m, nil
+	m.enqueuePlaybackInput(action)
+	return m, m.pumpInputExecutor()
 }
 
 func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model, tea.Cmd) {
@@ -780,6 +653,7 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 	if m.tuiCmdCh != nil {
 		select {
 		case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandPlayContext, URI: sel.summary.URI}:
+			m.beginTransportTransition()
 		default:
 		}
 		cmds := []tea.Cmd{m.loadImageCmd(sel.summary.ImageURL)}
@@ -796,6 +670,7 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 		}, action),
 		m.loadImageCmd(sel.summary.ImageURL),
 	}
+	m.beginTransportTransition()
 	m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
 	if canReadTracks {
 		m.activePlaylistTrackLoading = true
@@ -853,6 +728,9 @@ func (m model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 			return
 		}
 		if _, ok := seen[url]; ok {
+			return
+		}
+		if !m.imgs.shouldQueueLoad(url) {
 			return
 		}
 		seen[url] = struct{}{}
@@ -958,9 +836,7 @@ func (m *model) setActivePlaylist(playlistID string, canReadTracks bool, ownerID
 	for id := range m.preloadedTrackIDs {
 		delete(m.preloadedTrackIDs, id)
 	}
-	for id := range m.trackCache {
-		delete(m.trackCache, id)
-	}
+	m.trackCache.Clear()
 }
 
 func (m *model) maybeLoadMorePlaylistTracksCmd(limit int) tea.Cmd {

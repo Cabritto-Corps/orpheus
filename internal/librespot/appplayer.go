@@ -22,6 +22,8 @@ import (
 	"github.com/devgianlu/go-librespot/session"
 	"github.com/devgianlu/go-librespot/tracks"
 	"google.golang.org/protobuf/proto"
+
+	"orpheus/internal/cache"
 )
 
 const volumeUpdateDebounce = 100 * time.Millisecond
@@ -59,7 +61,7 @@ type AppPlayer struct {
 	shuffleRefreshPending bool
 	shuffleRefreshGen     uint64
 
-	queueMetaCache map[string]PlaybackStateQueueEntry
+	queueMetaCache *cache.LRU[string, PlaybackStateQueueEntry]
 	queueMetaMu    sync.RWMutex
 
 	playedTrackURIs map[string]struct{}
@@ -360,19 +362,15 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		return nil
 	case "set_repeating_context":
 		val := req.Command.Value.(bool)
-		p.setOptions(ctx, &val, nil, nil)
-		return nil
+		return p.setOptions(ctx, &val, nil, nil)
 	case "set_repeating_track":
 		val := req.Command.Value.(bool)
-		p.setOptions(ctx, nil, &val, nil)
-		return nil
+		return p.setOptions(ctx, nil, &val, nil)
 	case "set_shuffling_context":
 		val := req.Command.Value.(bool)
-		p.setOptions(ctx, nil, nil, &val)
-		return nil
+		return p.setOptions(ctx, nil, nil, &val)
 	case "set_options":
-		p.setOptions(ctx, req.Command.RepeatingContext, req.Command.RepeatingTrack, req.Command.ShufflingContext)
-		return nil
+		return p.setOptions(ctx, req.Command.RepeatingContext, req.Command.RepeatingTrack, req.Command.ShufflingContext)
 	case "set_queue":
 		p.setQueue(ctx, req.Command.PrevTracks, req.Command.NextTracks)
 		return nil

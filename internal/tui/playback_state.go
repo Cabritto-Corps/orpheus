@@ -4,6 +4,10 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
+	"orpheus/internal/cache"
+	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
 
@@ -15,8 +19,61 @@ func cloneStatus(status *spotify.PlaybackStatus) *spotify.PlaybackStatus {
 	return &cp
 }
 
+func shouldQueueAlbumImageLoad(prev, next *spotify.PlaybackStatus) bool {
+	if next == nil || strings.TrimSpace(next.AlbumImageURL) == "" {
+		return false
+	}
+	if prev == nil {
+		return true
+	}
+	return strings.TrimSpace(next.AlbumImageURL) != strings.TrimSpace(prev.AlbumImageURL)
+}
+
+func (m *model) beginTransportTransition() {
+	m.transportTransitionPending = true
+	m.transportTransitionStartedAt = time.Now()
+	m.transportTransitionFromTrack = ""
+	if m.status != nil {
+		m.transportTransitionFromTrack = normalizeQueueID(m.status.TrackID)
+	}
+	m.syncExecutorState()
+}
+
+func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
+	if !m.transportTransitionPending || next == nil {
+		return
+	}
+	nextTrack := normalizeQueueID(next.TrackID)
+	if nextTrack != "" && nextTrack != m.transportTransitionFromTrack {
+		m.transportTransitionPending = false
+		m.syncExecutorState()
+		return
+	}
+	// Failsafe: don't keep controls locked forever on backend stalls.
+	if time.Since(m.transportTransitionStartedAt) > 4*time.Second {
+		m.transportTransitionPending = false
+		m.transportRecoveryPending = true
+		m.transportStuckCount++
+		m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
+		m.syncExecutorState()
+	}
+}
+
+func (m *model) shouldBlockTransportInput(msg tea.KeyMsg) bool {
+	if !m.transportTransitionPending {
+		return false
+	}
+	k := m.keys
+	return keyMatches(msg, k.PlayPause) ||
+		keyMatches(msg, k.Next) ||
+		keyMatches(msg, k.Prev) ||
+		keyMatches(msg, k.Shuffle) ||
+		keyMatches(msg, k.Loop)
+}
+
 func (m *model) beginReconcileAction(window time.Duration) {
 	m.actionInFlight = true
+	m.syncExecutorState()
 	if window > 0 {
 		m.actionFastPollUntil = time.Now().Add(window)
 	}
@@ -131,6 +188,18 @@ func (m *model) clearSeekSettleTarget(observed int) {
 	}
 }
 
+func (m *model) trySendTransportSkip(kind librespot.TUICommandKind) bool {
+	if m.tuiCmdCh == nil {
+		return false
+	}
+	select {
+	case m.tuiCmdCh <- librespot.TUICommand{Kind: kind}:
+		return true
+	default:
+		return false
+	}
+}
+
 func absInt(v int) int {
 	if v < 0 {
 		return -v
@@ -164,7 +233,7 @@ func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool
 	m.rebuildPreloadedFromQueue()
 }
 
-func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.QueueItem, next *spotify.PlaybackStatus) *spotify.PlaybackStatus {
+func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.QueueItem, next *spotify.PlaybackStatus, trackCache *cache.TTL[string, spotify.QueueItem]) *spotify.PlaybackStatus {
 	if next == nil {
 		return next
 	}
@@ -172,7 +241,8 @@ func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.Queue
 	if out.TrackName != "" && out.ArtistName != "" && out.DurationMS > 0 {
 		return &out
 	}
-	sameTrack := func(id string) bool { return id != "" && id == next.TrackID }
+	nextID := normalizeQueueID(next.TrackID)
+	sameTrack := func(id string) bool { return normalizeQueueID(id) != "" && normalizeQueueID(id) == nextID }
 	if prev != nil && sameTrack(prev.TrackID) {
 		if out.TrackName == "" && prev.TrackName != "" {
 			out.TrackName = prev.TrackName
@@ -190,15 +260,32 @@ func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.Queue
 			out.DurationMS = prev.DurationMS
 		}
 	}
-	if len(queue) > 0 && sameTrack(queue[0].ID) {
-		if out.TrackName == "" && queue[0].Name != "" {
-			out.TrackName = queue[0].Name
+	for _, q := range queue {
+		if !sameTrack(q.ID) {
+			continue
 		}
-		if out.ArtistName == "" && queue[0].Artist != "" && queue[0].Artist != "-" {
-			out.ArtistName = queue[0].Artist
+		if out.TrackName == "" && q.Name != "" {
+			out.TrackName = q.Name
 		}
-		if out.DurationMS <= 0 && queue[0].DurationMS > 0 {
-			out.DurationMS = queue[0].DurationMS
+		if out.ArtistName == "" && q.Artist != "" && q.Artist != "-" {
+			out.ArtistName = q.Artist
+		}
+		if out.DurationMS <= 0 && q.DurationMS > 0 {
+			out.DurationMS = q.DurationMS
+		}
+		break
+	}
+	if trackCache != nil && nextID != "" && (out.TrackName == "" || out.ArtistName == "" || out.DurationMS <= 0) {
+		if c, ok := trackCache.Peek(nextID); ok {
+			if out.TrackName == "" && c.Name != "" {
+				out.TrackName = c.Name
+			}
+			if out.ArtistName == "" && c.Artist != "" && c.Artist != "-" {
+				out.ArtistName = c.Artist
+			}
+			if out.DurationMS <= 0 && c.DurationMS > 0 {
+				out.DurationMS = c.DurationMS
+			}
 		}
 	}
 	return &out
@@ -218,7 +305,7 @@ func normalizeQueueID(id string) string {
 	return id
 }
 
-func mergeQueueNames(prev, next []spotify.QueueItem, cache map[string]spotify.QueueItem) []spotify.QueueItem {
+func mergeQueueNames(prev, next []spotify.QueueItem, cache *cache.TTL[string, spotify.QueueItem]) []spotify.QueueItem {
 	if len(next) == 0 {
 		return next
 	}
@@ -245,7 +332,7 @@ func mergeQueueNames(prev, next []spotify.QueueItem, cache map[string]spotify.Qu
 			}
 		}
 		if (out[i].Name == "" || out[i].Artist == "") && cache != nil {
-			if c, ok := cache[key]; ok {
+			if c, ok := cache.Peek(key); ok {
 				if out[i].Name == "" && c.Name != "" {
 					out[i].Name = c.Name
 				}
@@ -263,7 +350,7 @@ func mergeQueueNames(prev, next []spotify.QueueItem, cache map[string]spotify.Qu
 
 const librespotQueueWindow = 32
 
-func mergeQueueWithRest(prev, next []spotify.QueueItem, cache map[string]spotify.QueueItem, preserveTail bool) []spotify.QueueItem {
+func mergeQueueWithRest(prev, next []spotify.QueueItem, cache *cache.TTL[string, spotify.QueueItem], preserveTail bool) []spotify.QueueItem {
 	merged := mergeQueueNames(prev, next, cache)
 	if !preserveTail || len(next) > librespotQueueWindow || len(prev) <= librespotQueueWindow {
 		return merged

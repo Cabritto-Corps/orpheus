@@ -71,7 +71,7 @@ func TestImageCacheEvictsOldestImageAndItsRenderedCovers(t *testing.T) {
 	}
 
 	cache.mu.RLock()
-	_, hasCover := cache.covers[coverKey{url: "u-0", cols: 8, rows: 4}]
+	_, hasCover := cache.covers.Peek(coverKey{url: "u-0", cols: 8, rows: 4})
 	cache.mu.RUnlock()
 	if hasCover {
 		t.Fatalf("expected rendered covers for evicted image to be removed")
@@ -91,10 +91,11 @@ func TestImageCacheEvictsOldestRenderedCover(t *testing.T) {
 
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
-	if len(cache.covers) != maxCachedCoverRenders {
-		t.Fatalf("expected rendered cover cache size %d, got %d", maxCachedCoverRenders, len(cache.covers))
+	coverCount := len(cache.covers.Keys())
+	if coverCount != maxCachedCoverRenders {
+		t.Fatalf("expected rendered cover cache size %d, got %d", maxCachedCoverRenders, coverCount)
 	}
-	if _, ok := cache.covers[coverKey{url: "u", cols: 2, rows: 1}]; ok {
+	if _, ok := cache.covers.Peek(coverKey{url: "u", cols: 2, rows: 1}); ok {
 		t.Fatalf("expected oldest rendered cover to be evicted")
 	}
 }
@@ -140,6 +141,43 @@ func TestHandleImageRetryMsgSkipsStaleOrUnneededURL(t *testing.T) {
 	}
 	if _, ok := got.imageRetryCount["u-drop"]; ok {
 		t.Fatalf("expected retry count cleanup for unneeded URL")
+	}
+}
+
+func TestImageCacheBeginLoadStatsDedupesInflightAndCached(t *testing.T) {
+	cache := newImgCache()
+	if !cache.beginLoad("u1") {
+		t.Fatal("expected first beginLoad to start")
+	}
+	if cache.beginLoad("u1") {
+		t.Fatal("expected inflight beginLoad to be deduped")
+	}
+	cache.finishLoad("u1")
+	cache.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	if cache.beginLoad("u1") {
+		t.Fatal("expected cached beginLoad to be skipped")
+	}
+	stats := cache.snapshotStats()
+	if stats.loadStarted != 1 || stats.loadSkipInflight != 1 || stats.loadSkipCached != 1 {
+		t.Fatalf("unexpected cache load stats: %+v", stats)
+	}
+}
+
+func TestImageCacheShouldQueueLoad(t *testing.T) {
+	cache := newImgCache()
+	if !cache.shouldQueueLoad("u1") {
+		t.Fatal("expected fresh URL to be queueable")
+	}
+	if !cache.beginLoad("u1") {
+		t.Fatal("expected beginLoad to start")
+	}
+	if cache.shouldQueueLoad("u1") {
+		t.Fatal("expected inflight URL to be skipped")
+	}
+	cache.finishLoad("u1")
+	cache.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	if cache.shouldQueueLoad("u1") {
+		t.Fatal("expected cached URL to be skipped")
 	}
 }
 

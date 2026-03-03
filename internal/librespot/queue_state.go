@@ -12,12 +12,17 @@ import (
 	extmetadatapb "github.com/devgianlu/go-librespot/proto/spotify/extendedmetadata"
 	metadatapb "github.com/devgianlu/go-librespot/proto/spotify/metadata"
 	"github.com/devgianlu/go-librespot/tracks"
+
+	"orpheus/internal/cache"
 )
 
 func (p *AppPlayer) getCachedQueueMeta(id string) *PlaybackStateQueueEntry {
 	p.queueMetaMu.RLock()
 	defer p.queueMetaMu.RUnlock()
-	if e, ok := p.queueMetaCache[id]; ok {
+	if p.queueMetaCache == nil {
+		return nil
+	}
+	if e, ok := p.queueMetaCache.Peek(id); ok {
 		return &e
 	}
 	return nil
@@ -27,15 +32,19 @@ func (p *AppPlayer) setCachedQueueMeta(id string, e PlaybackStateQueueEntry) {
 	p.queueMetaMu.Lock()
 	defer p.queueMetaMu.Unlock()
 	if p.queueMetaCache == nil {
-		p.queueMetaCache = make(map[string]PlaybackStateQueueEntry)
+		p.queueMetaCache = cache.NewLRU[string, PlaybackStateQueueEntry](8192)
 	}
-	p.queueMetaCache[id] = e
+	p.queueMetaCache.Set(id, e)
 	p.invalidateDerivedQueueCache()
 }
 
 func (p *AppPlayer) resetQueueMetaForContext(contextKey string) {
 	p.queueMetaMu.Lock()
-	p.queueMetaCache = make(map[string]PlaybackStateQueueEntry)
+	if p.queueMetaCache == nil {
+		p.queueMetaCache = cache.NewLRU[string, PlaybackStateQueueEntry](8192)
+	} else {
+		p.queueMetaCache.Clear()
+	}
 	p.queueMetaMu.Unlock()
 
 	p.queueResolveMu.Lock()

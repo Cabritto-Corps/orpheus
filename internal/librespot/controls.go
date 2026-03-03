@@ -18,6 +18,8 @@ import (
 	playerpb "github.com/devgianlu/go-librespot/proto/spotify/player"
 	"github.com/devgianlu/go-librespot/tracks"
 	"google.golang.org/protobuf/proto"
+
+	"orpheus/internal/playbackdomain"
 )
 
 func (p *AppPlayer) prefetchCandidateIDs(ctx context.Context) []golibrespot.SpotifyId {
@@ -472,37 +474,51 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	return nil
 }
 
-func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repeatingTrack *bool, shufflingContext *bool) {
+func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repeatingTrack *bool, shufflingContext *bool) error {
+	if p == nil || p.state == nil || p.state.player == nil || p.state.player.Options == nil {
+		return nil
+	}
+	curr := playbackdomain.TraversalOptions{
+		RepeatContext: p.state.player.Options.RepeatingContext,
+		RepeatTrack:   p.state.player.Options.RepeatingTrack,
+		Shuffle:       p.state.player.Options.ShufflingContext,
+	}
+	next := playbackdomain.ResolveOptions(curr, repeatingContext, repeatingTrack, shufflingContext)
 	var requiresUpdate bool
-	if repeatingContext != nil && *repeatingContext != p.state.player.Options.RepeatingContext {
-		p.state.player.Options.RepeatingContext = *repeatingContext
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeRepeatContext, Data: ApiEventDataRepeatContext{Value: *repeatingContext}})
+	if next.RepeatContext != curr.RepeatContext {
+		p.state.player.Options.RepeatingContext = next.RepeatContext
+		// Repeat-context toggle should preserve already-played cycle state.
+		p.invalidateQueueDerivation(false)
+		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeRepeatContext, Data: ApiEventDataRepeatContext{Value: next.RepeatContext}})
 		requiresUpdate = true
 	}
-	if repeatingTrack != nil && *repeatingTrack != p.state.player.Options.RepeatingTrack {
-		p.state.player.Options.RepeatingTrack = *repeatingTrack
+	if next.RepeatTrack != curr.RepeatTrack {
+		p.state.player.Options.RepeatingTrack = next.RepeatTrack
 		p.bumpPrefetchGeneration()
-		if *repeatingTrack {
+		if next.RepeatTrack {
 			p.clearSecondaryStream()
 		}
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeRepeatTrack, Data: ApiEventDataRepeatTrack{Value: *repeatingTrack}})
+		p.invalidateDerivedQueueCache()
+		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeRepeatTrack, Data: ApiEventDataRepeatTrack{Value: next.RepeatTrack}})
 		requiresUpdate = true
 	}
-	if p.state.tracks == nil && shufflingContext != nil && *shufflingContext != p.state.player.Options.ShufflingContext {
-		p.runtime.Log.WithField("value", *shufflingContext).Warn("ignoring shuffle toggle without active context")
+	if p.state.tracks == nil && next.Shuffle != curr.Shuffle {
+		p.runtime.Log.WithField("value", next.Shuffle).Warn("ignoring shuffle toggle without active context")
 	}
-	if p.state.tracks != nil && shufflingContext != nil && *shufflingContext != p.state.player.Options.ShufflingContext {
-		if err := p.state.tracks.ToggleShuffle(ctx, *shufflingContext); err != nil {
-			p.runtime.Log.WithError(err).Errorf("failed toggling shuffle context (value: %t)", *shufflingContext)
-			return
+	if p.state.tracks != nil && next.Shuffle != curr.Shuffle {
+		if err := p.state.tracks.ToggleShuffle(ctx, next.Shuffle); err != nil {
+			p.runtime.Log.WithError(err).Errorf("failed toggling shuffle context (value: %t)", next.Shuffle)
+			return err
 		}
-		p.state.player.Options.ShufflingContext = *shufflingContext
+		p.state.player.Options.ShufflingContext = next.Shuffle
+		// Shuffle establishes a new traversal baseline; reset played-cycle state.
+		p.invalidateQueueDerivation(true)
 		p.resetPlaybackCaches(true)
 		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
-		if *shufflingContext {
+		if next.Shuffle {
 			p.scheduleShuffleCacheRefresh()
 		}
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeShuffleContext, Data: ApiEventDataShuffleContext{Value: *shufflingContext}})
+		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeShuffleContext, Data: ApiEventDataShuffleContext{Value: next.Shuffle}})
 		requiresUpdate = true
 	}
 	if requiresUpdate {
@@ -510,6 +526,7 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 		p.updateState(ctx)
 		p.emitPlaybackState()
 	}
+	return nil
 }
 
 func (p *AppPlayer) addToQueue(ctx context.Context, track *connectpb.ContextTrack) {

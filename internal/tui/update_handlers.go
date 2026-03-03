@@ -31,11 +31,12 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	m.interpolatePlaybackProgress(uiTickInterval)
+	inputCmd := m.pumpInputExecutor()
 	if m.tuiCmdCh != nil {
-		return m, m.tickCmd()
+		return m, tea.Batch(m.tickCmd(), inputCmd)
 	}
 	if m.screen != screenPlayback {
-		return m, m.tickCmd()
+		return m, tea.Batch(m.tickCmd(), inputCmd)
 	}
 	interval := m.pollInterval
 	if interval <= 0 {
@@ -48,12 +49,12 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	}
 	m.pollElapsed += uiTickInterval
 	if m.pollElapsed < interval {
-		return m, m.tickCmd()
+		return m, tea.Batch(m.tickCmd(), inputCmd)
 	}
 	m.pollElapsed = 0
 	m.pollTick++
 	pollQueue := m.pollTick%queuePollEvery == 0
-	return m, tea.Batch(m.pollCmd(pollQueue), m.tickCmd())
+	return m, tea.Batch(m.pollCmd(pollQueue), m.tickCmd(), inputCmd)
 }
 
 func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
@@ -167,7 +168,7 @@ func (m model) handlePlaylistTracksMsg(msg playlistTracksMsg) (tea.Model, tea.Cm
 		m.activePlaylistTrackIDs = append(m.activePlaylistTrackIDs, trackID)
 		if i < len(msg.trackInfos) {
 			if info := msg.trackInfos[i]; info.Name != "" {
-				m.trackCache[trackID] = info
+				m.trackCache.Set(trackID, info)
 			}
 		}
 	}
@@ -236,16 +237,23 @@ func (m model) handleImageRetryMsg(msg imageRetryMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleActionMsg(msg actionMsg) (tea.Model, tea.Cmd) {
 	m.actionInFlight = false
+	m.syncExecutorState()
 	if msg.err != nil {
+		m.transportTransitionPending = false
+		m.syncExecutorState()
 		m.playbackErr = msg.err
 		slog.Error("playback action failed", "error", msg.err)
 		if msg.rollback != nil {
 			m.status = msg.rollback
 		}
 		if msg.reconcile {
-			return m, m.pollCmd(true)
+			cmds := []tea.Cmd{m.pollCmd(true)}
+			if cmd := m.pumpInputExecutor(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
 		}
-		return m, nil
+		return m, m.pumpInputExecutor()
 	}
 	m.playbackErr = nil
 	switch msg.action {
@@ -255,7 +263,11 @@ func (m model) handleActionMsg(msg actionMsg) (tea.Model, tea.Cmd) {
 		m.modal = false
 		m.modalKind = modalKindNone
 	}
-	return m, m.pollCmd(true)
+	cmds := []tea.Cmd{m.pollCmd(true)}
+	if cmd := m.pumpInputExecutor(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	return m, tea.Batch(cmds...)
 }
 
 func (m model) handleVolDebounceMsg(msg volDebounceMsg) (tea.Model, tea.Cmd) {

@@ -7,6 +7,8 @@ import (
 	golibrespot "github.com/devgianlu/go-librespot"
 	"github.com/devgianlu/go-librespot/player"
 	connectpb "github.com/devgianlu/go-librespot/proto/spotify/connectstate"
+
+	"orpheus/internal/playbackdomain"
 )
 
 func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand) (bool, error) {
@@ -54,42 +56,22 @@ func (p *AppPlayer) handleTUIPlaybackCommand(ctx context.Context, cmd TUICommand
 		p.updateVolume(vol)
 		return true, nil
 	case TUICommandShuffle:
-		if p.state.tracks == nil {
+		if p.state == nil || p.state.player == nil || p.state.player.Options == nil {
 			return true, nil
 		}
-		if p.state.player.Options.ShufflingContext {
-			if err := p.state.tracks.ToggleShuffle(ctx, false); err != nil {
-				return true, fmt.Errorf("toggle shuffle off: %w", err)
-			}
-		}
-		if err := p.state.tracks.ToggleShuffle(ctx, true); err != nil {
-			return true, fmt.Errorf("toggle shuffle on: %w", err)
-		}
-		p.state.player.Options.ShufflingContext = true
-		p.resetPlaybackCaches(true)
-		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
-		p.scheduleShuffleCacheRefresh()
-		p.updateState(ctx)
-		p.emitPlaybackState()
-		return true, nil
+		target := !p.state.player.Options.ShufflingContext
+		return true, p.setOptions(ctx, nil, nil, &target)
 	case TUICommandCycleRepeat:
 		if p.state == nil || p.state.player == nil || p.state.player.Options == nil {
 			return true, nil
 		}
-		repeatContext := false
-		repeatTrack := false
-		if p.state.player.Options.RepeatingTrack {
-			repeatContext = false
-			repeatTrack = false
-		} else if p.state.player.Options.RepeatingContext {
-			repeatContext = false
-			repeatTrack = true
-		} else {
-			repeatContext = true
-			repeatTrack = false
+		curr := playbackdomain.TraversalOptions{
+			RepeatContext: p.state.player.Options.RepeatingContext,
+			RepeatTrack:   p.state.player.Options.RepeatingTrack,
+			Shuffle:       p.state.player.Options.ShufflingContext,
 		}
-		p.setOptions(ctx, &repeatContext, &repeatTrack, nil)
-		return true, nil
+		next := playbackdomain.NextRepeatTraversalOptions(curr)
+		return true, p.setOptions(ctx, &next.RepeatContext, &next.RepeatTrack, nil)
 	default:
 		return false, nil
 	}

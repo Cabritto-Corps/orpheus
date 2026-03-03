@@ -5,6 +5,10 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
+	"orpheus/internal/cache"
+	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
 
@@ -28,7 +32,7 @@ func TestMergeStatusFromPreviousUsesPreviousOnSameTrack(t *testing.T) {
 	}
 	next := &spotify.PlaybackStatus{TrackID: "same"}
 
-	merged := mergeStatusFromPrevious(prev, nil, next)
+	merged := mergeStatusFromPrevious(prev, nil, next, nil)
 	if merged.TrackName != "Prev Name" || merged.ArtistName != "Prev Artist" || merged.DurationMS != 12345 {
 		t.Fatalf("expected previous metadata to be reused on same track, got %+v", merged)
 	}
@@ -38,9 +42,31 @@ func TestMergeStatusFromPreviousUsesQueueFallback(t *testing.T) {
 	next := &spotify.PlaybackStatus{TrackID: "track-1"}
 	queue := []spotify.QueueItem{{ID: "track-1", Name: "Queue Name", Artist: "Queue Artist", DurationMS: 456}}
 
-	merged := mergeStatusFromPrevious(nil, queue, next)
+	merged := mergeStatusFromPrevious(nil, queue, next, nil)
 	if merged.TrackName != "Queue Name" || merged.ArtistName != "Queue Artist" || merged.DurationMS != 456 {
 		t.Fatalf("expected queue fallback metadata, got %+v", merged)
+	}
+}
+
+func TestMergeStatusFromPreviousUsesNonHeadQueueMatch(t *testing.T) {
+	next := &spotify.PlaybackStatus{TrackID: "track-2"}
+	queue := []spotify.QueueItem{
+		{ID: "track-1", Name: "One", Artist: "A"},
+		{ID: "track-2", Name: "Two", Artist: "B", DurationMS: 789},
+	}
+	merged := mergeStatusFromPrevious(nil, queue, next, nil)
+	if merged.TrackName != "Two" || merged.ArtistName != "B" || merged.DurationMS != 789 {
+		t.Fatalf("expected queue match on track id, got %+v", merged)
+	}
+}
+
+func TestMergeStatusFromPreviousUsesTrackCacheFallback(t *testing.T) {
+	cache := cache.NewTTL[string, spotify.QueueItem](16, time.Hour)
+	cache.Set("cached-track", spotify.QueueItem{Name: "Cached Name", Artist: "Cached Artist", DurationMS: 654})
+	next := &spotify.PlaybackStatus{TrackID: "cached-track"}
+	merged := mergeStatusFromPrevious(nil, nil, next, cache)
+	if merged.TrackName != "Cached Name" || merged.ArtistName != "Cached Artist" || merged.DurationMS != 654 {
+		t.Fatalf("expected cache fallback metadata, got %+v", merged)
 	}
 }
 
@@ -162,7 +188,7 @@ func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 		status:            &spotify.PlaybackStatus{},
 		queue:             []spotify.QueueItem{{ID: "spotify:track:stale"}},
 		preloadedTrackIDs: map[string]struct{}{"stale": {}, "ghost": {}},
-		trackCache:        map[string]spotify.QueueItem{},
+		trackCache:        cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 	}
 	m.applyMergedQueue(
 		[]spotify.QueueItem{
@@ -205,5 +231,101 @@ func TestMergeQueueWithRestPreservesTailWithoutDuplicates(t *testing.T) {
 	}
 	if merged[3].ID != prev[32].ID {
 		t.Fatalf("expected unseen tail track %q to be appended, got %q", prev[32].ID, merged[3].ID)
+	}
+}
+
+func TestShouldQueueAlbumImageLoad(t *testing.T) {
+	prev := &spotify.PlaybackStatus{AlbumImageURL: "a"}
+	if !shouldQueueAlbumImageLoad(nil, &spotify.PlaybackStatus{AlbumImageURL: "a"}) {
+		t.Fatal("expected initial non-empty image to load")
+	}
+	if shouldQueueAlbumImageLoad(prev, &spotify.PlaybackStatus{AlbumImageURL: "a"}) {
+		t.Fatal("expected same image URL to be skipped")
+	}
+	if !shouldQueueAlbumImageLoad(prev, &spotify.PlaybackStatus{AlbumImageURL: "b"}) {
+		t.Fatal("expected changed image URL to load")
+	}
+}
+
+func TestTransportTransitionBlocksTransportKeys(t *testing.T) {
+	m := model{keys: newKeys()}
+	m.beginTransportTransition()
+	if !m.shouldBlockTransportInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}) {
+		t.Fatal("expected transport key to be blocked while transition pending")
+	}
+	if m.shouldBlockTransportInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}}) {
+		t.Fatal("expected non-transport key to remain allowed")
+	}
+}
+
+func TestHandlePlaybackKeyQueuesSkipWhenBlocked(t *testing.T) {
+	ch := make(chan librespot.TUICommand, 1)
+	m := model{keys: newKeys(), tuiCmdCh: ch}
+	m.beginTransportTransition()
+	next, _ := m.handlePlaybackKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	got := next.(model)
+	if len(got.inputQueue) != 1 || got.inputQueue[0].kind != playbackInputNext {
+		t.Fatalf("expected one queued next input action, got %+v", got.inputQueue)
+	}
+}
+
+func TestExecutorStateTracksInFlightFlags(t *testing.T) {
+	m := model{}
+	m.syncExecutorState()
+	if m.executorState != executorStateIdle {
+		t.Fatalf("expected idle executor, got %s", m.executorState)
+	}
+	m.actionInFlight = true
+	m.syncExecutorState()
+	if m.executorState != executorStateAwaitingAction {
+		t.Fatalf("expected awaiting-action, got %s", m.executorState)
+	}
+	m.actionInFlight = false
+	m.transportTransitionPending = true
+	m.syncExecutorState()
+	if m.executorState != executorStateAwaitingTransport {
+		t.Fatalf("expected awaiting-transport, got %s", m.executorState)
+	}
+}
+
+func TestInputQueueCoalescesSeekAndVolumeAndDedupsToggle(t *testing.T) {
+	m := model{}
+	m.enqueuePlaybackInput(playbackInputVolUp)
+	m.enqueuePlaybackInput(playbackInputVolDown)
+	m.enqueuePlaybackInput(playbackInputSeekBack)
+	m.enqueuePlaybackInput(playbackInputSeekFwd)
+	m.enqueuePlaybackInput(playbackInputShuffle)
+	m.enqueuePlaybackInput(playbackInputShuffle)
+	kinds := make([]playbackInputKind, 0, len(m.inputQueue))
+	for _, it := range m.inputQueue {
+		kinds = append(kinds, it.kind)
+	}
+	if len(kinds) != 3 || kinds[0] != playbackInputVolDown || kinds[1] != playbackInputSeekFwd || kinds[2] != playbackInputShuffle {
+		t.Fatalf("unexpected queue policy result: %+v", kinds)
+	}
+}
+
+func TestInputPriorityPrefersTransport(t *testing.T) {
+	m := model{}
+	m.enqueuePlaybackInput(playbackInputVolUp)
+	m.enqueuePlaybackInput(playbackInputNext)
+	if idx := m.dequeueNextInputIndex(); idx != 1 {
+		t.Fatalf("expected transport action priority, got index %d", idx)
+	}
+}
+
+func TestStuckTransportTransitionSetsRecovery(t *testing.T) {
+	m := model{}
+	m.beginTransportTransition()
+	m.transportTransitionStartedAt = time.Now().Add(-5 * time.Second)
+	m.maybeClearTransportTransition(&spotify.PlaybackStatus{TrackID: m.transportTransitionFromTrack})
+	if m.transportTransitionPending {
+		t.Fatal("expected transition to clear on timeout")
+	}
+	if !m.transportRecoveryPending {
+		t.Fatal("expected recovery pending after stuck transition")
+	}
+	if m.transportStuckCount != 1 {
+		t.Fatalf("expected stuck count to increment, got %d", m.transportStuckCount)
 	}
 }
