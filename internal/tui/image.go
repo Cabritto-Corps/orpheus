@@ -1,17 +1,22 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"image"
 	"image/color"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"orpheus/internal/cache"
+	"orpheus/internal/infra/ports"
 )
 
 type coverKey struct {
@@ -21,38 +26,49 @@ type coverKey struct {
 }
 
 type imgCache struct {
-	mu        sync.RWMutex
-	imgs      map[string]image.Image
-	covers    map[coverKey]string
-	inflight  map[string]struct{}
-	rendering map[coverKey]chan struct{}
+	mu         sync.RWMutex
+	imgs       *cache.LRU[string, image.Image]
+	covers     *cache.LRU[coverKey, string]
+	inflight   map[string]struct{}
+	rendering  map[coverKey]chan struct{}
+	stats      imageCacheStats
+}
+
+type imageCacheStats struct {
+	imageHit         uint64
+	imageMiss        uint64
+	loadStarted      uint64
+	loadSkipCached   uint64
+	loadSkipInflight uint64
 }
 
 func newImgCache() *imgCache {
 	return &imgCache{
-		imgs:      make(map[string]image.Image),
-		covers:    make(map[coverKey]string),
-		inflight:  make(map[string]struct{}),
-		rendering: make(map[coverKey]chan struct{}),
+		imgs:       cache.NewLRU[string, image.Image](maxCachedImages),
+		covers:     cache.NewLRU[coverKey, string](maxCachedCoverRenders),
+		inflight:   make(map[string]struct{}),
+		rendering:  make(map[coverKey]chan struct{}),
 	}
 }
 
 func (c *imgCache) getImage(url string) (image.Image, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	img, ok := c.imgs[url]
-	return img, ok
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.imgs.Get(url)
 }
 
 func (c *imgCache) setImage(url string, img image.Image) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.imgs[url] = img
+	evictedURL, _, evicted := c.imgs.Set(url, img)
+	if evicted {
+		c.deleteCoversForURLLocked(evictedURL)
+	}
 }
 
 func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
 	c.mu.RLock()
-	img, ok := c.imgs[url]
+	img, ok := c.imgs.Peek(url)
 	c.mu.RUnlock()
 	if !ok {
 		return
@@ -64,15 +80,18 @@ func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
 		}
 		key := coverKey{url: url, cols: cols, rows: rows}
 		c.mu.RLock()
-		_, already := c.covers[key]
+		_, already := c.covers.Peek(key)
 		c.mu.RUnlock()
 		if already {
+			c.mu.Lock()
+			_, _ = c.covers.Get(key)
+			c.mu.Unlock()
 			continue
 		}
 		s := renderHalfBlock(img, cols, rows)
 		c.mu.Lock()
-		if _, exists := c.covers[key]; !exists {
-			c.covers[key] = s
+		if _, exists := c.covers.Peek(key); !exists {
+			c.covers.Set(key, s)
 		}
 		c.mu.Unlock()
 	}
@@ -84,13 +103,41 @@ func (c *imgCache) beginLoad(url string) bool {
 	if url == "" {
 		return false
 	}
-	if _, ok := c.imgs[url]; ok {
+	if _, ok := c.imgs.Peek(url); ok {
+		c.stats.loadSkipCached++
+		return false
+	}
+	if _, ok := c.inflight[url]; ok {
+		c.stats.loadSkipInflight++
+		return false
+	}
+	c.inflight[url] = struct{}{}
+	c.stats.loadStarted++
+	return true
+}
+
+func (c *imgCache) snapshotStats() imageCacheStats {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	lruStats := c.imgs.Stats()
+	out := c.stats
+	out.imageHit = lruStats.Hits
+	out.imageMiss = lruStats.Misses
+	return out
+}
+
+func (c *imgCache) shouldQueueLoad(url string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if url == "" {
+		return false
+	}
+	if _, ok := c.imgs.Peek(url); ok {
 		return false
 	}
 	if _, ok := c.inflight[url]; ok {
 		return false
 	}
-	c.inflight[url] = struct{}{}
 	return true
 }
 
@@ -98,6 +145,12 @@ func (c *imgCache) finishLoad(url string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.inflight, url)
+}
+
+func (c *imgCache) invalidateCovers() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.covers.Clear()
 }
 
 func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
@@ -108,11 +161,11 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 	key := coverKey{url: url, cols: cols, rows: rows}
 	for {
 		c.mu.Lock()
-		if s, ok := c.covers[key]; ok {
+		if s, ok := c.covers.Get(key); ok {
 			c.mu.Unlock()
 			return s, true
 		}
-		img, ok := c.imgs[url]
+		img, ok := c.imgs.Peek(url)
 		if !ok {
 			c.mu.Unlock()
 			return "", false
@@ -130,19 +183,32 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 
 		c.mu.Lock()
 		delete(c.rendering, key)
-		if existing, ok := c.covers[key]; ok {
+		if existing, ok := c.covers.Get(key); ok {
 			c.mu.Unlock()
 			close(ch)
 			return existing, true
 		}
-		c.covers[key] = s
+		c.covers.Set(key, s)
 		c.mu.Unlock()
 		close(ch)
 		return s, true
 	}
 }
 
-const imageFetchTimeout = 6 * time.Second
+const (
+	imageFetchTimeout     = 6 * time.Second
+	maxCachedImages       = 256
+	maxCachedCoverRenders = 512
+)
+
+func (c *imgCache) deleteCoversForURLLocked(url string) {
+	for _, key := range c.covers.Keys() {
+		if key.url != url {
+			continue
+		}
+		c.covers.Delete(key)
+	}
+}
 
 var imageHTTPClient = &http.Client{
 	Transport: &http.Transport{
@@ -158,12 +224,13 @@ var imageHTTPClient = &http.Client{
 	},
 }
 
-func fetchImageFromBytes(ctx context.Context, url string) (image.Image, error) {
+type httpImageProvider struct{}
+
+func (httpImageProvider) Fetch(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build image request: %w", err)
 	}
-
 	resp, err := imageHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch image: %w", err)
@@ -172,8 +239,21 @@ func fetchImageFromBytes(ctx context.Context, url string) (image.Image, error) {
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("fetch image: unexpected status %s", resp.Status)
 	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read image body: %w", err)
+	}
+	return body, nil
+}
 
-	img, _, err := image.Decode(resp.Body)
+var imageProvider ports.ImageProvider = httpImageProvider{}
+
+func fetchImage(ctx context.Context, url string) (image.Image, error) {
+	body, err := imageProvider.Fetch(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	img, _, err := image.Decode(bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("decode image: %w", err)
 	}

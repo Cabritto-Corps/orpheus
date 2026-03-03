@@ -37,12 +37,6 @@ var (
 
 	styleHeaderVolume = lipgloss.NewStyle().
 				Foreground(colorGray)
-
-	styleHeaderDevice = lipgloss.NewStyle().
-				Foreground(colorMutedBlue)
-
-	styleHeaderNowPlaying = lipgloss.NewStyle().
-				Foreground(colorGray)
 )
 
 var (
@@ -75,16 +69,9 @@ func verticalDivider(h int) string {
 }
 
 var (
-	styleCoverPlaceholder = lipgloss.NewStyle().
-				Foreground(colorMutedBlue).
-				Italic(true)
-
 	stylePlaylistName = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(colorOffWhite)
-
-	stylePlaylistMeta = lipgloss.NewStyle().
-				Foreground(colorMutedBlue)
 
 	stylePlaylistOwner = lipgloss.NewStyle().
 				Foreground(colorBlue)
@@ -103,10 +90,6 @@ var (
 )
 
 var (
-	styleSectionTitle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(colorBlue)
-
 	styleQueueHeader = lipgloss.NewStyle().
 				Foreground(colorMutedBlue)
 
@@ -117,9 +100,6 @@ var (
 	styleQueueCurrentArtist = lipgloss.NewStyle().
 				Foreground(colorBlueLight)
 
-	styleQueueCurrentDur = lipgloss.NewStyle().
-				Foreground(colorBlueLight)
-
 	styleQueueIndex = lipgloss.NewStyle().
 			Foreground(colorMutedBlue)
 
@@ -128,30 +108,11 @@ var (
 
 	styleQueueArtist = lipgloss.NewStyle().
 				Foreground(colorMutedBlue)
-
-	styleQueueDuration = lipgloss.NewStyle().
-				Foreground(colorMutedBlue)
 )
 
 var (
-	stylePlayerSeparator = lipgloss.NewStyle().
-				Foreground(colorDivider)
-
-	stylePlayerTrack = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(colorOffWhite)
-
-	stylePlayerArtist = lipgloss.NewStyle().
-				Foreground(colorBlue)
-
 	stylePlayerTime = lipgloss.NewStyle().
-			Foreground(colorMutedBlue)
-
-	stylePlayerVolume = lipgloss.NewStyle().
-				Foreground(colorGray)
-
-	stylePlayerVolIcon = lipgloss.NewStyle().
-				Foreground(colorBlue)
+		Foreground(colorMutedBlue)
 )
 
 var (

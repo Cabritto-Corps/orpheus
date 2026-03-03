@@ -54,11 +54,12 @@ type actionReconcileMsg struct {
 }
 
 type playlistsMsg struct {
-	items   []spotify.PlaylistSummary
-	offset  int
-	limit   int
-	hasMore bool
-	err     error
+	items           []spotify.PlaylistSummary
+	offset          int
+	limit           int
+	hasMore         bool
+	albumsForbidden bool
+	err             error
 }
 
 type playlistTracksMsg struct {
@@ -74,6 +75,11 @@ type playlistTracksMsg struct {
 type imageLoadedMsg struct {
 	url string
 	err error
+}
+
+type imageRetryMsg struct {
+	url   string
+	token int
 }
 
 type tickMsg time.Time
@@ -308,26 +314,53 @@ func (m model) loadPlaylistsCmd(offset, limit int) tea.Cmd {
 		defer cancel()
 		if offset == 0 {
 			all := make([]spotify.PlaylistSummary, 0, playlistAPIPageSize)
-			pageOffset := 0
-			for {
-				page, err := catalog.ListUserPlaylistsPage(ctx, pageOffset, playlistAPIPageSize)
-				if err != nil {
-					return playlistsMsg{offset: 0, limit: limit, err: err}
+			playlistOffset := 0
+			albumOffset := 0
+			playlistMore := true
+			albumMore := true
+			albumsForbidden := false
+
+			for len(all) < playlistLoadMax && (playlistMore || albumMore) {
+				remaining := playlistLoadMax - len(all)
+				pageSize := min(playlistAPIPageSize, remaining)
+				if playlistMore && pageSize > 0 {
+					page, err := catalog.ListUserPlaylistsPage(ctx, playlistOffset, pageSize)
+					if err != nil {
+						return playlistsMsg{offset: 0, limit: limit, err: err}
+					}
+					if len(page.Items) > 0 {
+						all = append(all, page.Items...)
+					}
+					playlistMore = page.HasMore && len(page.Items) > 0
+					playlistOffset = page.NextOffset
 				}
-				all = append(all, page.Items...)
-				if !page.HasMore || len(page.Items) == 0 {
-					break
-				}
-				pageOffset = page.NextOffset
-				if len(all) >= playlistLoadMax {
-					break
+
+				remaining = playlistLoadMax - len(all)
+				pageSize = min(playlistAPIPageSize, remaining)
+				if albumMore && pageSize > 0 {
+					page, err := catalog.ListSavedAlbumsPage(ctx, albumOffset, pageSize)
+					if err != nil {
+						if spotify.IsForbidden(err) {
+							albumsForbidden = true
+							albumMore = false
+						} else {
+							return playlistsMsg{offset: 0, limit: limit, err: err}
+						}
+					} else {
+						if len(page.Items) > 0 {
+							all = append(all, page.Items...)
+						}
+						albumMore = page.HasMore && len(page.Items) > 0
+						albumOffset = page.NextOffset
+					}
 				}
 			}
 			return playlistsMsg{
-				items:   all,
-				offset:  0,
-				limit:   len(all),
-				hasMore: false,
+				items:           all,
+				offset:          0,
+				limit:           len(all),
+				hasMore:         false,
+				albumsForbidden: albumsForbidden,
 			}
 		}
 		page, err := catalog.ListUserPlaylistsPage(ctx, offset, limit)
@@ -390,7 +423,7 @@ func (m model) loadImageCmd(url string) tea.Cmd {
 			return imageLoadedMsg{url: url}
 		}
 
-		img, err := fetchImageFromBytes(ctx, url)
+		img, err := fetchImage(ctx, url)
 		if err != nil {
 			return imageLoadedMsg{url: url, err: err}
 		}
@@ -407,6 +440,16 @@ func (m model) tickCmd() tea.Cmd {
 func (m model) navDebounceCmd(token int) tea.Cmd {
 	return tea.Tick(navDebounceInterval, func(time.Time) tea.Msg {
 		return navDebounceMsg{token: token}
+	})
+}
+
+func (m model) imageRetryCmd(url string, attempt int, token int) tea.Cmd {
+	delay := time.Duration(attempt) * 200 * time.Millisecond
+	if delay > 1200*time.Millisecond {
+		delay = 1200 * time.Millisecond
+	}
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return imageRetryMsg{url: url, token: token}
 	})
 }
 

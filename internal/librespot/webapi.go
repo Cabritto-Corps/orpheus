@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/devgianlu/go-librespot/session"
@@ -154,11 +155,100 @@ func (c *playlistCatalog) ListUserPlaylistsPage(ctx context.Context, offset, lim
 			ID:            pl.ID,
 			Name:          pl.Name,
 			URI:           pl.URI,
+			Kind:          spotify.ContextKindPlaylist,
 			Owner:         pl.Owner.DisplayName,
 			OwnerID:       pl.Owner.ID,
 			Collaborative: pl.Collaborative,
 			TrackCount:    pl.Tracks.Total,
 			ImageURL:      imageURL,
+		})
+	}
+	out.NextOffset = offset + len(out.Items)
+	out.HasMore = raw.Next != nil && *raw.Next != ""
+	return out, nil
+}
+
+func (c *playlistCatalog) ListSavedAlbumsPage(ctx context.Context, offset, limit int) (*spotify.PlaylistPage, error) {
+	if offset < 0 {
+		return nil, fmt.Errorf("album offset must be >= 0")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	q := url.Values{}
+	q.Set("limit", strconv.Itoa(limit))
+	q.Set("offset", strconv.Itoa(offset))
+	resp, err := c.doWith429Retry(ctx, "GET", "v1/me/albums", q, nil)
+	if err != nil {
+		return nil, fmt.Errorf("webapi albums: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("webapi albums: %d %s", resp.StatusCode, string(body))
+	}
+
+	var raw struct {
+		Items []struct {
+			Album struct {
+				ID          string `json:"id"`
+				Name        string `json:"name"`
+				URI         string `json:"uri"`
+				TotalTracks int    `json:"total_tracks"`
+				Artists     []struct {
+					Name string `json:"name"`
+				} `json:"artists"`
+				Images []struct {
+					URL string `json:"url"`
+				} `json:"images"`
+			} `json:"album"`
+		} `json:"items"`
+		Next *string `json:"next"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decode albums: %w", err)
+	}
+
+	out := &spotify.PlaylistPage{
+		Offset: offset,
+		Limit:  limit,
+	}
+	if len(raw.Items) == 0 {
+		out.NextOffset = offset
+		return out, nil
+	}
+	out.Items = make([]spotify.PlaylistSummary, 0, len(raw.Items))
+	for _, item := range raw.Items {
+		album := item.Album
+		if album.ID == "" || album.URI == "" {
+			continue
+		}
+		imageURL := ""
+		if len(album.Images) > 0 {
+			imageURL = album.Images[0].URL
+		}
+		artists := make([]string, 0, len(album.Artists))
+		for _, a := range album.Artists {
+			if name := strings.TrimSpace(a.Name); name != "" {
+				artists = append(artists, name)
+			}
+		}
+		owner := strings.Join(artists, ", ")
+		if owner == "" {
+			owner = "Unknown artist"
+		}
+		out.Items = append(out.Items, spotify.PlaylistSummary{
+			ID:         album.ID,
+			Name:       album.Name,
+			URI:        album.URI,
+			Kind:       spotify.ContextKindAlbum,
+			Owner:      owner,
+			TrackCount: album.TotalTracks,
+			ImageURL:   imageURL,
 		})
 	}
 	out.NextOffset = offset + len(out.Items)

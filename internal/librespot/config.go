@@ -8,26 +8,26 @@ import (
 )
 
 type Config struct {
-	ConfigDir         string
-	DeviceId          string
-	DeviceName        string
-	DeviceType        string
-	ClientToken       string
-	AudioBackend      string
-	AudioDevice       string
-	MixerDevice       string
-	MixerControlName  string
-	Bitrate           int
-	VolumeSteps       uint32
-	InitialVolume     uint32
-	IgnoreLastVolume  bool
-	ExternalVolume    bool
-	DisableAutoplay   bool
-	FlacEnabled       bool
-	ImageSize         string
-	ZeroconfEnabled   bool
-	AudioBufferTime   int
-	AudioPeriodCount  int
+	ConfigDir        string
+	DeviceId         string
+	DeviceName       string
+	DeviceType       string
+	ClientToken      string
+	AudioBackend     string
+	AudioDevice      string
+	MixerDevice      string
+	MixerControlName string
+	Bitrate          int
+	VolumeSteps      uint32
+	InitialVolume    uint32
+	IgnoreLastVolume bool
+	ExternalVolume   bool
+	DisableAutoplay  bool
+	FlacEnabled      bool
+	ImageSize        string
+	ZeroconfEnabled  bool
+	AudioBufferTime  int
+	AudioPeriodCount int
 }
 
 func DefaultConfig() *Config {
@@ -35,7 +35,7 @@ func DefaultConfig() *Config {
 		DeviceName:       "orpheus",
 		DeviceType:       "computer",
 		AudioBackend:     "pulseaudio",
-		AudioDevice:     "default",
+		AudioDevice:      "default",
 		Bitrate:          160,
 		VolumeSteps:      100,
 		InitialVolume:    100,
@@ -55,15 +55,15 @@ func NewRuntime(cfg *Config, appState *golibrespot.AppState, log golibrespot.Log
 	if err != nil {
 		return nil, err
 	}
-	deviceId := cfg.DeviceId
-	if deviceId == "" && appState != nil {
-		deviceId = appState.DeviceId
+	deviceID := cfg.DeviceId
+	if deviceID == "" && appState != nil {
+		deviceID = appState.DeviceId
 	}
 	return &Runtime{
 		Log:             log,
 		Cfg:             cfg,
 		Client:          &http.Client{Timeout: 30 * time.Second},
-		DeviceId:        deviceId,
+		DeviceId:        deviceID,
 		DeviceType:      deviceType,
 		State:           appState,
 		StateCh:         stateCh,

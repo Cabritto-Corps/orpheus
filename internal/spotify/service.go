@@ -3,12 +3,10 @@ package spotify
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +34,7 @@ type API interface {
 	PlayerState(ctx context.Context, opts ...spotifyapi.RequestOption) (*spotifyapi.PlayerState, error)
 	CurrentUser(ctx context.Context) (*spotifyapi.PrivateUser, error)
 	CurrentUsersPlaylists(ctx context.Context, opts ...spotifyapi.RequestOption) (*spotifyapi.SimplePlaylistPage, error)
+	CurrentUsersAlbums(ctx context.Context, opts ...spotifyapi.RequestOption) (*spotifyapi.SavedAlbumPage, error)
 	GetPlaylistItems(ctx context.Context, playlistID spotifyapi.ID, opts ...spotifyapi.RequestOption) (*spotifyapi.PlaylistItemPage, error)
 	GetQueue(ctx context.Context) (*spotifyapi.Queue, error)
 	TransferPlayback(ctx context.Context, deviceID spotifyapi.ID, play bool) error
@@ -59,12 +58,17 @@ const (
 	deviceLookupRetryDelay                  = 150 * time.Millisecond
 	deviceLookupRetryWindow                 = 900 * time.Millisecond
 	deviceActivationPollInterval            = 150 * time.Millisecond
+	deviceActivationWaitTimeout             = 2 * time.Second
 	transferInitialRetryDelay               = 150 * time.Millisecond
+	transferMaxAttempts                     = 3
 	// apiRetryMaxAttempts bounds 5xx server-error retries only; rate limits
 	// are handled transparently by rateLimitTransport before reaching here.
 	apiRetryInitialDelay = 250 * time.Millisecond
 	apiRetryMaxDelay     = 8 * time.Second
 	apiRetryMaxAttempts  = 4 // total backoff ≤ 250ms+500ms+1s+2s ≈ 4 s
+	apiRetryExponentCap  = 5
+	rateLimitRetryDelay  = 5 * time.Second
+	pollStatusBackoffMax = 10 * time.Second
 )
 
 type Options struct {
@@ -124,6 +128,7 @@ type PlaylistSummary struct {
 	ID            string
 	Name          string
 	URI           string
+	Kind          string
 	Owner         string
 	OwnerID       string
 	Collaborative bool
@@ -150,9 +155,15 @@ type PlaylistTrackPage struct {
 
 type PlaylistCatalog interface {
 	ListUserPlaylistsPage(ctx context.Context, offset, limit int) (*PlaylistPage, error)
+	ListSavedAlbumsPage(ctx context.Context, offset, limit int) (*PlaylistPage, error)
 	ListPlaylistTrackIDsPage(ctx context.Context, playlistID string, offset, limit int) (*PlaylistTrackPage, error)
 	CurrentUserID(ctx context.Context) (string, error)
 }
+
+const (
+	ContextKindPlaylist = "playlist"
+	ContextKindAlbum    = "album"
+)
 
 type DeviceDoctorReport struct {
 	TargetDevice string
@@ -374,7 +385,7 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 		}
 
 		// Parse Retry-After (fall back to 5 s if absent or unparseable).
-		delay := 5 * time.Second
+		delay := rateLimitRetryDelay
 		if raw := resp.Header.Get("Retry-After"); raw != "" {
 			if secs, parseErr := strconv.ParseInt(strings.TrimSpace(raw), 10, 32); parseErr == nil && secs > 0 {
 				delay = time.Duration(secs) * time.Second
@@ -440,94 +451,6 @@ func NewItemsHTTPClient(tokenSource oauth2.TokenSource) *http.Client {
 	}
 }
 
-func (s *Service) FindDeviceByName(ctx context.Context, target string) (*spotifyapi.PlayerDevice, error) {
-	devices, err := s.getPlayerDevices(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch spotify devices: %w", err)
-	}
-	device, _, err := s.resolveDevice(target, devices)
-	if err == nil || !errors.Is(err, ErrDeviceNotFound) {
-		return device, err
-	}
-	deadline := time.Now().Add(deviceLookupRetryWindow)
-	for {
-		devices, err = s.refreshPlayerDevices(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("fetch spotify devices: %w", err)
-		}
-		device, _, err = s.resolveDevice(target, devices)
-		if err == nil || !errors.Is(err, ErrDeviceNotFound) {
-			return device, err
-		}
-		if time.Now().After(deadline) {
-			return nil, err
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(deviceLookupRetryDelay):
-		}
-	}
-}
-
-func (s *Service) DeviceDoctor(ctx context.Context, target string) (*DeviceDoctorReport, error) {
-	devices, err := s.getPlayerDevices(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch spotify devices: %w", err)
-	}
-	report := &DeviceDoctorReport{
-		TargetDevice: target,
-		Mode:         s.mode,
-		Discovered:   make([]string, 0, len(devices)),
-	}
-	for _, d := range devices {
-		report.Discovered = append(report.Discovered, fmt.Sprintf("%s (active=%t restricted=%t)", d.Name, d.Active, d.Restricted))
-	}
-	device, matchedBy, resolveErr := s.resolveDevice(target, devices)
-	if resolveErr != nil {
-		report.Notes = append(report.Notes, "No device match. Check that the target device is running and spotify_device_name matches.")
-		return report, resolveErr
-	}
-	report.MatchedBy = matchedBy
-	report.MatchedName = device.Name
-	if device.Restricted {
-		report.Notes = append(report.Notes, "Matched device is restricted and cannot receive commands.")
-	}
-	if !device.Active {
-		report.Notes = append(report.Notes, "Device is discoverable but not active; transfer will be attempted on play actions.")
-	}
-	return report, nil
-}
-
-func (s *Service) EnsureDeviceActive(ctx context.Context, target string) (*spotifyapi.PlayerDevice, error) {
-	device, err := s.FindDeviceByName(ctx, target)
-	if err != nil {
-		return nil, err
-	}
-	if device.Restricted {
-		return nil, errors.New("spotify device is restricted")
-	}
-	if device.Active {
-		return device, nil
-	}
-	if err := s.transferWithRetry(ctx, device.ID); err != nil {
-		return nil, fmt.Errorf("transfer playback to %q: %w", target, err)
-	}
-	if err := s.waitForDeviceActive(ctx, device.ID); err != nil {
-		return nil, err
-	}
-	device.Active = true
-	return device, nil
-}
-
-func (s *Service) ListDevices(ctx context.Context) ([]spotifyapi.PlayerDevice, error) {
-	devices, err := s.getPlayerDevices(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch spotify devices: %w", err)
-	}
-	return devices, nil
-}
-
 func (s *Service) Status(ctx context.Context) (*PlaybackStatus, error) {
 	state, err := s.playerStateWithRetry(ctx)
 	if err != nil {
@@ -580,445 +503,10 @@ func (s *Service) GetQueue(ctx context.Context) ([]QueueItem, error) {
 	return out, nil
 }
 
-func (s *Service) Play(ctx context.Context, target string) error {
-	return s.withDeviceCommand(ctx, target, func(deviceID spotifyapi.ID) error {
-		err := s.client.PlayOpt(ctx, &spotifyapi.PlayOptions{DeviceID: &deviceID})
-		if err == nil {
-			return nil
-		}
-		var apiErr spotifyapi.Error
-		if errors.As(err, &apiErr) && (apiErr.Status == 403 || apiErr.Status == 404) {
-			state, stateErr := s.playerStateWithRetry(ctx)
-			if stateErr == nil && (state == nil || state.Item == nil) {
-				return ErrNoPlaybackContext
-			}
-		}
-		return err
-	})
-}
-
-func (s *Service) Pause(ctx context.Context, target string) error {
-	return s.withDeviceCommand(ctx, target, func(deviceID spotifyapi.ID) error {
-		return s.client.PauseOpt(ctx, &spotifyapi.PlayOptions{DeviceID: &deviceID})
-	})
-}
-
-func (s *Service) Next(ctx context.Context, target string) error {
-	return s.withDeviceCommand(ctx, target, func(deviceID spotifyapi.ID) error {
-		return s.client.NextOpt(ctx, &spotifyapi.PlayOptions{DeviceID: &deviceID})
-	})
-}
-
-func (s *Service) Previous(ctx context.Context, target string) error {
-	return s.withDeviceCommand(ctx, target, func(deviceID spotifyapi.ID) error {
-		return s.client.PreviousOpt(ctx, &spotifyapi.PlayOptions{DeviceID: &deviceID})
-	})
-}
-
-func (s *Service) SetVolume(ctx context.Context, target string, volume int) error {
-	if volume < 0 || volume > 100 {
-		return errors.New("volume must be in range 0..100")
-	}
-	return s.withDeviceCommand(ctx, target, func(deviceID spotifyapi.ID) error {
-		return s.client.VolumeOpt(ctx, volume, &spotifyapi.PlayOptions{DeviceID: &deviceID})
-	})
-}
-
-func (s *Service) Seek(ctx context.Context, target string, positionMS int) error {
-	if positionMS < 0 {
-		return errors.New("position must be >= 0")
-	}
-	return s.withDeviceCommand(ctx, target, func(deviceID spotifyapi.ID) error {
-		return s.client.SeekOpt(ctx, positionMS, &spotifyapi.PlayOptions{DeviceID: &deviceID})
-	})
-}
-
-func (s *Service) Shuffle(ctx context.Context, target string, shuffle bool) error {
-	return s.withDeviceCommand(ctx, target, func(deviceID spotifyapi.ID) error {
-		return s.client.ShuffleOpt(ctx, shuffle, &spotifyapi.PlayOptions{DeviceID: &deviceID})
-	})
-}
-
-func (s *Service) SetRepeat(ctx context.Context, target string, state string) error {
-	state = strings.ToLower(strings.TrimSpace(state))
-	if state != "off" && state != "context" && state != "track" {
-		return errors.New("repeat state must be one of off, context, track")
-	}
-	return s.withDeviceCommand(ctx, target, func(deviceID spotifyapi.ID) error {
-		return s.client.RepeatOpt(ctx, state, &spotifyapi.PlayOptions{DeviceID: &deviceID})
-	})
-}
-
-func (s *Service) ListUserPlaylists(ctx context.Context, max int) ([]PlaylistSummary, error) {
-	if max <= 0 {
-		max = 100
-	}
-
-	const pageSize = 50
-	offset := 0
-	out := make([]PlaylistSummary, 0, min(max, pageSize))
-	for len(out) < max {
-		limit := min(pageSize, max-len(out))
-		page, err := s.ListUserPlaylistsPage(ctx, offset, limit)
-		if err != nil {
-			return nil, err
-		}
-		if len(page.Items) == 0 {
-			break
-		}
-		out = append(out, page.Items...)
-		if !page.HasMore || page.NextOffset <= offset {
-			break
-		}
-		offset = page.NextOffset
-	}
-	return out, nil
-}
-
-func (s *Service) ListUserPlaylistsPage(ctx context.Context, offset, limit int) (*PlaylistPage, error) {
-	if offset < 0 {
-		return nil, errors.New("playlist offset must be >= 0")
-	}
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 50 {
-		limit = 50
-	}
-
-	page, err := apiCallWithRetry(ctx, func() (*spotifyapi.SimplePlaylistPage, error) {
-		return s.client.CurrentUsersPlaylists(ctx, spotifyapi.Limit(limit), spotifyapi.Offset(offset))
-	})
-	if err != nil {
-		return nil, fmt.Errorf("fetch user playlists: %w", err)
-	}
-
-	out := &PlaylistPage{
-		Offset: offset,
-		Limit:  limit,
-	}
-	if page == nil || len(page.Playlists) == 0 {
-		out.NextOffset = offset
-		return out, nil
-	}
-	out.Items = make([]PlaylistSummary, 0, len(page.Playlists))
-	for _, pl := range page.Playlists {
-		imageURL := ""
-		if len(pl.Images) > 0 {
-			imageURL = pl.Images[0].URL
-		}
-		out.Items = append(out.Items, PlaylistSummary{
-			ID:            string(pl.ID),
-			Name:          pl.Name,
-			URI:           string(pl.URI),
-			Owner:         pl.Owner.DisplayName,
-			OwnerID:       pl.Owner.ID,
-			Collaborative: pl.Collaborative,
-			TrackCount:    int(pl.Tracks.Total),
-			ImageURL:      imageURL,
-		})
-	}
-	out.NextOffset = offset + len(out.Items)
-	out.HasMore = len(out.Items) >= limit
-	return out, nil
-}
-
-func (s *Service) ListPlaylistTrackIDs(ctx context.Context, playlistID string, max int) ([]string, error) {
-	playlistID = strings.TrimSpace(playlistID)
-	if playlistID == "" {
-		return nil, errors.New("playlist ID must not be empty")
-	}
-	if max <= 0 {
-		max = 500
-	}
-
-	const pageSize = 100
-	offset := 0
-	out := make([]string, 0, min(max, pageSize))
-	for len(out) < max {
-		limit := min(pageSize, max-len(out))
-		page, err := s.ListPlaylistTrackIDsPage(ctx, playlistID, offset, limit)
-		if err != nil {
-			return nil, err
-		}
-		if len(page.TrackIDs) > 0 {
-			out = append(out, page.TrackIDs...)
-		}
-		if !page.HasMore || page.NextOffset <= offset {
-			break
-		}
-		offset = page.NextOffset
-	}
-	return out, nil
-}
-
-func (s *Service) ListPlaylistTrackIDsPage(ctx context.Context, playlistID string, offset, limit int) (*PlaylistTrackPage, error) {
-	playlistID = strings.TrimSpace(playlistID)
-	if playlistID == "" {
-		return nil, errors.New("playlist ID must not be empty")
-	}
-	if offset < 0 {
-		return nil, errors.New("playlist offset must be >= 0")
-	}
-	if limit <= 0 {
-		limit = 100
-	}
-	if limit > 100 {
-		limit = 100
-	}
-
-	fetch := func() (*spotifyapi.PlaylistItemPage, error) {
-		if s.itemsHTTPClient != nil {
-			return s.fetchPlaylistItemsViaItemsEndpoint(ctx, playlistID, offset, limit)
-		}
-		return s.client.GetPlaylistItems(ctx, spotifyapi.ID(playlistID), spotifyapi.Limit(limit), spotifyapi.Offset(offset))
-	}
-	page, err := apiCallWithRetry(ctx, fetch)
-	if err != nil {
-		return nil, fmt.Errorf("fetch playlist tracks: %w", err)
-	}
-
-	out := &PlaylistTrackPage{
-		Offset: offset,
-		Limit:  limit,
-	}
-	if page == nil || len(page.Items) == 0 {
-		out.NextOffset = offset
-		return out, nil
-	}
-
-	out.TrackIDs = make([]string, 0, len(page.Items))
-	out.TrackInfos = make([]QueueItem, 0, len(page.Items))
-	for _, item := range page.Items {
-		if item.Track.Track == nil || item.Track.Track.ID == "" {
-			continue
-		}
-		t := item.Track.Track
-		qi := QueueItem{ID: string(t.ID), Name: t.Name, DurationMS: int(t.Duration)}
-		if len(t.Artists) > 0 {
-			qi.Artist = t.Artists[0].Name
-		}
-		out.TrackIDs = append(out.TrackIDs, string(t.ID))
-		out.TrackInfos = append(out.TrackInfos, qi)
-	}
-	out.NextOffset = offset + len(page.Items)
-	out.HasMore = len(page.Items) >= limit
-	return out, nil
-}
-
-func (s *Service) fetchPlaylistItemsViaItemsEndpoint(ctx context.Context, playlistID string, offset, limit int) (*spotifyapi.PlaylistItemPage, error) {
-	u := spotifyAPIBase + "playlists/" + url.PathEscape(playlistID) + "/items?"
-	params := url.Values{}
-	params.Set("limit", strconv.Itoa(limit))
-	params.Set("offset", strconv.Itoa(offset))
-	u += params.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	resp, err := s.itemsHTTPClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, &httpStatusError{status: resp.StatusCode, err: fmt.Errorf("playlist items: %s", strings.TrimSpace(string(body)))}
-	}
-	var page spotifyapi.PlaylistItemPage
-	if err := json.Unmarshal(body, &page); err != nil {
-		return nil, fmt.Errorf("decode playlist items: %w", err)
-	}
-	return &page, nil
-}
-
-func (s *Service) PlayPlaylist(ctx context.Context, target, playlistURI string) error {
-	if strings.TrimSpace(playlistURI) == "" {
-		return errors.New("playlist URI must not be empty")
-	}
-
-	device, err := s.FindDeviceByName(ctx, target)
-	if err != nil {
-		return err
-	}
-
-	uri := spotifyapi.URI(playlistURI)
-	return s.client.PlayOpt(ctx, &spotifyapi.PlayOptions{
-		DeviceID:        &device.ID,
-		PlaybackContext: &uri,
-	})
-}
-
-func (s *Service) QueueTracks(ctx context.Context, target string, trackIDs []string) ([]string, error) {
-	if len(trackIDs) == 0 {
-		return nil, nil
-	}
-	device, err := s.EnsureDeviceActive(ctx, target)
-	if err != nil {
-		return nil, err
-	}
-	queued := make([]string, 0, len(trackIDs))
-	for _, trackID := range trackIDs {
-		trackID = strings.TrimSpace(trackID)
-		id := spotifyapi.ID(trackID)
-		if id == "" {
-			continue
-		}
-		if err := s.client.QueueSongOpt(ctx, id, &spotifyapi.PlayOptions{DeviceID: &device.ID}); err != nil {
-			return queued, fmt.Errorf("queue track %q: %w", trackID, err)
-		}
-		queued = append(queued, trackID)
-	}
-	return queued, nil
-}
-
-func IsTransientAPIError(err error) bool {
-	var apiErr spotifyapi.Error
-	if errors.As(err, &apiErr) {
-		return apiErr.Status == 429 || apiErr.Status >= 500
-	}
-	var statusErr *httpStatusError
-	if errors.As(err, &statusErr) {
-		return statusErr.status == 429 || statusErr.status >= 500
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "too many requests") || strings.Contains(msg, "rate limit")
-}
-
-// IsRateLimitError reports whether err is a Spotify 429 / rate-limit error.
-func IsRateLimitError(err error) bool {
-	return isRateLimitError(err)
-}
-
-func IsForbidden(err error) bool {
-	var apiErr spotifyapi.Error
-	if errors.As(err, &apiErr) && apiErr.Status == 403 {
-		return true
-	}
-	var statusErr *httpStatusError
-	if errors.As(err, &statusErr) && statusErr.status == 403 {
-		return true
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "forbidden")
-}
-
-func HTTPStatusFromError(err error) (status int, ok bool) {
-	var apiErr spotifyapi.Error
-	if errors.As(err, &apiErr) {
-		return apiErr.Status, true
-	}
-	var statusErr *httpStatusError
-	if errors.As(err, &statusErr) {
-		return statusErr.status, true
-	}
-	return 0, false
-}
-
-func isRetryableAPIError(err error) bool {
-	if IsTransientAPIError(err) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "too many requests") || strings.Contains(msg, "rate limit")
-}
-
-func waitForAPIRetry(ctx context.Context, err error, attempt int) error {
-	wait := retryDelayForAPIError(attempt)
-	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < wait {
-		return err
-	}
-	select {
-	case <-ctx.Done():
-		return err
-	case <-time.After(wait):
-		return nil
-	}
-}
-
-func apiCallWithRetry[T any](ctx context.Context, fn func() (T, error)) (T, error) {
-	var zero T
-	for attempt := 0; ; attempt++ {
-		value, err := fn()
-		if err == nil {
-			return value, nil
-		}
-		if isRetryableAPIError(err) && !isRateLimitError(err) && attempt+1 < apiRetryMaxAttempts {
-			if waitErr := waitForAPIRetry(ctx, err, attempt); waitErr != nil {
-				return zero, waitErr
-			}
-			continue
-		}
-		return zero, err
-	}
-}
-
 func (s *Service) playerStateWithRetry(ctx context.Context) (*spotifyapi.PlayerState, error) {
 	return apiCallWithRetry(ctx, func() (*spotifyapi.PlayerState, error) {
 		return s.client.PlayerState(ctx)
 	})
-}
-
-func (s *Service) withDeviceCommand(ctx context.Context, target string, command func(deviceID spotifyapi.ID) error) error {
-	device, err := s.FindDeviceByName(ctx, target)
-	if err != nil {
-		return err
-	}
-	if device.Restricted {
-		return errors.New("spotify device is restricted")
-	}
-
-	if err := command(device.ID); err != nil {
-		if device.Active || !shouldRetryDeviceCommandAfterTransfer(err) {
-			return err
-		}
-		if err := s.transferWithRetry(ctx, device.ID); err != nil {
-			return fmt.Errorf("transfer playback to %q: %w", target, err)
-		}
-		if err := s.waitForDeviceActive(ctx, device.ID); err != nil {
-			return err
-		}
-		return command(device.ID)
-	}
-	return nil
-}
-
-func shouldRetryDeviceCommandAfterTransfer(err error) bool {
-	var apiErr spotifyapi.Error
-	if errors.As(err, &apiErr) {
-		if apiErr.Status == 404 {
-			return true
-		}
-		if apiErr.Status == 403 {
-			msg := strings.ToLower(apiErr.Message)
-			return strings.Contains(msg, "active device") || strings.Contains(msg, "no active device")
-		}
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "active device") || strings.Contains(msg, "no active device")
-}
-
-func retryDelayForAPIError(attempt int) time.Duration {
-	if attempt < 0 {
-		attempt = 0
-	}
-	wait := apiRetryInitialDelay * time.Duration(1<<min(attempt, 5))
-	if wait > apiRetryMaxDelay {
-		wait = apiRetryMaxDelay
-	}
-	return wait
-}
-
-func isRateLimitError(err error) bool {
-	var apiErr spotifyapi.Error
-	if errors.As(err, &apiErr) && apiErr.Status == 429 {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "too many requests") || strings.Contains(msg, "rate limit")
 }
 
 func PollStatus(ctx context.Context, interval time.Duration, fetch func(context.Context) (*PlaybackStatus, error), onStatus func(*PlaybackStatus), onError func(error)) {
@@ -1036,8 +524,8 @@ func PollStatus(ctx context.Context, interval time.Duration, fetch func(context.
 				onError(err)
 				if IsTransientAPIError(err) {
 					backoff *= 2
-					if backoff > 10*time.Second {
-						backoff = 10 * time.Second
+					if backoff > pollStatusBackoffMax {
+						backoff = pollStatusBackoffMax
 					}
 					timer.Reset(backoff)
 					continue
@@ -1051,117 +539,4 @@ func PollStatus(ctx context.Context, interval time.Duration, fetch func(context.
 			timer.Reset(interval)
 		}
 	}
-}
-
-func (s *Service) resolveDevice(target string, devices []spotifyapi.PlayerDevice) (*spotifyapi.PlayerDevice, string, error) {
-	target = strings.TrimSpace(target)
-	targetLower := strings.ToLower(target)
-
-	for _, device := range devices {
-		if strings.EqualFold(device.Name, target) {
-			d := device
-			return &d, "exact", nil
-		}
-	}
-	if s.mode == DeviceModeRelaxed && targetLower != "" {
-		for _, device := range devices {
-			if strings.Contains(strings.ToLower(device.Name), targetLower) {
-				d := device
-				return &d, "contains", nil
-			}
-		}
-	}
-	if s.mode == DeviceModeRelaxed && s.allowActiveFallback {
-		for _, device := range devices {
-			if device.Active && !device.Restricted {
-				d := device
-				return &d, "active-fallback", nil
-			}
-		}
-	}
-
-	names := make([]string, 0, len(devices))
-	for _, device := range devices {
-		names = append(names, device.Name)
-	}
-	return nil, "", fmt.Errorf("%w: target=%q discovered=%v", ErrDeviceNotFound, target, names)
-}
-
-func (s *Service) waitForDeviceActive(ctx context.Context, deviceID spotifyapi.ID) error {
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		devices, err := s.refreshPlayerDevices(ctx)
-		if err == nil {
-			for _, d := range devices {
-				if d.ID == deviceID && d.Active {
-					return nil
-				}
-			}
-		}
-		time.Sleep(deviceActivationPollInterval)
-	}
-	s.invalidateDeviceCache()
-	return errors.New("device transfer timed out while waiting to become active")
-}
-
-func (s *Service) transferWithRetry(ctx context.Context, deviceID spotifyapi.ID) error {
-	wait := transferInitialRetryDelay
-	for i := 0; i < 3; i++ {
-		err := s.client.TransferPlayback(ctx, deviceID, false)
-		if err == nil {
-			s.invalidateDeviceCache()
-			return nil
-		}
-		s.invalidateDeviceCache()
-		if !IsTransientAPIError(err) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(wait):
-			wait *= 2
-		}
-	}
-	return errors.New("transfer playback failed after retries")
-}
-
-func (s *Service) getPlayerDevices(ctx context.Context) ([]spotifyapi.PlayerDevice, error) {
-	now := time.Now()
-	s.deviceCacheMu.RLock()
-	if s.deviceCacheSet && now.Before(s.deviceCacheExpiry) {
-		devices := append([]spotifyapi.PlayerDevice(nil), s.deviceCacheDevices...)
-		s.deviceCacheMu.RUnlock()
-		return devices, nil
-	}
-	s.deviceCacheMu.RUnlock()
-	return s.refreshPlayerDevices(ctx)
-}
-
-func (s *Service) refreshPlayerDevices(ctx context.Context) ([]spotifyapi.PlayerDevice, error) {
-	devices, err := apiCallWithRetry(ctx, func() ([]spotifyapi.PlayerDevice, error) {
-		return s.client.PlayerDevices(ctx)
-	})
-	if err != nil {
-		s.invalidateDeviceCache()
-		return nil, err
-	}
-	copied := append([]spotifyapi.PlayerDevice(nil), devices...)
-	s.deviceCacheMu.Lock()
-	s.deviceCacheDevices = copied
-	s.deviceCacheExpiry = time.Now().Add(s.deviceCacheTTL)
-	s.deviceCacheSet = true
-	s.deviceCacheMu.Unlock()
-	return copied, nil
-}
-
-func (s *Service) invalidateDeviceCache() {
-	s.deviceCacheMu.Lock()
-	s.deviceCacheDevices = nil
-	s.deviceCacheExpiry = time.Time{}
-	s.deviceCacheSet = false
-	s.deviceCacheMu.Unlock()
 }
