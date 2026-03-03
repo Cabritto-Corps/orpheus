@@ -11,12 +11,12 @@ import (
 
 const (
 	headerH    = 2
-	footerH    = 1
+	tabBarH    = 2
 	playerBarH = 1
 	gapFooterH = 0
 )
 
-const chromeH = headerH + footerH + playerBarH + 1
+const chromeH = headerH + tabBarH + playerBarH + 1
 
 const (
 	iconPlay            = "▶"
@@ -42,21 +42,25 @@ func (m model) View() string {
 
 	header := m.headerView()
 
-	if m.modal {
-		return header + "\n" + m.modalView()
+	if m.helpOpen {
+		return header + "\n" + m.helpModalView()
 	}
 
+	tabBar := m.tabBarView()
+
 	var body string
-	if m.screen == screenPlaylist {
-		body = m.playlistScreenView()
-	} else {
+	switch m.activeTab {
+	case tabPlaylists:
+		body = m.playlistsTabView()
+	case tabAlbums:
+		body = m.albumsTabView()
+	default:
 		body = m.playbackScreenView()
 	}
 
 	bar := m.playerBarView()
-	footer := m.footerView()
 
-	return header + "\n" + body + "\n" + bar + "\n" + footer
+	return header + "\n" + tabBar + "\n" + body + "\n" + bar
 }
 
 func (m model) headerView() string {
@@ -72,12 +76,6 @@ func (m model) headerView() string {
 		} else {
 			statusStr = styleHeaderPaused.Render("[" + pauseIcon + " Paused]")
 		}
-		elapsed := fmtDuration(m.status.ProgressMS)
-		total := "--:--"
-		if m.status.DurationMS > 0 {
-			total = fmtDuration(m.status.DurationMS)
-		}
-		statusStr += "  " + styleHeaderStatus.Render(elapsed+" / "+total)
 
 		volBar := m.headerVolumeBar(m.status.Volume)
 		volText := styleHeaderVolume.Render(fmt.Sprintf("%3d%%", m.status.Volume))
@@ -161,11 +159,30 @@ func (m model) headerVolumeBar(vol int) string {
 		lipgloss.NewStyle().Foreground(colorDivider).Render(strings.Repeat(volChar, w-filled))
 }
 
-func (m model) footerView() string {
-	return m.help.View(m.keys)
+func (m model) tabBarView() string {
+	tabs := []struct {
+		label string
+		t     tab
+	}{
+		{"Playlists", tabPlaylists},
+		{"Albums", tabAlbums},
+		{"Player", tabPlayer},
+	}
+	var parts []string
+	for _, entry := range tabs {
+		if m.activeTab == entry.t {
+			parts = append(parts, styleTabActive.Render(" "+entry.label+" "))
+		} else {
+			parts = append(parts, styleTabInactive.Render(" "+entry.label+" "))
+		}
+	}
+	sep := styleDivider.Render("│")
+	bar := strings.Join(parts, sep)
+	underline := styleDivider.Render(strings.Repeat("─", m.width))
+	return bar + "\n" + underline
 }
 
-func (m model) playlistScreenView() string {
+func (m model) playlistsTabView() string {
 	bodyH := m.height - chromeH - 1
 	leftW, rightW := m.splitWidths()
 
@@ -177,9 +194,11 @@ func (m model) playlistScreenView() string {
 }
 
 func (m model) playlistBrowserPanel(w, h int) string {
-	label := styleSectionLabel.Render("Library")
-	labelLine := label + "\n" + sectionDivider(w-1)
-	innerH := h - 2
+	count := len(m.playlistList.Items())
+	label := styleSectionLabel.Render("Playlists")
+	countStr := styleDimmed.Render(fmt.Sprintf("%d playlists", count))
+	labelLine := label + "\n" + countStr + "\n" + sectionDivider(w-1)
+	innerH := h - 3
 
 	var inner string
 	if m.playlistsErr != nil && len(m.playlistList.Items()) == 0 {
@@ -259,6 +278,72 @@ func (m model) playbackScreenView() string {
 	right := m.queuePanel(rightW-1, bodyH)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
+}
+
+func (m model) albumsTabView() string {
+	bodyH := m.height - chromeH - 1
+	leftW, rightW := m.splitWidths()
+
+	left := m.albumPreviewPanel(leftW-1, bodyH)
+	divider := verticalDivider(bodyH)
+	right := m.albumBrowserPanel(rightW, bodyH)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
+}
+
+func (m model) albumBrowserPanel(w, h int) string {
+	count := len(m.albumList.Items())
+	label := styleSectionLabel.Render("Albums")
+	countStr := styleDimmed.Render(fmt.Sprintf("%d albums", count))
+	labelLine := label + "\n" + countStr + "\n" + sectionDivider(w-1)
+	innerH := h - 3
+
+	var inner string
+	if m.playlistsErr != nil && len(m.albumList.Items()) == 0 {
+		errStr := "failed to load: " + m.playlistsErr.Error()
+		inner = styleError.Render(truncate(errStr, w-2)) + "\n" + styleDimmed.Render("r to retry")
+	} else if m.playlistsLoading && len(m.albumList.Items()) == 0 {
+		inner = styleDimmed.Render("loading albums...")
+	} else if m.albumsForbidden && len(m.albumList.Items()) == 0 {
+		inner = styleDimmed.Render("saved albums unavailable — re-run 'orpheus auth login' (needs user-library-read)")
+	} else {
+		m.albumList.SetSize(w-1, innerH)
+		inner = m.albumList.View()
+	}
+
+	content := labelLine + "\n" + inner
+	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
+}
+
+func (m model) albumPreviewPanel(w, h int) string {
+	label := styleSectionLabel.Render("Preview")
+	labelLine := label + "\n" + sectionDivider(w)
+	innerH := h - 2
+	innerW := w - 2
+
+	coverCols, coverRows := squareDims(innerW, innerH-3)
+	var coverStr string
+	if pl, ok := m.selectedAlbum(); ok && pl.summary.ImageURL != "" {
+		if s, cached := m.imgs.cover(pl.summary.ImageURL, coverCols, coverRows); cached {
+			coverStr = s
+		} else {
+			coverStr = m.placeholderArt(coverCols, coverRows)
+		}
+	} else {
+		coverStr = m.placeholderArt(coverCols, coverRows)
+	}
+
+	meta := ""
+	if pl, ok := m.selectedAlbum(); ok {
+		meta = "\n" +
+			stylePlaylistName.Render(truncate(pl.summary.Name, innerW)) + "\n" +
+			stylePlaylistOwner.Render("album by "+truncate(pl.summary.Owner, innerW))
+	} else {
+		meta = "\n" + styleDimmed.Render("select an album")
+	}
+
+	content := labelLine + "\n " + strings.ReplaceAll(coverStr+meta, "\n", "\n ")
+	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
 }
 
 func (m model) albumCoverPanel(w, h int) string {
@@ -444,37 +529,6 @@ func (m model) playerBarView() string {
 	return sep + "\n" + bar
 }
 
-func (m model) modalView() string {
-	if m.modalKind == modalKindHelp {
-		return m.helpModalView()
-	}
-	modalW := min(m.width-8, 64)
-	listH := m.height - 12
-
-	m.modalList.SetSize(modalW-4, listH)
-
-	title := styleModalTitle.Render("Switch Item")
-	hint := styleModalHint.Render("enter play  •  esc close  •  / search")
-	sep := styleModalHint.Render(strings.Repeat("─", modalW-2))
-
-	boxContent := title + "  " + hint + "\n" + sep + "\n" + m.modalList.View()
-
-	box := styleModalBox.
-		Width(modalW).
-		Render(boxContent)
-
-	placed := lipgloss.Place(
-		m.width,
-		m.height-footerH-gapFooterH,
-		lipgloss.Center,
-		lipgloss.Center,
-		box,
-		lipgloss.WithWhitespaceChars("░"),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("#1a1a2a")),
-	)
-	return placed + "\n" + m.footerView()
-}
-
 func (m model) helpModalView() string {
 	modalW := min(m.width-8, 80)
 	innerH := m.height - 14
@@ -497,14 +551,14 @@ func (m model) helpModalView() string {
 	box := styleModalBox.Width(modalW).Height(innerH).Render(boxContent)
 	placed := lipgloss.Place(
 		m.width,
-		m.height-footerH-gapFooterH,
+		m.height-tabBarH-gapFooterH,
 		lipgloss.Center,
 		lipgloss.Center,
 		box,
 		lipgloss.WithWhitespaceChars("░"),
 		lipgloss.WithWhitespaceForeground(lipgloss.Color("#1a1a2a")),
 	)
-	return placed + "\n" + m.footerView()
+	return placed
 }
 
 func (m model) splitWidths() (leftW, rightW int) {
@@ -553,6 +607,11 @@ func (m model) icon(unicode, nerd string) string {
 
 func (m model) selectedPlaylist() (playlistItem, bool) {
 	sel, ok := m.playlistList.SelectedItem().(playlistItem)
+	return sel, ok
+}
+
+func (m model) selectedAlbum() (playlistItem, bool) {
+	sel, ok := m.albumList.SelectedItem().(playlistItem)
 	return sel, ok
 }
 

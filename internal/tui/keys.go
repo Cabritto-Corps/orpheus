@@ -7,6 +7,7 @@ import (
 )
 
 type keyMap struct {
+	Tab        key.Binding
 	PlayPause  key.Binding
 	Next       key.Binding
 	Prev       key.Binding
@@ -20,13 +21,13 @@ type keyMap struct {
 	Filter     key.Binding
 	ToggleHelp key.Binding
 	Select     key.Binding
-	OpenPicker key.Binding
 	CloseModal key.Binding
 	Quit       key.Binding
 }
 
 func newKeys() keyMap {
 	return keyMap{
+		Tab:        key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch tab")),
 		PlayPause:  key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "play/pause")),
 		Next:       key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next")),
 		Prev:       key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "prev")),
@@ -40,19 +41,18 @@ func newKeys() keyMap {
 		Filter:     key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
 		ToggleHelp: key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Select:     key.NewBinding(key.WithKeys("enter", "return"), key.WithHelp("enter", "play")),
-		OpenPicker: key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "playlists")),
 		CloseModal: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close")),
 		Quit:       key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Select, k.PlayPause, k.Next, k.Prev, k.Shuffle, k.Loop, k.OpenPicker, k.Filter, k.ToggleHelp, k.Quit}
+	return []key.Binding{k.Tab, k.Select, k.PlayPause, k.Next, k.Prev, k.Shuffle, k.Loop, k.Filter, k.ToggleHelp, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Select, k.OpenPicker, k.CloseModal, k.Refresh, k.Filter},
+		{k.Tab, k.Select, k.CloseModal, k.Refresh, k.Filter},
 		{k.PlayPause, k.Next, k.Prev, k.Shuffle, k.Loop, k.VolUp, k.VolDown},
 		{k.SeekBack, k.SeekFwd, k.ToggleHelp, k.Quit},
 	}

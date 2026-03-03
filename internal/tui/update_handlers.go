@@ -23,6 +23,7 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	listInnerH := m.height - chromeH - 4
 
 	m.playlistList.SetSize(listInnerW, listInnerH)
+	m.albumList.SetSize(listInnerW, listInnerH)
 	return m, tea.Batch(
 		m.loadVisiblePlaylistCoversCmd(),
 		m.maybeLoadMorePlaylistsCmd(m.playlistList),
@@ -35,7 +36,7 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	if m.tuiCmdCh != nil {
 		return m, tea.Batch(m.tickCmd(), inputCmd)
 	}
-	if m.screen != screenPlayback {
+	if m.activeTab != tabPlayer {
 		return m, tea.Batch(m.tickCmd(), inputCmd)
 	}
 	interval := m.pollInterval
@@ -76,37 +77,66 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.albumsForbidden = m.albumsForbidden || msg.albumsForbidden
 	}
-	prevIndex := m.playlistList.GlobalIndex()
-	items := m.playlistList.Items()
+
+	// Split incoming items into playlists and albums
+	prevPlaylistIndex := m.playlistList.GlobalIndex()
+	prevAlbumIndex := m.albumList.GlobalIndex()
+
+	plItems := m.playlistList.Items()
+	alItems := m.albumList.Items()
 	if msg.offset == 0 {
-		items = make([]list.Item, 0, len(msg.items))
+		plItems = make([]list.Item, 0, len(msg.items))
+		alItems = make([]list.Item, 0, len(msg.items))
 	} else {
-		items = append([]list.Item(nil), items...)
+		plItems = append([]list.Item(nil), plItems...)
+		alItems = append([]list.Item(nil), alItems...)
 	}
-	seen := make(map[string]struct{}, len(items))
-	for _, item := range items {
+
+	seenPl := make(map[string]struct{}, len(plItems))
+	for _, item := range plItems {
 		pl, ok := item.(playlistItem)
 		if !ok {
 			continue
 		}
-		key := pl.summary.Kind + ":" + pl.summary.ID
-		seen[key] = struct{}{}
+		seenPl[pl.summary.ID] = struct{}{}
 	}
-	for _, pl := range msg.items {
-		key := pl.Kind + ":" + pl.ID
-		if _, exists := seen[key]; exists {
+	seenAl := make(map[string]struct{}, len(alItems))
+	for _, item := range alItems {
+		pl, ok := item.(playlistItem)
+		if !ok {
 			continue
 		}
-		items = append(items, playlistItem{summary: pl})
-		seen[key] = struct{}{}
+		seenAl[pl.summary.ID] = struct{}{}
 	}
-	m.playlistList.SetItems(items)
-	m.modalList.SetItems(items)
-	if len(items) > 0 {
-		idx := clampInt(prevIndex, 0, len(items)-1)
+
+	for _, pl := range msg.items {
+		item := playlistItem{summary: pl}
+		if pl.Kind == spotify.ContextKindAlbum {
+			if _, exists := seenAl[pl.ID]; !exists {
+				alItems = append(alItems, item)
+				seenAl[pl.ID] = struct{}{}
+			}
+		} else {
+			if _, exists := seenPl[pl.ID]; !exists {
+				plItems = append(plItems, item)
+				seenPl[pl.ID] = struct{}{}
+			}
+		}
+	}
+
+	m.playlistList.SetItems(plItems)
+	m.albumList.SetItems(alItems)
+	if len(plItems) > 0 {
+		idx := clampInt(prevPlaylistIndex, 0, len(plItems)-1)
 		m.playlistList.Select(idx)
 	}
-	if len(items) >= playlistLoadMax || len(msg.items) == 0 || !msg.hasMore {
+	if len(alItems) > 0 {
+		idx := clampInt(prevAlbumIndex, 0, len(alItems)-1)
+		m.albumList.Select(idx)
+	}
+
+	totalItems := len(plItems) + len(alItems)
+	if totalItems >= playlistLoadMax || len(msg.items) == 0 || !msg.hasMore {
 		m.playlistsExhausted = true
 	}
 	return m, tea.Batch(
@@ -185,10 +215,7 @@ func (m model) handleNavDebounceMsg(msg navDebounceMsg) (tea.Model, tea.Cmd) {
 	if msg.token != m.navToken {
 		return m, nil
 	}
-	if m.modal {
-		return m, m.maybeLoadMorePlaylistsCmd(m.modalList)
-	}
-	if m.screen != screenPlaylist {
+	if m.activeTab == tabPlayer {
 		return m, nil
 	}
 	return m, tea.Batch(
@@ -258,10 +285,7 @@ func (m model) handleActionMsg(msg actionMsg) (tea.Model, tea.Cmd) {
 	m.playbackErr = nil
 	switch msg.action {
 	case "play-from-browser":
-		m.screen = screenPlayback
-	case "play-from-modal":
-		m.modal = false
-		m.modalKind = modalKindNone
+		m.activeTab = tabPlayer
 	}
 	cmds := []tea.Cmd{m.pollCmd(true)}
 	if cmd := m.pumpInputExecutor(); cmd != nil {
@@ -330,14 +354,14 @@ func (m model) handleSeekDebounceMsg(msg seekDebounceMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleFilterMatchesMsg(msg list.FilterMatchesMsg) (tea.Model, tea.Cmd) {
-	if m.modal {
-		var cmd tea.Cmd
-		m.modalList, cmd = m.modalList.Update(msg)
-		return m, cmd
-	}
-	if m.screen == screenPlaylist {
+	switch m.activeTab {
+	case tabPlaylists:
 		var cmd tea.Cmd
 		m.playlistList, cmd = m.playlistList.Update(msg)
+		return m, cmd
+	case tabAlbums:
+		var cmd tea.Cmd
+		m.albumList, cmd = m.albumList.Update(msg)
 		return m, cmd
 	}
 	return m, nil

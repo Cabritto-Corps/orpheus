@@ -17,12 +17,12 @@ import (
 	"orpheus/internal/spotify"
 )
 
-type screen string
-type modalKind string
+type tab string
 
 const (
-	screenPlaylist          screen = "playlist"
-	screenPlayback          screen = "playback"
+	tabPlaylists            tab    = "playlists"
+	tabAlbums               tab    = "albums"
+	tabPlayer               tab    = "player"
 	playlistTrackPageSize          = 100
 	queuePollEvery                 = 4
 	playlistLoadBatchSize          = 20
@@ -39,10 +39,6 @@ const (
 	reconcileActionWindow          = 2 * time.Second
 	actionFastPollWindow           = 3 * time.Second
 	idlePollBackoffMax             = 5 * time.Second
-
-	modalKindNone     modalKind = ""
-	modalKindPlaylist modalKind = "playlist"
-	modalKindHelp     modalKind = "help"
 )
 
 type model struct {
@@ -57,9 +53,8 @@ type model struct {
 	pollElapsed         time.Duration
 	actionFastPollUntil time.Time
 
-	screen         screen
-	modal          bool
-	modalKind      modalKind
+	activeTab      tab
+	helpOpen       bool
 	navToken       int
 	actionInFlight bool
 
@@ -107,7 +102,7 @@ type model struct {
 	currentUserID                 string
 
 	playlistList list.Model
-	modalList    list.Model
+	albumList    list.Model
 
 	imgs *imgCache
 
@@ -139,26 +134,24 @@ func (p playlistItem) Description() string {
 
 func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand) model {
 	delegate := newPlaylistDelegate()
-	modalDelegate := newPlaylistModalDelegate(false)
 
 	browser := list.New(nil, delegate, 40, 20)
-	browser.Title = "Library"
-	browser.SetShowStatusBar(true)
+	browser.SetShowTitle(false)
+	browser.SetShowStatusBar(false)
 	browser.SetFilteringEnabled(true)
 	browser.SetShowFilter(true)
 	browser.SetShowHelp(false)
 	browser.FilterInput.Prompt = "Search: "
 	applyListStyles(&browser)
 
-	modal := list.New(nil, modalDelegate, 40, 20)
-	modal.Title = ""
-	modal.SetShowTitle(false)
-	modal.SetShowStatusBar(false)
-	modal.SetFilteringEnabled(true)
-	modal.SetShowFilter(true)
-	modal.SetShowHelp(false)
-	modal.FilterInput.Prompt = "Search: "
-	applyListStyles(&modal)
+	albums := list.New(nil, delegate, 40, 20)
+	albums.SetShowTitle(false)
+	albums.SetShowStatusBar(false)
+	albums.SetFilteringEnabled(true)
+	albums.SetShowFilter(true)
+	albums.SetShowHelp(false)
+	albums.FilterInput.Prompt = "Search: "
+	applyListStyles(&albums)
 
 	h := newHelp()
 
@@ -169,10 +162,9 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		deviceName:          cfg.DeviceName,
 		tuiCmdCh:            tuiCmdCh,
 		pollInterval:        cfg.PollInterval,
-		screen:              screenPlaylist,
-		modalKind:           modalKindNone,
+		activeTab:           tabPlaylists,
 		playlistList:        browser,
-		modalList:           modal,
+		albumList:           albums,
 		imgs:                newImgCache(),
 		preloadedTrackIDs:   make(map[string]struct{}),
 		trackCache:          cache.NewTTL[string, spotify.QueueItem](4096, trackMetadataTTL),
@@ -187,11 +179,6 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		help:                h,
 		keys:                newKeys(),
 	}
-}
-
-func (m *model) syncModalDelegate() {
-	searching := m.modalList.FilterState() != list.Unfiltered
-	m.modalList.SetDelegate(newPlaylistModalDelegate(searching))
 }
 
 func selectedImageURLFromList(l list.Model) string {
@@ -212,12 +199,15 @@ func (m model) needsImageURL(url string) bool {
 	if sel, ok := m.selectedPlaylist(); ok && sel.summary.ImageURL == url {
 		return true
 	}
-	if m.modal {
-		if selURL := selectedImageURLFromList(m.modalList); selURL == url {
+	if sel, ok := m.selectedAlbum(); ok && sel.summary.ImageURL == url {
+		return true
+	}
+	for _, pl := range m.visiblePlaylistItems() {
+		if pl.summary.ImageURL == url {
 			return true
 		}
 	}
-	for _, pl := range m.visiblePlaylistItems() {
+	for _, pl := range m.visibleAlbumItems() {
 		if pl.summary.ImageURL == url {
 			return true
 		}
@@ -482,76 +472,43 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyMatches(msg, k.Quit):
 		return m, tea.Quit
 	case keyMatches(msg, k.ToggleHelp):
-		if m.modal && m.modalKind == modalKindHelp {
-			m.modal = false
-			m.modalKind = modalKindNone
-			return m, nil
-		}
-		m.modal = true
-		m.modalKind = modalKindHelp
+		m.helpOpen = !m.helpOpen
 		return m, nil
 	}
 
-	if m.modal {
-		return m.handleModalKey(msg)
+	if m.helpOpen {
+		// close help on any key
+		if keyMatches(msg, k.CloseModal) {
+			m.helpOpen = false
+		}
+		return m, nil
 	}
 
-	if m.screen == screenPlaylist {
+	// TAB cycles between tabs unless a list is actively filtering
+	if keyMatches(msg, k.Tab) {
+		filtering := (m.activeTab == tabPlaylists && m.playlistList.FilterState() == list.Filtering) ||
+			(m.activeTab == tabAlbums && m.albumList.FilterState() == list.Filtering)
+		if !filtering {
+			switch m.activeTab {
+			case tabPlaylists:
+				m.activeTab = tabAlbums
+			case tabAlbums:
+				m.activeTab = tabPlayer
+			case tabPlayer:
+				m.activeTab = tabPlaylists
+			}
+			return m, nil
+		}
+	}
+
+	switch m.activeTab {
+	case tabPlaylists:
 		return m.handlePlaylistKey(msg)
+	case tabAlbums:
+		return m.handleAlbumKey(msg)
+	default:
+		return m.handlePlaybackKey(msg)
 	}
-
-	return m.handlePlaybackKey(msg)
-}
-
-func (m model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	k := m.keys
-	if m.modalKind == modalKindHelp {
-		switch {
-		case keyMatches(msg, k.CloseModal), keyMatches(msg, k.ToggleHelp):
-			m.modal = false
-			m.modalKind = modalKindNone
-			return m, nil
-		}
-		return m, nil
-	}
-	if m.modalList.FilterState() == list.Filtering {
-		prevURL := selectedImageURLFromList(m.modalList)
-		var cmd tea.Cmd
-		m.modalList, cmd = m.modalList.Update(msg)
-		m.syncModalDelegate()
-		nextURL := selectedImageURLFromList(m.modalList)
-		cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
-		if nextURL != "" && nextURL != prevURL {
-			cmds = append(cmds, m.loadImageCmd(nextURL))
-		}
-		return m, tea.Batch(cmds...)
-	}
-	switch {
-	case keyMatches(msg, k.CloseModal):
-		m.modal = false
-		m.modalKind = modalKindNone
-		m.modalList.ResetFilter()
-		m.syncModalDelegate()
-		return m, nil
-
-	case keyMatches(msg, k.Select):
-		sel, ok := m.modalList.SelectedItem().(playlistItem)
-		if !ok {
-			return m, nil
-		}
-		return m.selectAndPlayPlaylist(sel, "play-from-modal")
-	}
-
-	prevURL := selectedImageURLFromList(m.modalList)
-	var cmd tea.Cmd
-	m.modalList, cmd = m.modalList.Update(msg)
-	m.syncModalDelegate()
-	nextURL := selectedImageURLFromList(m.modalList)
-	cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
-	if nextURL != "" && nextURL != prevURL {
-		cmds = append(cmds, m.loadImageCmd(nextURL))
-	}
-	return m, tea.Batch(cmds...)
 }
 
 func (m model) handlePlaylistKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -595,14 +552,45 @@ func (m model) handlePlaylistKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m model) handleAlbumKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	k := m.keys
+	if m.albumList.FilterState() == list.Filtering {
+		prevURL := selectedImageURLFromList(m.albumList)
+		var cmd tea.Cmd
+		m.albumList, cmd = m.albumList.Update(msg)
+		nextURL := selectedImageURLFromList(m.albumList)
+		cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
+		if nextURL != "" && nextURL != prevURL {
+			cmds = append(cmds, m.loadImageCmd(nextURL))
+		}
+		return m, tea.Batch(cmds...)
+	}
+	switch {
+	case keyMatches(msg, k.Select):
+		sel, ok := m.albumList.SelectedItem().(playlistItem)
+		if !ok {
+			return m, nil
+		}
+		return m.selectAndPlayPlaylist(sel, "play-from-browser")
+	}
+
+	prevURL := selectedImageURLFromList(m.albumList)
+	var cmd tea.Cmd
+	m.albumList, cmd = m.albumList.Update(msg)
+	nextURL := selectedImageURLFromList(m.albumList)
+	cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
+	if nextURL != "" && nextURL != prevURL {
+		cmds = append(cmds, m.loadImageCmd(nextURL))
+	}
+	return m, tea.Batch(cmds...)
+}
+
 func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := m.keys
 	var action playbackInputKind
 	switch {
 	case keyMatches(msg, k.Refresh):
 		action = playbackInputRefresh
-	case keyMatches(msg, k.OpenPicker):
-		action = playbackInputOpenPicker
 	case keyMatches(msg, k.PlayPause):
 		action = playbackInputPlayPause
 	case keyMatches(msg, k.Next):
@@ -629,9 +617,7 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model, tea.Cmd) {
-	m.screen = screenPlayback
-	m.modal = false
-	m.modalKind = modalKindNone
+	m.activeTab = tabPlayer
 	m.playbackErr = nil
 	isPlaylist := sel.summary.Kind != spotify.ContextKindAlbum
 	canReadTracks := isPlaylist && m.shouldLoadPlaylistTracks() && m.canReadPlaylistTracks(sel.summary)
@@ -740,7 +726,13 @@ func (m model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 	if sel, ok := m.selectedPlaylist(); ok {
 		add(sel.summary.ImageURL)
 	}
+	if sel, ok := m.selectedAlbum(); ok {
+		add(sel.summary.ImageURL)
+	}
 	for _, pl := range m.visiblePlaylistItems() {
+		add(pl.summary.ImageURL)
+	}
+	for _, pl := range m.visibleAlbumItems() {
 		add(pl.summary.ImageURL)
 	}
 	items := m.playlistList.Items()
@@ -750,6 +742,20 @@ func (m model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 		start := max(0, center-half)
 		end := min(len(items), center+half+1)
 		for _, item := range items[start:end] {
+			pl, ok := item.(playlistItem)
+			if !ok {
+				continue
+			}
+			add(pl.summary.ImageURL)
+		}
+	}
+	albumItems := m.albumList.Items()
+	if m.albumList.FilterState() == list.Unfiltered && len(albumItems) > 0 {
+		center := clampInt(m.albumList.GlobalIndex(), 0, len(albumItems)-1)
+		half := coverPreloadWindow / 2
+		start := max(0, center-half)
+		end := min(len(albumItems), center+half+1)
+		for _, item := range albumItems[start:end] {
 			pl, ok := item.(playlistItem)
 			if !ok {
 				continue
@@ -772,6 +778,33 @@ func (m model) visiblePlaylistItems() []playlistItem {
 		perPage = len(visible)
 	}
 	start := m.playlistList.Paginator.Page * perPage
+	if start < 0 || start >= len(visible) {
+		return nil
+	}
+	end := min(len(visible), start+perPage)
+
+	out := make([]playlistItem, 0, end-start)
+	for _, item := range visible[start:end] {
+		pl, ok := item.(playlistItem)
+		if !ok {
+			continue
+		}
+		out = append(out, pl)
+	}
+	return out
+}
+
+func (m model) visibleAlbumItems() []playlistItem {
+	visible := m.albumList.VisibleItems()
+	if len(visible) == 0 {
+		return nil
+	}
+
+	perPage := m.albumList.Paginator.PerPage
+	if perPage <= 0 {
+		perPage = len(visible)
+	}
+	start := m.albumList.Paginator.Page * perPage
 	if start < 0 || start >= len(visible) {
 		return nil
 	}
