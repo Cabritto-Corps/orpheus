@@ -65,7 +65,7 @@ func (m *model) enqueuePlaybackInput(action playbackInputKind) {
 	if isSeekAction(action) {
 		m.dropQueuedByPredicate(func(kind playbackInputKind) bool { return isSeekAction(kind) })
 	}
-	if isToggleAction(action) && m.hasQueuedAction(action) {
+	if shouldDedupQueuedAction(action) && m.hasQueuedAction(action) {
 		return
 	}
 	if action == playbackInputRefresh && m.hasQueuedAction(action) {
@@ -85,14 +85,19 @@ func (m *model) requeueFront(action playbackInputKind) {
 }
 
 func (m *model) pumpInputExecutor() tea.Cmd {
-	m.syncExecutorState()
-	if m.executorState != executorStateIdle || len(m.inputQueue) == 0 {
-		return nil
+	for i := 0; i < 8; i++ {
+		m.syncExecutorState()
+		if m.executorState != executorStateIdle || len(m.inputQueue) == 0 {
+			return nil
+		}
+		idx := m.dequeueNextInputIndex()
+		action := m.inputQueue[idx].kind
+		m.inputQueue = append(m.inputQueue[:idx], m.inputQueue[idx+1:]...)
+		if cmd := m.executePlaybackInput(action); cmd != nil {
+			return cmd
+		}
 	}
-	idx := m.dequeueNextInputIndex()
-	action := m.inputQueue[idx].kind
-	m.inputQueue = append(m.inputQueue[:idx], m.inputQueue[idx+1:]...)
-	return m.executePlaybackInput(action)
+	return nil
 }
 
 func (m *model) consumeTransportRecoveryCmd() tea.Cmd {
@@ -290,8 +295,8 @@ func isSeekAction(action playbackInputKind) bool {
 	return action == playbackInputSeekBack || action == playbackInputSeekFwd
 }
 
-func isToggleAction(action playbackInputKind) bool {
-	return action == playbackInputShuffle || action == playbackInputLoop
+func shouldDedupQueuedAction(action playbackInputKind) bool {
+	return action == playbackInputShuffle
 }
 
 func inputPriorityOf(action playbackInputKind) inputPriority {

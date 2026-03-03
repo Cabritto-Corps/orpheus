@@ -421,7 +421,6 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 		return fmt.Errorf("unsupported spotify type: %s", spotId.Type())
 	}
 	trackPosition := p.state.trackPosition()
-	p.runtime.Log.WithField("uri", spotId.Uri()).Debugf("loading %s (paused: %t, position: %dms)", spotId.Type(), paused, trackPosition)
 	p.state.updateTimestamp()
 	p.state.player.IsPlaying = true
 	p.state.player.IsBuffering = true
@@ -511,8 +510,10 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 			return err
 		}
 		p.state.player.Options.ShufflingContext = next.Shuffle
-		// Shuffle establishes a new traversal baseline; reset played-cycle state.
 		p.invalidateQueueDerivation(true)
+		if next.Shuffle {
+			p.seedPlayedTrackSetFromPlaybackWindow()
+		}
 		p.resetPlaybackCaches(true)
 		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
 		if next.Shuffle {

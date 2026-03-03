@@ -38,14 +38,16 @@ func (p *AppPlayer) BuildPlaybackStateUpdate() *PlaybackStateUpdate {
 	if cachedQueue, hasMore, ok := p.getDerivedQueueCache(deriveKey); ok {
 		out.Queue = cachedQueue
 		out.QueueHasMore = hasMore
-	} else if shuffle {
-		if derivedQueue, hasMore, ok := p.derivedQueueFromShuffledTrackList(); ok {
-			out.Queue = derivedQueue
-			out.QueueHasMore = hasMore
-			p.setDerivedQueueCache(deriveKey, derivedQueue, hasMore)
-		}
 	} else {
-		if derivedQueue, hasMore, ok := p.derivedQueueFromTrackList(); ok {
+		var derivedQueue []PlaybackStateQueueEntry
+		var hasMore bool
+		var ok bool
+		if shuffle {
+			derivedQueue, hasMore, ok = p.derivedQueueFromShuffledTrackList()
+		} else {
+			derivedQueue, hasMore, ok = p.derivedQueueFromTrackList()
+		}
+		if ok {
 			out.Queue = derivedQueue
 			out.QueueHasMore = hasMore
 			p.setDerivedQueueCache(deriveKey, derivedQueue, hasMore)
@@ -151,6 +153,7 @@ func (p *AppPlayer) derivedQueueFromShuffledTrackList() ([]PlaybackStateQueueEnt
 		}
 	}
 	isPlayed := func(uri string) bool { return p.isPlayedTrack(uri) }
+	repeatContext := p.state.player.Options != nil && p.state.player.Options.RepeatingContext
 
 	for _, t := range p.state.player.PrevTracks {
 		if t == nil {
@@ -166,7 +169,7 @@ func (p *AppPlayer) derivedQueueFromShuffledTrackList() ([]PlaybackStateQueueEnt
 		if t == nil {
 			continue
 		}
-		if isPlayed(t.Uri) {
+		if shouldSkipPlayedShuffledTrack(repeatContext, isPlayed(t.Uri)) {
 			continue
 		}
 		if key := trackQueueKey(t.Uid, t.Uri); key != "" {
@@ -197,7 +200,7 @@ func (p *AppPlayer) derivedQueueFromShuffledTrackList() ([]PlaybackStateQueueEnt
 		if t == nil {
 			continue
 		}
-		if isPlayed(t.Uri) {
+		if shouldSkipPlayedShuffledTrack(repeatContext, isPlayed(t.Uri)) {
 			continue
 		}
 		if key := trackQueueKey(t.Uid, t.Uri); key != "" {
@@ -213,6 +216,10 @@ func (p *AppPlayer) derivedQueueFromShuffledTrackList() ([]PlaybackStateQueueEnt
 		outTracks = append(outTracks, t)
 	}
 	return providedTracksToQueueEntries(p, outTracks), hasMore, true
+}
+
+func shouldSkipPlayedShuffledTrack(_ bool, alreadyPlayed bool) bool {
+	return alreadyPlayed
 }
 
 func providedTracksToQueueEntries(p *AppPlayer, tracks []*connectpb.ProvidedTrack) []PlaybackStateQueueEntry {

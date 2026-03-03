@@ -1,6 +1,10 @@
 package librespot
 
-import "testing"
+import (
+	"testing"
+
+	connectpb "github.com/devgianlu/go-librespot/proto/spotify/connectstate"
+)
 
 func TestDerivedQueueCacheIsolationAndInvalidation(t *testing.T) {
 	p := &AppPlayer{}
@@ -75,5 +79,23 @@ func TestInvalidateQueueDerivationResetBehavior(t *testing.T) {
 	}
 	if _, _, ok := p.getDerivedQueueCache("k2"); ok {
 		t.Fatal("expected derived queue cache invalidated after reset=true")
+	}
+}
+
+func TestSeedPlayedTrackSetFromPlaybackWindow(t *testing.T) {
+	p := &AppPlayer{
+		state: &State{
+			player: &connectpb.PlayerState{
+				PrevTracks: []*connectpb.ProvidedTrack{
+					{Uri: "spotify:track:prev1"},
+					{Uri: "spotify:track:prev2"},
+				},
+				Track: &connectpb.ProvidedTrack{Uri: "spotify:track:curr"},
+			},
+		},
+	}
+	p.seedPlayedTrackSetFromPlaybackWindow()
+	if !p.isPlayedTrack("spotify:track:prev1") || !p.isPlayedTrack("spotify:track:prev2") || !p.isPlayedTrack("spotify:track:curr") {
+		t.Fatal("expected playback window tracks to be seeded as played")
 	}
 }

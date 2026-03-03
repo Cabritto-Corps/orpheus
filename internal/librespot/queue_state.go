@@ -83,6 +83,21 @@ func (p *AppPlayer) markPlayedTrack(uri string) {
 	p.playedTrackMu.Unlock()
 }
 
+func (p *AppPlayer) seedPlayedTrackSetFromPlaybackWindow() {
+	if p == nil || p.state == nil || p.state.player == nil {
+		return
+	}
+	for _, t := range p.state.player.PrevTracks {
+		if t == nil {
+			continue
+		}
+		p.markPlayedTrack(t.Uri)
+	}
+	if p.state.player.Track != nil {
+		p.markPlayedTrack(p.state.player.Track.Uri)
+	}
+}
+
 func (p *AppPlayer) isPlayedTrack(uri string) bool {
 	id := normalizeSpotifyID(uri)
 	if id == "" {

@@ -305,6 +305,15 @@ func TestInputQueueCoalescesSeekAndVolumeAndDedupsToggle(t *testing.T) {
 	}
 }
 
+func TestInputQueueDoesNotDedupLoopCycle(t *testing.T) {
+	m := model{}
+	m.enqueuePlaybackInput(playbackInputLoop)
+	m.enqueuePlaybackInput(playbackInputLoop)
+	if len(m.inputQueue) != 2 || m.inputQueue[0].kind != playbackInputLoop || m.inputQueue[1].kind != playbackInputLoop {
+		t.Fatalf("expected loop presses to be preserved for repeat cycling, got %+v", m.inputQueue)
+	}
+}
+
 func TestInputPriorityPrefersTransport(t *testing.T) {
 	m := model{}
 	m.enqueuePlaybackInput(playbackInputVolUp)
