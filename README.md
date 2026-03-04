@@ -2,6 +2,10 @@
 
 >Orpheus is a terminal music player for spotify, which was created only because I wanted a spotify TUI player that looked the way I wanted 
 
+- [See tutorial for configuration](tutorial.md)
+
+### Notes
+
 - The code is not so shit anymore, but surely could be better
 
 - A lot of errors are still being fixed but you can use it if you really want to
@@ -12,9 +16,9 @@
 
 - I will eventually add more UI designs and configurations (but probably wont be customizable)
 
-![Orpheus Screenshot](orpheus_playlist.png)
-![Orpheus Screenshot 2](orpheus_albums.png)
-![Orpheus Screenshot 3](orpheus_player.png)
+![Orpheus Screenshot](assets/orpheus_playlist.png)
+![Orpheus Screenshot 2](assets/orpheus_albums.png)
+![Orpheus Screenshot 3](assets/orpheus_player.png)
 
 ### Thanks!
 
