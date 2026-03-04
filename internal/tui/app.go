@@ -245,8 +245,6 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	if inVolSettle && msg.status != nil && m.volSentTarget >= 0 {
 		msg.status.Volume = m.volSentTarget
 	}
-	// Playback-state pushes don't carry a pre-override device volume, so this
-	// path can only clear the settle guard by timeout.
 	if m.volSentTarget >= 0 && time.Since(m.volSentAt) >= volSettleWindow {
 		m.volSentTarget = -1
 	}
@@ -334,8 +332,6 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 	if m.shouldApplySeekSettle(msg.status) {
 		msg.status.ProgressMS = m.clampSeekTarget(m.seekSettleProgress())
 	}
-	// Clear guard only when the device actually reports the target (real confirmation),
-	// not after the override above, which would always match.
 	m.clearVolumeSettleTarget(incomingVol)
 	m.clearSeekSettleTarget(incomingProgress)
 	if msg.status != nil {
@@ -477,14 +473,12 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.helpOpen {
-		// close help on any key
 		if keyMatches(msg, k.CloseModal) {
 			m.helpOpen = false
 		}
 		return m, nil
 	}
 
-	// TAB cycles between tabs unless a list is actively filtering
 	if keyMatches(msg, k.Tab) {
 		filtering := (m.activeTab == tabPlaylists && m.playlistList.FilterState() == list.Filtering) ||
 			(m.activeTab == tabAlbums && m.albumList.FilterState() == list.Filtering)

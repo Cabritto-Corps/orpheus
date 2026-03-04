@@ -23,7 +23,7 @@ const (
 	iconPause           = ""
 	iconDevice          = "●"
 	iconVolume          = "▪"
-	iconShuffle         = ""
+	iconShuffle         = ""
 	iconRepeatContext   = ""
 	iconRepeatTrack     = ""
 	iconPlayNF          = "\uf04b"
@@ -31,8 +31,8 @@ const (
 	iconDeviceNF        = "\ue30c"
 	iconVolumeNF        = "\uf028"
 	iconShuffleNF       = "\uf074"
-	iconRepeatContextNF = ""
-	iconRepeatTrackNF   = ""
+	iconRepeatContextNF = "\uf0b6"
+	iconRepeatTrackNF   = "\uf01e"
 )
 
 func (m model) View() string {

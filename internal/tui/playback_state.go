@@ -49,7 +49,12 @@ func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
 		m.syncExecutorState()
 		return
 	}
-	// Failsafe: don't keep controls locked forever on backend stalls.
+	if nextTrack == m.transportTransitionFromTrack && next.ProgressMS < 2000 &&
+		time.Since(m.transportTransitionStartedAt) < 4*time.Second {
+		m.transportTransitionPending = false
+		m.syncExecutorState()
+		return
+	}
 	if time.Since(m.transportTransitionStartedAt) > 4*time.Second {
 		m.transportTransitionPending = false
 		m.transportRecoveryPending = true
@@ -129,7 +134,6 @@ func (m *model) clampSeekTarget(target int) int {
 	if m.status == nil || m.status.DurationMS <= 0 {
 		return target
 	}
-	// Avoid issuing a seek exactly at track end; some backends can stall there.
 	maxTarget := m.status.DurationMS - 250
 	if maxTarget < 0 {
 		maxTarget = 0

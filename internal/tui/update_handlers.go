@@ -78,7 +78,6 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 		m.albumsForbidden = m.albumsForbidden || msg.albumsForbidden
 	}
 
-	// Split incoming items into playlists and albums
 	prevPlaylistIndex := m.playlistList.GlobalIndex()
 	prevAlbumIndex := m.albumList.GlobalIndex()
 
