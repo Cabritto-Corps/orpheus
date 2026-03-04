@@ -3,7 +3,7 @@
 
 1. Download latest release from [here](https://github.com/Cabritto-Corps/orpheus/releases) or compile the source code yourself
 
-2. Go into spotify developer dashboard and create an app with the following informations:
+2. Go into [spotify developer dashboard](https://developer.spotify.com/dashboard/) and create an app with the following informations:
   - App name: *Any name you want*
   - Redirect URI: http://127.0.0.1:8989/callback
   - APIs used: WEB API, WEB Playback SDK
