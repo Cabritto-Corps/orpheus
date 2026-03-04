@@ -223,7 +223,7 @@ func runCheck(ctx context.Context, authManager *auth.Manager, token *oauth2.Toke
 	firstPl := playlistPage.Items[0]
 	fmt.Fprintf(os.Stderr, "  playlists: %d (testing first: %q id=%s owner=%s)\n\n", len(playlistPage.Items), firstPl.Name, firstPl.ID, firstPl.OwnerID)
 
-	tracksPage, err := svc.ListPlaylistTrackIDsPage(checkCtx, firstPl.ID, 0, 1)
+	tracksPage, err := svc.ListPlaylistItemsPage(checkCtx, firstPl.ID, 0, 1)
 	report("GetPlaylistItems(playlist, limit=1)", err)
 	if err != nil {
 		code, _ := spotify.HTTPStatusFromError(err)
@@ -236,7 +236,7 @@ func runCheck(ctx context.Context, authManager *auth.Manager, token *oauth2.Toke
 		}
 		fmt.Fprintf(os.Stderr, "\n")
 	} else {
-		fmt.Fprintf(os.Stderr, "  track count first page: %d\n\n", len(tracksPage.TrackIDs))
+		fmt.Fprintf(os.Stderr, "  track count first page: %d\n\n", len(tracksPage.ItemIDs))
 	}
 
 	status, err := svc.Status(checkCtx)
@@ -347,7 +347,9 @@ func runLibrespotTUI() error {
 					_ = authMgr.SaveToken(t)
 				}, token.AccessToken)
 				spotifyClient := spotify.NewClient(oauthCtx, ts)
-				catalog = spotify.NewService(spotifyClient, spotify.Options{})
+				catalog = spotify.NewService(spotifyClient, spotify.Options{
+					ItemsHTTPClient: spotify.NewItemsHTTPClient(ts),
+				})
 			}
 		}
 	}

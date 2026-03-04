@@ -24,8 +24,8 @@ func (f fakeCatalog) ListSavedAlbumsPage(_ context.Context, offset, limit int) (
 	return f.albums(offset, limit)
 }
 
-func (f fakeCatalog) ListPlaylistTrackIDsPage(_ context.Context, _ string, offset, limit int) (*spotify.PlaylistTrackPage, error) {
-	return &spotify.PlaylistTrackPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+func (f fakeCatalog) ListPlaylistItemsPage(_ context.Context, _ string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
+	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 }
 
 func (f fakeCatalog) CurrentUserID(_ context.Context) (string, error) { return "u", nil }

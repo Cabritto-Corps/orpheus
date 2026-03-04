@@ -116,23 +116,8 @@ func (c *playlistCatalog) ListUserPlaylistsPage(ctx context.Context, offset, lim
 		return nil, fmt.Errorf("webapi playlists: %d %s", resp.StatusCode, string(body))
 	}
 	var raw struct {
-		Items []struct {
-			ID            string `json:"id"`
-			Name          string `json:"name"`
-			URI           string `json:"uri"`
-			Collaborative bool   `json:"collaborative"`
-			Owner         struct {
-				ID          string `json:"id"`
-				DisplayName string `json:"display_name"`
-			} `json:"owner"`
-			Images []struct {
-				URL string `json:"url"`
-			} `json:"images"`
-			Tracks struct {
-				Total int `json:"total"`
-			} `json:"tracks"`
-		} `json:"items"`
-		Next *string `json:"next"`
+		Items []spotify.PlaylistSummaryWire `json:"items"`
+		Next  *string                       `json:"next"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("decode playlists: %w", err)
@@ -159,7 +144,7 @@ func (c *playlistCatalog) ListUserPlaylistsPage(ctx context.Context, offset, lim
 			Owner:         pl.Owner.DisplayName,
 			OwnerID:       pl.Owner.ID,
 			Collaborative: pl.Collaborative,
-			TrackCount:    pl.Tracks.Total,
+			TrackCount:    spotify.PlaylistCount(pl.Items.Total, pl.Tracks.Total),
 			ImageURL:      imageURL,
 		})
 	}
@@ -256,7 +241,7 @@ func (c *playlistCatalog) ListSavedAlbumsPage(ctx context.Context, offset, limit
 	return out, nil
 }
 
-func (c *playlistCatalog) ListPlaylistTrackIDsPage(ctx context.Context, playlistID string, offset, limit int) (*spotify.PlaylistTrackPage, error) {
+func (c *playlistCatalog) ListPlaylistItemsPage(ctx context.Context, playlistID string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
 	if playlistID == "" {
 		return nil, fmt.Errorf("playlist ID must not be empty")
 	}
@@ -272,29 +257,22 @@ func (c *playlistCatalog) ListPlaylistTrackIDsPage(ctx context.Context, playlist
 	q := url.Values{}
 	q.Set("limit", strconv.Itoa(limit))
 	q.Set("offset", strconv.Itoa(offset))
-	path := "v1/playlists/" + url.PathEscape(playlistID) + "/tracks"
+	path := "v1/playlists/" + url.PathEscape(playlistID) + "/items"
 	resp, err := c.doWith429Retry(ctx, "GET", path, q, nil)
 	if err != nil {
-		return nil, fmt.Errorf("webapi playlist tracks: %w", err)
+		return nil, fmt.Errorf("webapi playlist items: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("webapi playlist tracks: %d %s", resp.StatusCode, string(body))
-	}
 	var raw struct {
-		Items []struct {
-			Track *struct {
-				ID  string `json:"id"`
-				URI string `json:"uri"`
-			} `json:"track"`
-		} `json:"items"`
-		Next *string `json:"next"`
+		Items []spotify.PlaylistEntryWire `json:"items"`
+		Next  *string                     `json:"next"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("decode playlist tracks: %w", err)
+	if err := spotify.DecodeWebAPIJSON(resp, http.StatusOK, &raw, func(status int, body string) error {
+		return fmt.Errorf("webapi playlist items: %d %s", status, body)
+	}); err != nil {
+		return nil, err
 	}
-	out := &spotify.PlaylistTrackPage{
+	out := &spotify.PlaylistItemsPage{
 		Offset: offset,
 		Limit:  limit,
 	}
@@ -302,12 +280,13 @@ func (c *playlistCatalog) ListPlaylistTrackIDsPage(ctx context.Context, playlist
 		out.NextOffset = offset
 		return out, nil
 	}
-	out.TrackIDs = make([]string, 0, len(raw.Items))
+	out.ItemIDs = make([]string, 0, len(raw.Items))
 	for _, item := range raw.Items {
-		if item.Track == nil || item.Track.ID == "" {
+		entry := item.ResolvedItem()
+		if entry == nil || entry.ID == "" {
 			continue
 		}
-		out.TrackIDs = append(out.TrackIDs, item.Track.ID)
+		out.ItemIDs = append(out.ItemIDs, entry.ID)
 	}
 	out.NextOffset = offset + len(raw.Items)
 	out.HasMore = raw.Next != nil && *raw.Next != ""

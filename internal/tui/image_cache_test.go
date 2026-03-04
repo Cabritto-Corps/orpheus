@@ -33,25 +33,24 @@ func TestHandlePlaylistKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
 	}
 }
 
-func TestHandleModalKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
+func TestHandleAlbumKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
 	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
 	items := []list.Item{
-		playlistItem{summary: spotify.PlaylistSummary{ID: "1", Name: "one", ImageURL: "u1"}},
-		playlistItem{summary: spotify.PlaylistSummary{ID: "2", Name: "two", ImageURL: "u2"}},
+		playlistItem{summary: spotify.PlaylistSummary{ID: "1", Name: "one", ImageURL: "u1", Kind: spotify.ContextKindAlbum}},
+		playlistItem{summary: spotify.PlaylistSummary{ID: "2", Name: "two", ImageURL: "u2", Kind: spotify.ContextKindAlbum}},
 	}
-	m.modal = true
-	m.modalKind = modalKindPlaylist
-	m.modalList.SetItems(items)
-	m.modalList.Select(0)
+	m.activeTab = tabAlbums
+	m.albumList.SetItems(items)
+	m.albumList.Select(0)
 
-	nextModel, _ := m.handleModalKey(tea.KeyMsg{Type: tea.KeyDown})
+	nextModel, _ := m.handleAlbumKey(tea.KeyMsg{Type: tea.KeyDown})
 	got := nextModel.(model)
-	sel, ok := got.modalList.SelectedItem().(playlistItem)
+	sel, ok := got.selectedAlbum()
 	if !ok || sel.summary.ImageURL != "u2" {
-		t.Fatalf("expected modal selection to move to u2")
+		t.Fatalf("expected album selection to move to u2")
 	}
 	if !hasInflightURL(got.imgs, "u2") {
-		t.Fatalf("expected immediate image load for new modal selection")
+		t.Fatalf("expected immediate image load for new album selection")
 	}
 }
 

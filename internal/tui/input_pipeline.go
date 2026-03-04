@@ -26,17 +26,16 @@ type playbackInput struct {
 }
 
 const (
-	playbackInputRefresh    playbackInputKind = "refresh"
-	playbackInputOpenPicker playbackInputKind = "open-picker"
-	playbackInputPlayPause  playbackInputKind = "play-pause"
-	playbackInputNext       playbackInputKind = "next"
-	playbackInputPrev       playbackInputKind = "prev"
-	playbackInputShuffle    playbackInputKind = "shuffle"
-	playbackInputLoop       playbackInputKind = "loop"
-	playbackInputVolUp      playbackInputKind = "vol-up"
-	playbackInputVolDown    playbackInputKind = "vol-down"
-	playbackInputSeekBack   playbackInputKind = "seek-back"
-	playbackInputSeekFwd    playbackInputKind = "seek-fwd"
+	playbackInputRefresh   playbackInputKind = "refresh"
+	playbackInputPlayPause playbackInputKind = "play-pause"
+	playbackInputNext      playbackInputKind = "next"
+	playbackInputPrev      playbackInputKind = "prev"
+	playbackInputShuffle   playbackInputKind = "shuffle"
+	playbackInputLoop      playbackInputKind = "loop"
+	playbackInputVolUp     playbackInputKind = "vol-up"
+	playbackInputVolDown   playbackInputKind = "vol-down"
+	playbackInputSeekBack  playbackInputKind = "seek-back"
+	playbackInputSeekFwd   playbackInputKind = "seek-fwd"
 
 	inputPriorityLow      inputPriority = 0
 	inputPriorityNormal   inputPriority = 1
@@ -118,13 +117,6 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 			return nil
 		}
 		return m.pollCmd(true)
-	case playbackInputOpenPicker:
-		m.modal = true
-		m.modalKind = modalKindPlaylist
-		m.modalList.ResetFilter()
-		m.syncModalDelegate()
-		m.modalList.Select(0)
-		return nil
 	case playbackInputPlayPause:
 		if m.tuiCmdCh != nil {
 			kind := librespot.TUICommandResume

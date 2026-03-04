@@ -116,6 +116,15 @@ var (
 )
 
 var (
+	styleTabActive = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorBlue)
+
+	styleTabInactive = lipgloss.NewStyle().
+				Foreground(colorMutedBlue)
+)
+
+var (
 	styleModalBox = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBlue).
@@ -162,28 +171,6 @@ func newPlaylistDelegate() list.DefaultDelegate {
 	d.Styles.DimmedDesc = lipgloss.NewStyle().
 		Foreground(colorMutedBlue).
 		Padding(0, 0, 0, 2)
-
-	return d
-}
-
-func newPlaylistModalDelegate(searching bool) list.DefaultDelegate {
-	d := newPlaylistDelegate()
-	d.ShowDescription = true
-	d.SetSpacing(0)
-
-	d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(colorGray)
-	d.Styles.SelectedDesc = d.Styles.SelectedDesc.Foreground(colorGray)
-	d.Styles.DimmedDesc = d.Styles.DimmedDesc.Foreground(colorGray)
-
-	if searching {
-		d.Styles.NormalTitle = d.Styles.NormalTitle.Foreground(colorGray)
-		d.Styles.SelectedTitle = d.Styles.SelectedTitle.Foreground(colorGray)
-		d.Styles.DimmedTitle = d.Styles.DimmedTitle.Foreground(colorMutedBlue)
-
-		d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(colorMutedBlue)
-		d.Styles.SelectedDesc = d.Styles.SelectedDesc.Foreground(colorMutedBlue)
-		d.Styles.DimmedDesc = d.Styles.DimmedDesc.Foreground(colorDivider)
-	}
 
 	return d
 }

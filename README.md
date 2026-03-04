@@ -1,16 +1,26 @@
 # orpheus
 
-- This code is (kinda, not so) turboshit
+>Orpheus is a terminal music player for spotify, which was created only because I wanted a spotify TUI player that looked the way I wanted 
 
-### Preview
-
-- TUI is improved but still has a long way to go
-
-![Orpheus Screenshot](playlist_orpheus.png)
-![Orpheus Screenshot 2](queue_orpheus.png)
+- [See tutorial for configuration](tutorial.md)
 
 ### Notes
 
-- Probably sometime instead of copying implementation from go-librespot i will fork it and make it a library and use it -> What I did was extract the internal from it and, instead of using its daemon, wrapping it in the TUI directly
+- The code is not so shit anymore, but surely could be better
 
->Already started making changes to the go-librespot to fit orpheus use case, expected to try and migrate everything on the end of the week if the implementation is good enough
+- A lot of errors are still being fixed but you can use it if you really want to
+
+### Preview
+
+- As you can see TUI was heavily inspired by the RMPC project, the tabs being the main point of the inspirations as well as the minimalist yet clean design
+
+- I will eventually add more UI designs and configurations (but probably wont be customizable)
+
+![Orpheus Screenshot](assets/orpheus_playlist.png)
+![Orpheus Screenshot 2](assets/orpheus_albums.png)
+![Orpheus Screenshot 3](assets/orpheus_player.png)
+
+### Thanks!
+
+- A big shoutout to the [guy](https://github.com/devgianlu) that developed [go-librespot](https://github.com/devgianlu/go-librespot), this wouldnt be possible if it wasnt for his port of librespot to go
+- Another big shoutout to the [guy](https://github.com/mierak) that created [RMPC](https://github.com/mierak/rmpc) for making such a good looking UI and great app that inspired not only my interface but my will to make one myself

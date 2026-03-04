@@ -23,6 +23,7 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	listInnerH := m.height - chromeH - 4
 
 	m.playlistList.SetSize(listInnerW, listInnerH)
+	m.albumList.SetSize(listInnerW, listInnerH)
 	return m, tea.Batch(
 		m.loadVisiblePlaylistCoversCmd(),
 		m.maybeLoadMorePlaylistsCmd(m.playlistList),
@@ -35,7 +36,7 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	if m.tuiCmdCh != nil {
 		return m, tea.Batch(m.tickCmd(), inputCmd)
 	}
-	if m.screen != screenPlayback {
+	if m.activeTab != tabPlayer {
 		return m, tea.Batch(m.tickCmd(), inputCmd)
 	}
 	interval := m.pollInterval
@@ -76,37 +77,65 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.albumsForbidden = m.albumsForbidden || msg.albumsForbidden
 	}
-	prevIndex := m.playlistList.GlobalIndex()
-	items := m.playlistList.Items()
+
+	prevPlaylistIndex := m.playlistList.GlobalIndex()
+	prevAlbumIndex := m.albumList.GlobalIndex()
+
+	plItems := m.playlistList.Items()
+	alItems := m.albumList.Items()
 	if msg.offset == 0 {
-		items = make([]list.Item, 0, len(msg.items))
+		plItems = make([]list.Item, 0, len(msg.items))
+		alItems = make([]list.Item, 0, len(msg.items))
 	} else {
-		items = append([]list.Item(nil), items...)
+		plItems = append([]list.Item(nil), plItems...)
+		alItems = append([]list.Item(nil), alItems...)
 	}
-	seen := make(map[string]struct{}, len(items))
-	for _, item := range items {
+
+	seenPl := make(map[string]struct{}, len(plItems))
+	for _, item := range plItems {
 		pl, ok := item.(playlistItem)
 		if !ok {
 			continue
 		}
-		key := pl.summary.Kind + ":" + pl.summary.ID
-		seen[key] = struct{}{}
+		seenPl[pl.summary.ID] = struct{}{}
 	}
-	for _, pl := range msg.items {
-		key := pl.Kind + ":" + pl.ID
-		if _, exists := seen[key]; exists {
+	seenAl := make(map[string]struct{}, len(alItems))
+	for _, item := range alItems {
+		pl, ok := item.(playlistItem)
+		if !ok {
 			continue
 		}
-		items = append(items, playlistItem{summary: pl})
-		seen[key] = struct{}{}
+		seenAl[pl.summary.ID] = struct{}{}
 	}
-	m.playlistList.SetItems(items)
-	m.modalList.SetItems(items)
-	if len(items) > 0 {
-		idx := clampInt(prevIndex, 0, len(items)-1)
+
+	for _, pl := range msg.items {
+		item := playlistItem{summary: pl}
+		if pl.Kind == spotify.ContextKindAlbum {
+			if _, exists := seenAl[pl.ID]; !exists {
+				alItems = append(alItems, item)
+				seenAl[pl.ID] = struct{}{}
+			}
+		} else {
+			if _, exists := seenPl[pl.ID]; !exists {
+				plItems = append(plItems, item)
+				seenPl[pl.ID] = struct{}{}
+			}
+		}
+	}
+
+	m.playlistList.SetItems(plItems)
+	m.albumList.SetItems(alItems)
+	if len(plItems) > 0 {
+		idx := clampInt(prevPlaylistIndex, 0, len(plItems)-1)
 		m.playlistList.Select(idx)
 	}
-	if len(items) >= playlistLoadMax || len(msg.items) == 0 || !msg.hasMore {
+	if len(alItems) > 0 {
+		idx := clampInt(prevAlbumIndex, 0, len(alItems)-1)
+		m.albumList.Select(idx)
+	}
+
+	totalItems := len(plItems) + len(alItems)
+	if totalItems >= playlistLoadMax || len(msg.items) == 0 || !msg.hasMore {
 		m.playlistsExhausted = true
 	}
 	return m, tea.Batch(
@@ -118,46 +147,46 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 func (m model) handleCurrentUserIDMsg(msg currentUserIDMsg) (tea.Model, tea.Cmd) {
 	if msg.err == nil && msg.userID != "" {
 		m.currentUserID = msg.userID
-		if m.shouldLoadPlaylistTracks() && m.activePlaylistID != "" && !m.activePlaylistTrackLoading &&
+		if m.shouldLoadPlaylistItems() && m.activePlaylistID != "" && !m.activePlaylistItemLoading &&
 			(m.activePlaylistOwnerID == msg.userID || m.activePlaylistCollaborative) {
-			m.activePlaylistTrackHasMore = true
-			m.activePlaylistTrackLoading = true
+			m.activePlaylistItemHasMore = true
+			m.activePlaylistItemLoading = true
 			m.activePlaylistLoadToken++
-			return m, m.loadPlaylistTracksCmd(m.activePlaylistID, 0, m.activePlaylistLoadToken)
+			return m, m.loadPlaylistItemsCmd(m.activePlaylistID, 0, m.activePlaylistLoadToken)
 		}
 	}
 	return m, m.loadPlaylistsCmd(0, playlistLoadBatchSize)
 }
 
-func (m model) handlePlaylistTracksMsg(msg playlistTracksMsg) (tea.Model, tea.Cmd) {
+func (m model) handlePlaylistItemsMsg(msg playlistItemsMsg) (tea.Model, tea.Cmd) {
 	if msg.playlistID == "" || msg.playlistID != m.activePlaylistID || msg.token != m.activePlaylistLoadToken {
 		return m, nil
 	}
-	m.activePlaylistTrackLoading = false
+	m.activePlaylistItemLoading = false
 	if msg.err != nil {
-		m.activePlaylistTrackHasMore = false
-		if !m.shouldLoadPlaylistTracks() || spotify.IsForbidden(msg.err) {
+		m.activePlaylistItemHasMore = false
+		if !m.shouldLoadPlaylistItems() || spotify.IsForbidden(msg.err) {
 			slog.Warn("optional playlist-track fetch skipped", "playlist_id", msg.playlistID, "error", msg.err)
 			return m, nil
 		}
 		m.playbackErr = msg.err
-		slog.Error("fetch playlist tracks failed", "playlist_id", msg.playlistID, "error", msg.err)
-		if spotify.IsTransientAPIError(msg.err) && !spotify.IsRateLimitError(msg.err) && m.playlistTrackRetryCount < 2 {
-			m.playlistTrackRetryCount++
-			m.activePlaylistTrackLoading = true
-			return m, m.loadPlaylistTracksCmd(msg.playlistID, m.activePlaylistTrackNextOffset, m.activePlaylistLoadToken)
+		slog.Error("fetch playlist items failed", "playlist_id", msg.playlistID, "error", msg.err)
+		if spotify.IsTransientAPIError(msg.err) && !spotify.IsRateLimitError(msg.err) && m.playlistItemRetryCount < 2 {
+			m.playlistItemRetryCount++
+			m.activePlaylistItemLoading = true
+			return m, m.loadPlaylistItemsCmd(msg.playlistID, m.activePlaylistItemNextOffset, m.activePlaylistLoadToken)
 		}
 		return m, nil
 	}
-	m.playlistTrackRetryCount = 0
-	seen := make(map[string]struct{}, len(m.activePlaylistTrackIDs)+len(msg.trackIDs))
-	for _, trackID := range m.activePlaylistTrackIDs {
+	m.playlistItemRetryCount = 0
+	seen := make(map[string]struct{}, len(m.activePlaylistItemIDs)+len(msg.itemIDs))
+	for _, trackID := range m.activePlaylistItemIDs {
 		if trackID == "" {
 			continue
 		}
 		seen[trackID] = struct{}{}
 	}
-	for i, trackID := range msg.trackIDs {
+	for i, trackID := range msg.itemIDs {
 		if trackID == "" {
 			continue
 		}
@@ -165,17 +194,17 @@ func (m model) handlePlaylistTracksMsg(msg playlistTracksMsg) (tea.Model, tea.Cm
 			continue
 		}
 		seen[trackID] = struct{}{}
-		m.activePlaylistTrackIDs = append(m.activePlaylistTrackIDs, trackID)
-		if i < len(msg.trackInfos) {
-			if info := msg.trackInfos[i]; info.Name != "" {
+		m.activePlaylistItemIDs = append(m.activePlaylistItemIDs, trackID)
+		if i < len(msg.itemInfos) {
+			if info := msg.itemInfos[i]; info.Name != "" {
 				m.trackCache.Set(trackID, info)
 			}
 		}
 	}
-	m.activePlaylistTrackNextOffset = msg.nextOffset
-	m.activePlaylistTrackHasMore = msg.hasMore
+	m.activePlaylistItemNextOffset = msg.nextOffset
+	m.activePlaylistItemHasMore = msg.hasMore
 	cmds := make([]tea.Cmd, 0, 2)
-	if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
+	if cmd := m.maybeLoadMorePlaylistItemsCmd(playlistItemPreloadMax); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	return m, tea.Batch(cmds...)
@@ -185,10 +214,7 @@ func (m model) handleNavDebounceMsg(msg navDebounceMsg) (tea.Model, tea.Cmd) {
 	if msg.token != m.navToken {
 		return m, nil
 	}
-	if m.modal {
-		return m, m.maybeLoadMorePlaylistsCmd(m.modalList)
-	}
-	if m.screen != screenPlaylist {
+	if m.activeTab == tabPlayer {
 		return m, nil
 	}
 	return m, tea.Batch(
@@ -258,10 +284,7 @@ func (m model) handleActionMsg(msg actionMsg) (tea.Model, tea.Cmd) {
 	m.playbackErr = nil
 	switch msg.action {
 	case "play-from-browser":
-		m.screen = screenPlayback
-	case "play-from-modal":
-		m.modal = false
-		m.modalKind = modalKindNone
+		m.activeTab = tabPlayer
 	}
 	cmds := []tea.Cmd{m.pollCmd(true)}
 	if cmd := m.pumpInputExecutor(); cmd != nil {
@@ -330,14 +353,14 @@ func (m model) handleSeekDebounceMsg(msg seekDebounceMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleFilterMatchesMsg(msg list.FilterMatchesMsg) (tea.Model, tea.Cmd) {
-	if m.modal {
-		var cmd tea.Cmd
-		m.modalList, cmd = m.modalList.Update(msg)
-		return m, cmd
-	}
-	if m.screen == screenPlaylist {
+	switch m.activeTab {
+	case tabPlaylists:
 		var cmd tea.Cmd
 		m.playlistList, cmd = m.playlistList.Update(msg)
+		return m, cmd
+	case tabAlbums:
+		var cmd tea.Cmd
+		m.albumList, cmd = m.albumList.Update(msg)
 		return m, cmd
 	}
 	return m, nil

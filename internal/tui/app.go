@@ -17,32 +17,28 @@ import (
 	"orpheus/internal/spotify"
 )
 
-type screen string
-type modalKind string
+type tab string
 
 const (
-	screenPlaylist          screen = "playlist"
-	screenPlayback          screen = "playback"
-	playlistTrackPageSize          = 100
-	queuePollEvery                 = 4
-	playlistLoadBatchSize          = 20
-	playlistLoadMax                = 500
-	playlistTrackPreloadMax        = 500
-	coverPreloadWindow             = 14
-	imageLoadRetryMax              = 4
-	trackMetadataTTL               = 2 * time.Hour
-	uiTickInterval                 = 200 * time.Millisecond
-	navDebounceInterval            = 120 * time.Millisecond
-	volSeekDebounceInterval        = 150 * time.Millisecond
-	volSettleWindow                = 3 * time.Second
-	seekSettleWindow               = 1200 * time.Millisecond
-	reconcileActionWindow          = 2 * time.Second
-	actionFastPollWindow           = 3 * time.Second
-	idlePollBackoffMax             = 5 * time.Second
-
-	modalKindNone     modalKind = ""
-	modalKindPlaylist modalKind = "playlist"
-	modalKindHelp     modalKind = "help"
+	tabPlaylists            tab = "playlists"
+	tabAlbums               tab = "albums"
+	tabPlayer               tab = "player"
+	playlistItemPageSize        = 100
+	queuePollEvery              = 4
+	playlistLoadBatchSize       = 25
+	playlistLoadMax             = 500
+	playlistItemPreloadMax      = 500
+	coverPreloadWindow          = 14
+	imageLoadRetryMax           = 4
+	trackMetadataTTL            = 2 * time.Hour
+	uiTickInterval              = 200 * time.Millisecond
+	navDebounceInterval         = 120 * time.Millisecond
+	volSeekDebounceInterval     = 150 * time.Millisecond
+	volSettleWindow             = 3 * time.Second
+	seekSettleWindow            = 1200 * time.Millisecond
+	reconcileActionWindow       = 2 * time.Second
+	actionFastPollWindow        = 3 * time.Second
+	idlePollBackoffMax          = 5 * time.Second
 )
 
 type model struct {
@@ -57,9 +53,8 @@ type model struct {
 	pollElapsed         time.Duration
 	actionFastPollUntil time.Time
 
-	screen         screen
-	modal          bool
-	modalKind      modalKind
+	activeTab      tab
+	helpOpen       bool
 	navToken       int
 	actionInFlight bool
 
@@ -72,42 +67,42 @@ type model struct {
 	seekDebouncePending int
 	seekDebounceToken   int
 
-	status             *spotify.PlaybackStatus
-	queue              []spotify.QueueItem
-	queueHasMore       bool
-	stableQueueLen     int
-	pendingContextFrom string
+	status                       *spotify.PlaybackStatus
+	queue                        []spotify.QueueItem
+	queueHasMore                 bool
+	stableQueueLen               int
+	pendingContextFrom           string
 	transportTransitionPending   bool
 	transportTransitionFromTrack string
 	transportTransitionStartedAt time.Time
-	transportRecoveryPending    bool
-	transportStuckCount         int
-	inputQueue                  []playbackInput
-	executorState               commandExecutorState
+	transportRecoveryPending     bool
+	transportStuckCount          int
+	inputQueue                   []playbackInput
+	executorState                commandExecutorState
 
-	activePlaylistID              string
-	activePlaylistOwnerID         string
-	activePlaylistCollaborative   bool
-	activePlaylistTrackIDs        []string
-	activePlaylistTrackNextOffset int
-	activePlaylistTrackHasMore    bool
-	activePlaylistTrackLoading    bool
-	activePlaylistLoadToken       int
-	preloadedTrackIDs             map[string]struct{}
-	trackCache                    *cache.TTL[string, spotify.QueueItem]
-	imageRetryCount               map[string]int
-	imageRetryToken               map[string]int
-	playlistsLoading              bool
-	playlistsExhausted            bool
-	albumsForbidden               bool
-	playlistsErr                  error
-	playlistsRetryCount           int
-	playbackErr                   error
-	playlistTrackRetryCount       int
-	currentUserID                 string
+	activePlaylistID             string
+	activePlaylistOwnerID        string
+	activePlaylistCollaborative  bool
+	activePlaylistItemIDs        []string
+	activePlaylistItemNextOffset int
+	activePlaylistItemHasMore    bool
+	activePlaylistItemLoading    bool
+	activePlaylistLoadToken      int
+	preloadedItemIDs             map[string]struct{}
+	trackCache                   *cache.TTL[string, spotify.QueueItem]
+	imageRetryCount              map[string]int
+	imageRetryToken              map[string]int
+	playlistsLoading             bool
+	playlistsExhausted           bool
+	albumsForbidden              bool
+	playlistsErr                 error
+	playlistsRetryCount          int
+	playbackErr                  error
+	playlistItemRetryCount       int
+	currentUserID                string
 
 	playlistList list.Model
-	modalList    list.Model
+	albumList    list.Model
 
 	imgs *imgCache
 
@@ -139,26 +134,24 @@ func (p playlistItem) Description() string {
 
 func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand) model {
 	delegate := newPlaylistDelegate()
-	modalDelegate := newPlaylistModalDelegate(false)
 
 	browser := list.New(nil, delegate, 40, 20)
-	browser.Title = "Library"
-	browser.SetShowStatusBar(true)
+	browser.SetShowTitle(false)
+	browser.SetShowStatusBar(false)
 	browser.SetFilteringEnabled(true)
 	browser.SetShowFilter(true)
 	browser.SetShowHelp(false)
 	browser.FilterInput.Prompt = "Search: "
 	applyListStyles(&browser)
 
-	modal := list.New(nil, modalDelegate, 40, 20)
-	modal.Title = ""
-	modal.SetShowTitle(false)
-	modal.SetShowStatusBar(false)
-	modal.SetFilteringEnabled(true)
-	modal.SetShowFilter(true)
-	modal.SetShowHelp(false)
-	modal.FilterInput.Prompt = "Search: "
-	applyListStyles(&modal)
+	albums := list.New(nil, delegate, 40, 20)
+	albums.SetShowTitle(false)
+	albums.SetShowStatusBar(false)
+	albums.SetFilteringEnabled(true)
+	albums.SetShowFilter(true)
+	albums.SetShowHelp(false)
+	albums.FilterInput.Prompt = "Search: "
+	applyListStyles(&albums)
 
 	h := newHelp()
 
@@ -169,12 +162,11 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		deviceName:          cfg.DeviceName,
 		tuiCmdCh:            tuiCmdCh,
 		pollInterval:        cfg.PollInterval,
-		screen:              screenPlaylist,
-		modalKind:           modalKindNone,
+		activeTab:           tabPlaylists,
 		playlistList:        browser,
-		modalList:           modal,
+		albumList:           albums,
 		imgs:                newImgCache(),
-		preloadedTrackIDs:   make(map[string]struct{}),
+		preloadedItemIDs:    make(map[string]struct{}),
 		trackCache:          cache.NewTTL[string, spotify.QueueItem](4096, trackMetadataTTL),
 		imageRetryCount:     make(map[string]int),
 		imageRetryToken:     make(map[string]int),
@@ -187,11 +179,6 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		help:                h,
 		keys:                newKeys(),
 	}
-}
-
-func (m *model) syncModalDelegate() {
-	searching := m.modalList.FilterState() != list.Unfiltered
-	m.modalList.SetDelegate(newPlaylistModalDelegate(searching))
 }
 
 func selectedImageURLFromList(l list.Model) string {
@@ -212,12 +199,15 @@ func (m model) needsImageURL(url string) bool {
 	if sel, ok := m.selectedPlaylist(); ok && sel.summary.ImageURL == url {
 		return true
 	}
-	if m.modal {
-		if selURL := selectedImageURLFromList(m.modalList); selURL == url {
+	if sel, ok := m.selectedAlbum(); ok && sel.summary.ImageURL == url {
+		return true
+	}
+	for _, pl := range m.visiblePlaylistItems() {
+		if pl.summary.ImageURL == url {
 			return true
 		}
 	}
-	for _, pl := range m.visiblePlaylistItems() {
+	for _, pl := range m.visibleAlbumItems() {
 		if pl.summary.ImageURL == url {
 			return true
 		}
@@ -255,8 +245,6 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	if inVolSettle && msg.status != nil && m.volSentTarget >= 0 {
 		msg.status.Volume = m.volSentTarget
 	}
-	// Playback-state pushes don't carry a pre-override device volume, so this
-	// path can only clear the settle guard by timeout.
 	if m.volSentTarget >= 0 && time.Since(m.volSentAt) >= volSettleWindow {
 		m.volSentTarget = -1
 	}
@@ -344,8 +332,6 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 	if m.shouldApplySeekSettle(msg.status) {
 		msg.status.ProgressMS = m.clampSeekTarget(m.seekSettleProgress())
 	}
-	// Clear guard only when the device actually reports the target (real confirmation),
-	// not after the override above, which would always match.
 	m.clearVolumeSettleTarget(incomingVol)
 	m.clearSeekSettleTarget(incomingProgress)
 	if msg.status != nil {
@@ -378,7 +364,7 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
 	}
 	if msg.queueFetched {
-		if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
+		if cmd := m.maybeLoadMorePlaylistItemsCmd(playlistItemPreloadMax); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	}
@@ -462,7 +448,7 @@ func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.
 		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
 	}
 	if msg.queueFetched {
-		if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
+		if cmd := m.maybeLoadMorePlaylistItemsCmd(playlistItemPreloadMax); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	}
@@ -482,76 +468,41 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyMatches(msg, k.Quit):
 		return m, tea.Quit
 	case keyMatches(msg, k.ToggleHelp):
-		if m.modal && m.modalKind == modalKindHelp {
-			m.modal = false
-			m.modalKind = modalKindNone
-			return m, nil
-		}
-		m.modal = true
-		m.modalKind = modalKindHelp
+		m.helpOpen = !m.helpOpen
 		return m, nil
 	}
 
-	if m.modal {
-		return m.handleModalKey(msg)
+	if m.helpOpen {
+		if keyMatches(msg, k.CloseModal) {
+			m.helpOpen = false
+		}
+		return m, nil
 	}
 
-	if m.screen == screenPlaylist {
+	if keyMatches(msg, k.Tab) {
+		filtering := (m.activeTab == tabPlaylists && m.playlistList.FilterState() == list.Filtering) ||
+			(m.activeTab == tabAlbums && m.albumList.FilterState() == list.Filtering)
+		if !filtering {
+			switch m.activeTab {
+			case tabPlaylists:
+				m.activeTab = tabAlbums
+			case tabAlbums:
+				m.activeTab = tabPlayer
+			case tabPlayer:
+				m.activeTab = tabPlaylists
+			}
+			return m, nil
+		}
+	}
+
+	switch m.activeTab {
+	case tabPlaylists:
 		return m.handlePlaylistKey(msg)
+	case tabAlbums:
+		return m.handleAlbumKey(msg)
+	default:
+		return m.handlePlaybackKey(msg)
 	}
-
-	return m.handlePlaybackKey(msg)
-}
-
-func (m model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	k := m.keys
-	if m.modalKind == modalKindHelp {
-		switch {
-		case keyMatches(msg, k.CloseModal), keyMatches(msg, k.ToggleHelp):
-			m.modal = false
-			m.modalKind = modalKindNone
-			return m, nil
-		}
-		return m, nil
-	}
-	if m.modalList.FilterState() == list.Filtering {
-		prevURL := selectedImageURLFromList(m.modalList)
-		var cmd tea.Cmd
-		m.modalList, cmd = m.modalList.Update(msg)
-		m.syncModalDelegate()
-		nextURL := selectedImageURLFromList(m.modalList)
-		cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
-		if nextURL != "" && nextURL != prevURL {
-			cmds = append(cmds, m.loadImageCmd(nextURL))
-		}
-		return m, tea.Batch(cmds...)
-	}
-	switch {
-	case keyMatches(msg, k.CloseModal):
-		m.modal = false
-		m.modalKind = modalKindNone
-		m.modalList.ResetFilter()
-		m.syncModalDelegate()
-		return m, nil
-
-	case keyMatches(msg, k.Select):
-		sel, ok := m.modalList.SelectedItem().(playlistItem)
-		if !ok {
-			return m, nil
-		}
-		return m.selectAndPlayPlaylist(sel, "play-from-modal")
-	}
-
-	prevURL := selectedImageURLFromList(m.modalList)
-	var cmd tea.Cmd
-	m.modalList, cmd = m.modalList.Update(msg)
-	m.syncModalDelegate()
-	nextURL := selectedImageURLFromList(m.modalList)
-	cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
-	if nextURL != "" && nextURL != prevURL {
-		cmds = append(cmds, m.loadImageCmd(nextURL))
-	}
-	return m, tea.Batch(cmds...)
 }
 
 func (m model) handlePlaylistKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -595,14 +546,45 @@ func (m model) handlePlaylistKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m model) handleAlbumKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	k := m.keys
+	if m.albumList.FilterState() == list.Filtering {
+		prevURL := selectedImageURLFromList(m.albumList)
+		var cmd tea.Cmd
+		m.albumList, cmd = m.albumList.Update(msg)
+		nextURL := selectedImageURLFromList(m.albumList)
+		cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
+		if nextURL != "" && nextURL != prevURL {
+			cmds = append(cmds, m.loadImageCmd(nextURL))
+		}
+		return m, tea.Batch(cmds...)
+	}
+	switch {
+	case keyMatches(msg, k.Select):
+		sel, ok := m.albumList.SelectedItem().(playlistItem)
+		if !ok {
+			return m, nil
+		}
+		return m.selectAndPlayPlaylist(sel, "play-from-browser")
+	}
+
+	prevURL := selectedImageURLFromList(m.albumList)
+	var cmd tea.Cmd
+	m.albumList, cmd = m.albumList.Update(msg)
+	nextURL := selectedImageURLFromList(m.albumList)
+	cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
+	if nextURL != "" && nextURL != prevURL {
+		cmds = append(cmds, m.loadImageCmd(nextURL))
+	}
+	return m, tea.Batch(cmds...)
+}
+
 func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := m.keys
 	var action playbackInputKind
 	switch {
 	case keyMatches(msg, k.Refresh):
 		action = playbackInputRefresh
-	case keyMatches(msg, k.OpenPicker):
-		action = playbackInputOpenPicker
 	case keyMatches(msg, k.PlayPause):
 		action = playbackInputPlayPause
 	case keyMatches(msg, k.Next):
@@ -629,12 +611,10 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model, tea.Cmd) {
-	m.screen = screenPlayback
-	m.modal = false
-	m.modalKind = modalKindNone
+	m.activeTab = tabPlayer
 	m.playbackErr = nil
 	isPlaylist := sel.summary.Kind != spotify.ContextKindAlbum
-	canReadTracks := isPlaylist && m.shouldLoadPlaylistTracks() && m.canReadPlaylistTracks(sel.summary)
+	canReadTracks := isPlaylist && m.shouldLoadPlaylistItems() && m.canReadPlaylistTracks(sel.summary)
 	activeID := ""
 	ownerID := ""
 	collaborative := false
@@ -658,9 +638,9 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 		}
 		cmds := []tea.Cmd{m.loadImageCmd(sel.summary.ImageURL)}
 		if canReadTracks {
-			m.activePlaylistTrackLoading = true
+			m.activePlaylistItemLoading = true
 			m.activePlaylistLoadToken++
-			cmds = append(cmds, m.loadPlaylistTracksCmd(sel.summary.ID, 0, m.activePlaylistLoadToken))
+			cmds = append(cmds, m.loadPlaylistItemsCmd(sel.summary.ID, 0, m.activePlaylistLoadToken))
 		}
 		return m, tea.Batch(cmds...)
 	}
@@ -673,9 +653,9 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 	m.beginTransportTransition()
 	m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
 	if canReadTracks {
-		m.activePlaylistTrackLoading = true
+		m.activePlaylistItemLoading = true
 		m.activePlaylistLoadToken++
-		cmds = append(cmds, m.loadPlaylistTracksCmd(sel.summary.ID, 0, m.activePlaylistLoadToken))
+		cmds = append(cmds, m.loadPlaylistItemsCmd(sel.summary.ID, 0, m.activePlaylistLoadToken))
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -740,7 +720,13 @@ func (m model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 	if sel, ok := m.selectedPlaylist(); ok {
 		add(sel.summary.ImageURL)
 	}
+	if sel, ok := m.selectedAlbum(); ok {
+		add(sel.summary.ImageURL)
+	}
 	for _, pl := range m.visiblePlaylistItems() {
+		add(pl.summary.ImageURL)
+	}
+	for _, pl := range m.visibleAlbumItems() {
 		add(pl.summary.ImageURL)
 	}
 	items := m.playlistList.Items()
@@ -750,6 +736,20 @@ func (m model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 		start := max(0, center-half)
 		end := min(len(items), center+half+1)
 		for _, item := range items[start:end] {
+			pl, ok := item.(playlistItem)
+			if !ok {
+				continue
+			}
+			add(pl.summary.ImageURL)
+		}
+	}
+	albumItems := m.albumList.Items()
+	if m.albumList.FilterState() == list.Unfiltered && len(albumItems) > 0 {
+		center := clampInt(m.albumList.GlobalIndex(), 0, len(albumItems)-1)
+		half := coverPreloadWindow / 2
+		start := max(0, center-half)
+		end := min(len(albumItems), center+half+1)
+		for _, item := range albumItems[start:end] {
 			pl, ok := item.(playlistItem)
 			if !ok {
 				continue
@@ -772,6 +772,33 @@ func (m model) visiblePlaylistItems() []playlistItem {
 		perPage = len(visible)
 	}
 	start := m.playlistList.Paginator.Page * perPage
+	if start < 0 || start >= len(visible) {
+		return nil
+	}
+	end := min(len(visible), start+perPage)
+
+	out := make([]playlistItem, 0, end-start)
+	for _, item := range visible[start:end] {
+		pl, ok := item.(playlistItem)
+		if !ok {
+			continue
+		}
+		out = append(out, pl)
+	}
+	return out
+}
+
+func (m model) visibleAlbumItems() []playlistItem {
+	visible := m.albumList.VisibleItems()
+	if len(visible) == 0 {
+		return nil
+	}
+
+	perPage := m.albumList.Paginator.PerPage
+	if perPage <= 0 {
+		perPage = len(visible)
+	}
+	start := m.albumList.Paginator.Page * perPage
 	if start < 0 || start >= len(visible) {
 		return nil
 	}
@@ -825,27 +852,27 @@ func (m *model) setActivePlaylist(playlistID string, canReadTracks bool, ownerID
 	m.activePlaylistID = playlistID
 	m.activePlaylistOwnerID = ownerID
 	m.activePlaylistCollaborative = collaborative
-	m.activePlaylistTrackIDs = nil
-	m.activePlaylistTrackNextOffset = 0
-	m.activePlaylistTrackHasMore = playlistID != "" && canReadTracks
-	m.activePlaylistTrackLoading = false
-	m.playlistTrackRetryCount = 0
-	if m.preloadedTrackIDs == nil {
-		m.preloadedTrackIDs = make(map[string]struct{})
+	m.activePlaylistItemIDs = nil
+	m.activePlaylistItemNextOffset = 0
+	m.activePlaylistItemHasMore = playlistID != "" && canReadTracks
+	m.activePlaylistItemLoading = false
+	m.playlistItemRetryCount = 0
+	if m.preloadedItemIDs == nil {
+		m.preloadedItemIDs = make(map[string]struct{})
 	}
-	for id := range m.preloadedTrackIDs {
-		delete(m.preloadedTrackIDs, id)
+	for id := range m.preloadedItemIDs {
+		delete(m.preloadedItemIDs, id)
 	}
 	m.trackCache.Clear()
 }
 
-func (m *model) maybeLoadMorePlaylistTracksCmd(limit int) tea.Cmd {
-	if !m.shouldLoadPlaylistTracks() || limit <= 0 || m.activePlaylistID == "" || !m.activePlaylistTrackHasMore || m.activePlaylistTrackLoading || m.status == nil || m.status.TrackID == "" {
+func (m *model) maybeLoadMorePlaylistItemsCmd(limit int) tea.Cmd {
+	if !m.shouldLoadPlaylistItems() || limit <= 0 || m.activePlaylistID == "" || !m.activePlaylistItemHasMore || m.activePlaylistItemLoading || m.status == nil || m.status.TrackID == "" {
 		return nil
 	}
 	currentNorm := normalizeQueueID(m.status.TrackID)
 	currentIndex := -1
-	for i, trackID := range m.activePlaylistTrackIDs {
+	for i, trackID := range m.activePlaylistItemIDs {
 		if normalizeQueueID(trackID) == currentNorm {
 			currentIndex = i
 			break
@@ -854,12 +881,12 @@ func (m *model) maybeLoadMorePlaylistTracksCmd(limit int) tea.Cmd {
 	if currentIndex < 0 {
 		return nil
 	}
-	if currentIndex >= 0 && len(m.activePlaylistTrackIDs)-currentIndex-1 >= limit {
+	if currentIndex >= 0 && len(m.activePlaylistItemIDs)-currentIndex-1 >= limit {
 		return nil
 	}
-	m.activePlaylistTrackLoading = true
+	m.activePlaylistItemLoading = true
 	m.activePlaylistLoadToken++
-	return m.loadPlaylistTracksCmd(m.activePlaylistID, m.activePlaylistTrackNextOffset, m.activePlaylistLoadToken)
+	return m.loadPlaylistItemsCmd(m.activePlaylistID, m.activePlaylistItemNextOffset, m.activePlaylistLoadToken)
 }
 
 func (m model) canReadPlaylistTracks(pl spotify.PlaylistSummary) bool {
@@ -869,12 +896,12 @@ func (m model) canReadPlaylistTracks(pl spotify.PlaylistSummary) bool {
 	return pl.OwnerID == m.currentUserID || pl.Collaborative
 }
 
-func (m model) shouldLoadPlaylistTracks() bool {
+func (m model) shouldLoadPlaylistItems() bool {
 	return m.service != nil
 }
 
 func (m model) nextTracksToPreload(limit int) []string {
-	if limit <= 0 || m.status == nil || m.status.TrackID == "" || len(m.activePlaylistTrackIDs) == 0 || m.activePlaylistID == "" {
+	if limit <= 0 || m.status == nil || m.status.TrackID == "" || len(m.activePlaylistItemIDs) == 0 || m.activePlaylistID == "" {
 		return nil
 	}
 	if m.status.ShuffleState {
@@ -883,7 +910,7 @@ func (m model) nextTracksToPreload(limit int) []string {
 
 	currentNorm := normalizeQueueID(m.status.TrackID)
 	currentIndex := -1
-	for i, trackID := range m.activePlaylistTrackIDs {
+	for i, trackID := range m.activePlaylistItemIDs {
 		if normalizeQueueID(trackID) == currentNorm {
 			currentIndex = i
 			break
@@ -893,20 +920,20 @@ func (m model) nextTracksToPreload(limit int) []string {
 		return nil
 	}
 
-	blocked := make(map[string]struct{}, len(m.queue)+len(m.preloadedTrackIDs)+1)
+	blocked := make(map[string]struct{}, len(m.queue)+len(m.preloadedItemIDs)+1)
 	for _, q := range m.queue {
 		if q.ID != "" {
 			blocked[normalizeQueueID(q.ID)] = struct{}{}
 		}
 	}
-	for trackID := range m.preloadedTrackIDs {
+	for trackID := range m.preloadedItemIDs {
 		blocked[normalizeQueueID(trackID)] = struct{}{}
 	}
 	blocked[currentNorm] = struct{}{}
 
 	out := make([]string, 0, limit)
-	for i := currentIndex + 1; i < len(m.activePlaylistTrackIDs) && len(out) < limit; i++ {
-		trackID := m.activePlaylistTrackIDs[i]
+	for i := currentIndex + 1; i < len(m.activePlaylistItemIDs) && len(out) < limit; i++ {
+		trackID := m.activePlaylistItemIDs[i]
 		if trackID == "" {
 			continue
 		}
