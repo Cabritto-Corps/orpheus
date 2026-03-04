@@ -147,46 +147,46 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 func (m model) handleCurrentUserIDMsg(msg currentUserIDMsg) (tea.Model, tea.Cmd) {
 	if msg.err == nil && msg.userID != "" {
 		m.currentUserID = msg.userID
-		if m.shouldLoadPlaylistTracks() && m.activePlaylistID != "" && !m.activePlaylistTrackLoading &&
+		if m.shouldLoadPlaylistItems() && m.activePlaylistID != "" && !m.activePlaylistItemLoading &&
 			(m.activePlaylistOwnerID == msg.userID || m.activePlaylistCollaborative) {
-			m.activePlaylistTrackHasMore = true
-			m.activePlaylistTrackLoading = true
+			m.activePlaylistItemHasMore = true
+			m.activePlaylistItemLoading = true
 			m.activePlaylistLoadToken++
-			return m, m.loadPlaylistTracksCmd(m.activePlaylistID, 0, m.activePlaylistLoadToken)
+			return m, m.loadPlaylistItemsCmd(m.activePlaylistID, 0, m.activePlaylistLoadToken)
 		}
 	}
 	return m, m.loadPlaylistsCmd(0, playlistLoadBatchSize)
 }
 
-func (m model) handlePlaylistTracksMsg(msg playlistTracksMsg) (tea.Model, tea.Cmd) {
+func (m model) handlePlaylistItemsMsg(msg playlistItemsMsg) (tea.Model, tea.Cmd) {
 	if msg.playlistID == "" || msg.playlistID != m.activePlaylistID || msg.token != m.activePlaylistLoadToken {
 		return m, nil
 	}
-	m.activePlaylistTrackLoading = false
+	m.activePlaylistItemLoading = false
 	if msg.err != nil {
-		m.activePlaylistTrackHasMore = false
-		if !m.shouldLoadPlaylistTracks() || spotify.IsForbidden(msg.err) {
+		m.activePlaylistItemHasMore = false
+		if !m.shouldLoadPlaylistItems() || spotify.IsForbidden(msg.err) {
 			slog.Warn("optional playlist-track fetch skipped", "playlist_id", msg.playlistID, "error", msg.err)
 			return m, nil
 		}
 		m.playbackErr = msg.err
-		slog.Error("fetch playlist tracks failed", "playlist_id", msg.playlistID, "error", msg.err)
-		if spotify.IsTransientAPIError(msg.err) && !spotify.IsRateLimitError(msg.err) && m.playlistTrackRetryCount < 2 {
-			m.playlistTrackRetryCount++
-			m.activePlaylistTrackLoading = true
-			return m, m.loadPlaylistTracksCmd(msg.playlistID, m.activePlaylistTrackNextOffset, m.activePlaylistLoadToken)
+		slog.Error("fetch playlist items failed", "playlist_id", msg.playlistID, "error", msg.err)
+		if spotify.IsTransientAPIError(msg.err) && !spotify.IsRateLimitError(msg.err) && m.playlistItemRetryCount < 2 {
+			m.playlistItemRetryCount++
+			m.activePlaylistItemLoading = true
+			return m, m.loadPlaylistItemsCmd(msg.playlistID, m.activePlaylistItemNextOffset, m.activePlaylistLoadToken)
 		}
 		return m, nil
 	}
-	m.playlistTrackRetryCount = 0
-	seen := make(map[string]struct{}, len(m.activePlaylistTrackIDs)+len(msg.trackIDs))
-	for _, trackID := range m.activePlaylistTrackIDs {
+	m.playlistItemRetryCount = 0
+	seen := make(map[string]struct{}, len(m.activePlaylistItemIDs)+len(msg.itemIDs))
+	for _, trackID := range m.activePlaylistItemIDs {
 		if trackID == "" {
 			continue
 		}
 		seen[trackID] = struct{}{}
 	}
-	for i, trackID := range msg.trackIDs {
+	for i, trackID := range msg.itemIDs {
 		if trackID == "" {
 			continue
 		}
@@ -194,17 +194,17 @@ func (m model) handlePlaylistTracksMsg(msg playlistTracksMsg) (tea.Model, tea.Cm
 			continue
 		}
 		seen[trackID] = struct{}{}
-		m.activePlaylistTrackIDs = append(m.activePlaylistTrackIDs, trackID)
-		if i < len(msg.trackInfos) {
-			if info := msg.trackInfos[i]; info.Name != "" {
+		m.activePlaylistItemIDs = append(m.activePlaylistItemIDs, trackID)
+		if i < len(msg.itemInfos) {
+			if info := msg.itemInfos[i]; info.Name != "" {
 				m.trackCache.Set(trackID, info)
 			}
 		}
 	}
-	m.activePlaylistTrackNextOffset = msg.nextOffset
-	m.activePlaylistTrackHasMore = msg.hasMore
+	m.activePlaylistItemNextOffset = msg.nextOffset
+	m.activePlaylistItemHasMore = msg.hasMore
 	cmds := make([]tea.Cmd, 0, 2)
-	if cmd := m.maybeLoadMorePlaylistTracksCmd(playlistTrackPreloadMax); cmd != nil {
+	if cmd := m.maybeLoadMorePlaylistItemsCmd(playlistItemPreloadMax); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	return m, tea.Batch(cmds...)

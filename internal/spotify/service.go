@@ -33,9 +33,7 @@ type API interface {
 	PlayerDevices(ctx context.Context) ([]spotifyapi.PlayerDevice, error)
 	PlayerState(ctx context.Context, opts ...spotifyapi.RequestOption) (*spotifyapi.PlayerState, error)
 	CurrentUser(ctx context.Context) (*spotifyapi.PrivateUser, error)
-	CurrentUsersPlaylists(ctx context.Context, opts ...spotifyapi.RequestOption) (*spotifyapi.SimplePlaylistPage, error)
 	CurrentUsersAlbums(ctx context.Context, opts ...spotifyapi.RequestOption) (*spotifyapi.SavedAlbumPage, error)
-	GetPlaylistItems(ctx context.Context, playlistID spotifyapi.ID, opts ...spotifyapi.RequestOption) (*spotifyapi.PlaylistItemPage, error)
 	GetQueue(ctx context.Context) (*spotifyapi.Queue, error)
 	TransferPlayback(ctx context.Context, deviceID spotifyapi.ID, play bool) error
 	PlayOpt(ctx context.Context, opt *spotifyapi.PlayOptions) error
@@ -144,9 +142,9 @@ type PlaylistPage struct {
 	HasMore    bool
 }
 
-type PlaylistTrackPage struct {
-	TrackIDs   []string
-	TrackInfos []QueueItem // parallel slice: name/artist/duration for each TrackID
+type PlaylistItemsPage struct {
+	ItemIDs    []string
+	ItemInfos  []QueueItem // parallel slice: metadata for each ItemID
 	Offset     int
 	Limit      int
 	NextOffset int
@@ -156,7 +154,7 @@ type PlaylistTrackPage struct {
 type PlaylistCatalog interface {
 	ListUserPlaylistsPage(ctx context.Context, offset, limit int) (*PlaylistPage, error)
 	ListSavedAlbumsPage(ctx context.Context, offset, limit int) (*PlaylistPage, error)
-	ListPlaylistTrackIDsPage(ctx context.Context, playlistID string, offset, limit int) (*PlaylistTrackPage, error)
+	ListPlaylistItemsPage(ctx context.Context, playlistID string, offset, limit int) (*PlaylistItemsPage, error)
 	CurrentUserID(ctx context.Context) (string, error)
 }
 

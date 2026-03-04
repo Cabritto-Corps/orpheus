@@ -85,8 +85,8 @@ func (m *model) beginReconcileAction(window time.Duration) {
 }
 
 func (m *model) clearPreloadedTracks() {
-	for id := range m.preloadedTrackIDs {
-		delete(m.preloadedTrackIDs, id)
+	for id := range m.preloadedItemIDs {
+		delete(m.preloadedItemIDs, id)
 	}
 }
 
@@ -377,16 +377,16 @@ func mergeQueueWithRest(prev, next []spotify.QueueItem, cache *cache.TTL[string,
 }
 
 func (m *model) rebuildPreloadedFromQueue() {
-	if m.preloadedTrackIDs == nil {
-		m.preloadedTrackIDs = make(map[string]struct{}, len(m.queue))
+	if m.preloadedItemIDs == nil {
+		m.preloadedItemIDs = make(map[string]struct{}, len(m.queue))
 	} else {
-		for k := range m.preloadedTrackIDs {
-			delete(m.preloadedTrackIDs, k)
+		for k := range m.preloadedItemIDs {
+			delete(m.preloadedItemIDs, k)
 		}
 	}
 	for _, q := range m.queue {
 		if q.ID != "" {
-			m.preloadedTrackIDs[normalizeQueueID(q.ID)] = struct{}{}
+			m.preloadedItemIDs[normalizeQueueID(q.ID)] = struct{}{}
 		}
 	}
 }

@@ -19,8 +19,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handlePlaylistsMsg(msg)
 	case currentUserIDMsg:
 		return m.handleCurrentUserIDMsg(msg)
-	case playlistTracksMsg:
-		return m.handlePlaylistTracksMsg(msg)
+	case playlistItemsMsg:
+		return m.handlePlaylistItemsMsg(msg)
 	case navDebounceMsg:
 		return m.handleNavDebounceMsg(msg)
 	case imageLoadedMsg:

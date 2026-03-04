@@ -185,10 +185,10 @@ func TestShouldApplyIncomingQueueClearsPendingContextQueue(t *testing.T) {
 
 func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 	m := model{
-		status:            &spotify.PlaybackStatus{},
-		queue:             []spotify.QueueItem{{ID: "spotify:track:stale"}},
-		preloadedTrackIDs: map[string]struct{}{"stale": {}, "ghost": {}},
-		trackCache:        cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
+		status:           &spotify.PlaybackStatus{},
+		queue:            []spotify.QueueItem{{ID: "spotify:track:stale"}},
+		preloadedItemIDs: map[string]struct{}{"stale": {}, "ghost": {}},
+		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 	}
 	m.applyMergedQueue(
 		[]spotify.QueueItem{
@@ -200,17 +200,17 @@ func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 		true,
 	)
 
-	if _, ok := m.preloadedTrackIDs["new-1"]; !ok {
+	if _, ok := m.preloadedItemIDs["new-1"]; !ok {
 		t.Fatal("expected normalized spotify id to be preloaded")
 	}
-	if _, ok := m.preloadedTrackIDs["plain-2"]; !ok {
+	if _, ok := m.preloadedItemIDs["plain-2"]; !ok {
 		t.Fatal("expected plain id to be preloaded")
 	}
-	if _, ok := m.preloadedTrackIDs["stale"]; ok {
+	if _, ok := m.preloadedItemIDs["stale"]; ok {
 		t.Fatal("expected stale preloaded ids to be removed")
 	}
-	if len(m.preloadedTrackIDs) != 2 {
-		t.Fatalf("expected preloaded id set to rebuild from merged queue, got %d entries", len(m.preloadedTrackIDs))
+	if len(m.preloadedItemIDs) != 2 {
+		t.Fatalf("expected preloaded id set to rebuild from merged queue, got %d entries", len(m.preloadedItemIDs))
 	}
 }
 

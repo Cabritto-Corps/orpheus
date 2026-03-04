@@ -2,10 +2,8 @@ package spotify
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -51,41 +49,40 @@ func (s *Service) ListUserPlaylistsPage(ctx context.Context, offset, limit int) 
 		limit = 50
 	}
 
-	page, err := apiCallWithRetry(ctx, func() (*spotifyapi.SimplePlaylistPage, error) {
-		return s.client.CurrentUsersPlaylists(ctx, spotifyapi.Limit(limit), spotifyapi.Offset(offset))
-	})
-	if err != nil {
-		return nil, fmt.Errorf("fetch user playlists: %w", err)
-	}
-
 	out := &PlaylistPage{
 		Offset: offset,
 		Limit:  limit,
 	}
-	if page == nil || len(page.Playlists) == 0 {
+	page, err := apiCallWithRetry(ctx, func() (*playlistPageResponse, error) {
+		return s.fetchPlaylistsViaHTTP(ctx, offset, limit)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fetch user playlists: %w", err)
+	}
+	if page == nil || len(page.Items) == 0 {
 		out.NextOffset = offset
 		return out, nil
 	}
-	out.Items = make([]PlaylistSummary, 0, len(page.Playlists))
-	for _, pl := range page.Playlists {
+	out.Items = make([]PlaylistSummary, 0, len(page.Items))
+	for _, pl := range page.Items {
 		imageURL := ""
 		if len(pl.Images) > 0 {
 			imageURL = pl.Images[0].URL
 		}
 		out.Items = append(out.Items, PlaylistSummary{
-			ID:            string(pl.ID),
+			ID:            pl.ID,
 			Name:          pl.Name,
-			URI:           string(pl.URI),
+			URI:           pl.URI,
 			Kind:          ContextKindPlaylist,
 			Owner:         pl.Owner.DisplayName,
 			OwnerID:       pl.Owner.ID,
 			Collaborative: pl.Collaborative,
-			TrackCount:    int(pl.Tracks.Total),
+			TrackCount:    PlaylistCount(pl.Items.Total, pl.Tracks.Total),
 			ImageURL:      imageURL,
 		})
 	}
 	out.NextOffset = offset + len(out.Items)
-	out.HasMore = len(out.Items) >= limit
+	out.HasMore = page.Next != nil && *page.Next != ""
 	return out, nil
 }
 
@@ -151,7 +148,7 @@ func (s *Service) ListSavedAlbumsPage(ctx context.Context, offset, limit int) (*
 	return out, nil
 }
 
-func (s *Service) ListPlaylistTrackIDs(ctx context.Context, playlistID string, max int) ([]string, error) {
+func (s *Service) ListPlaylistItemIDs(ctx context.Context, playlistID string, max int) ([]string, error) {
 	playlistID = strings.TrimSpace(playlistID)
 	if playlistID == "" {
 		return nil, errors.New("playlist ID must not be empty")
@@ -165,12 +162,12 @@ func (s *Service) ListPlaylistTrackIDs(ctx context.Context, playlistID string, m
 	out := make([]string, 0, min(max, pageSize))
 	for len(out) < max {
 		limit := min(pageSize, max-len(out))
-		page, err := s.ListPlaylistTrackIDsPage(ctx, playlistID, offset, limit)
+		page, err := s.ListPlaylistItemsPage(ctx, playlistID, offset, limit)
 		if err != nil {
 			return nil, err
 		}
-		if len(page.TrackIDs) > 0 {
-			out = append(out, page.TrackIDs...)
+		if len(page.ItemIDs) > 0 {
+			out = append(out, page.ItemIDs...)
 		}
 		if !page.HasMore || page.NextOffset <= offset {
 			break
@@ -180,7 +177,7 @@ func (s *Service) ListPlaylistTrackIDs(ctx context.Context, playlistID string, m
 	return out, nil
 }
 
-func (s *Service) ListPlaylistTrackIDsPage(ctx context.Context, playlistID string, offset, limit int) (*PlaylistTrackPage, error) {
+func (s *Service) ListPlaylistItemsPage(ctx context.Context, playlistID string, offset, limit int) (*PlaylistItemsPage, error) {
 	playlistID = strings.TrimSpace(playlistID)
 	if playlistID == "" {
 		return nil, errors.New("playlist ID must not be empty")
@@ -195,18 +192,15 @@ func (s *Service) ListPlaylistTrackIDsPage(ctx context.Context, playlistID strin
 		limit = 100
 	}
 
-	fetch := func() (*spotifyapi.PlaylistItemPage, error) {
-		if s.itemsHTTPClient != nil {
-			return s.fetchPlaylistItemsViaItemsEndpoint(ctx, playlistID, offset, limit)
-		}
-		return s.client.GetPlaylistItems(ctx, spotifyapi.ID(playlistID), spotifyapi.Limit(limit), spotifyapi.Offset(offset))
+	fetch := func() (*playlistItemsResponse, error) {
+		return s.fetchPlaylistItemsViaItemsEndpoint(ctx, playlistID, offset, limit)
 	}
 	page, err := apiCallWithRetry(ctx, fetch)
 	if err != nil {
-		return nil, fmt.Errorf("fetch playlist tracks: %w", err)
+		return nil, fmt.Errorf("fetch playlist items: %w", err)
 	}
 
-	out := &PlaylistTrackPage{
+	out := &PlaylistItemsPage{
 		Offset: offset,
 		Limit:  limit,
 	}
@@ -215,26 +209,29 @@ func (s *Service) ListPlaylistTrackIDsPage(ctx context.Context, playlistID strin
 		return out, nil
 	}
 
-	out.TrackIDs = make([]string, 0, len(page.Items))
-	out.TrackInfos = make([]QueueItem, 0, len(page.Items))
+	out.ItemIDs = make([]string, 0, len(page.Items))
+	out.ItemInfos = make([]QueueItem, 0, len(page.Items))
 	for _, item := range page.Items {
-		if item.Track.Track == nil || item.Track.Track.ID == "" {
+		entry := item.ResolvedItem()
+		if entry == nil || entry.ID == "" {
 			continue
 		}
-		t := item.Track.Track
-		qi := QueueItem{ID: string(t.ID), Name: t.Name, DurationMS: int(t.Duration)}
-		if len(t.Artists) > 0 {
-			qi.Artist = t.Artists[0].Name
+		qi := QueueItem{ID: entry.ID, Name: entry.Name, DurationMS: entry.DurationMS}
+		if len(entry.Artists) > 0 {
+			qi.Artist = entry.Artists[0].Name
 		}
-		out.TrackIDs = append(out.TrackIDs, string(t.ID))
-		out.TrackInfos = append(out.TrackInfos, qi)
+		out.ItemIDs = append(out.ItemIDs, entry.ID)
+		out.ItemInfos = append(out.ItemInfos, qi)
 	}
 	out.NextOffset = offset + len(page.Items)
-	out.HasMore = len(page.Items) >= limit
+	out.HasMore = page.Next != nil && *page.Next != ""
 	return out, nil
 }
 
-func (s *Service) fetchPlaylistItemsViaItemsEndpoint(ctx context.Context, playlistID string, offset, limit int) (*spotifyapi.PlaylistItemPage, error) {
+func (s *Service) fetchPlaylistItemsViaItemsEndpoint(ctx context.Context, playlistID string, offset, limit int) (*playlistItemsResponse, error) {
+	if s.itemsHTTPClient == nil {
+		return nil, errors.New("items http client is not configured")
+	}
 	u := spotifyAPIBase + "playlists/" + url.PathEscape(playlistID) + "/items?"
 	params := url.Values{}
 	params.Set("limit", strconv.Itoa(limit))
@@ -250,16 +247,49 @@ func (s *Service) fetchPlaylistItemsViaItemsEndpoint(ctx context.Context, playli
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	var page playlistItemsResponse
+	if err := DecodeWebAPIJSON(resp, http.StatusOK, &page, func(status int, body string) error {
+		return &httpStatusError{status: status, err: fmt.Errorf("playlist items: %s", body)}
+	}); err != nil {
+		return nil, err
+	}
+	return &page, nil
+}
+
+type playlistItemsResponse struct {
+	Items []PlaylistEntryWire `json:"items"`
+	Next  *string             `json:"next"`
+}
+
+type playlistPageResponse struct {
+	Items []PlaylistSummaryWire `json:"items"`
+	Next  *string               `json:"next"`
+}
+
+func (s *Service) fetchPlaylistsViaHTTP(ctx context.Context, offset, limit int) (*playlistPageResponse, error) {
+	if s.itemsHTTPClient == nil {
+		return nil, errors.New("items http client is not configured")
+	}
+	u := spotifyAPIBase + "me/playlists?"
+	params := url.Values{}
+	params.Set("limit", strconv.Itoa(limit))
+	params.Set("offset", strconv.Itoa(offset))
+	u += params.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, &httpStatusError{status: resp.StatusCode, err: fmt.Errorf("playlist items: %s", strings.TrimSpace(string(body)))}
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.itemsHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
 	}
-	var page spotifyapi.PlaylistItemPage
-	if err := json.Unmarshal(body, &page); err != nil {
-		return nil, fmt.Errorf("decode playlist items: %w", err)
+	defer resp.Body.Close()
+	var page playlistPageResponse
+	if err := DecodeWebAPIJSON(resp, http.StatusOK, &page, func(status int, body string) error {
+		return &httpStatusError{status: status, err: fmt.Errorf("playlists: %s", body)}
+	}); err != nil {
+		return nil, err
 	}
 	return &page, nil
 }
