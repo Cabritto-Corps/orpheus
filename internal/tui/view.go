@@ -273,9 +273,9 @@ func (m model) playbackScreenView() string {
 	bodyH := m.height - chromeH - 1
 	leftW, rightW := m.splitWidths()
 
-	left := m.albumCoverPanel(leftW, bodyH)
+	left := m.albumCoverPanel(leftW-1, bodyH)
 	divider := verticalDivider(bodyH)
-	right := m.queuePanel(rightW-1, bodyH)
+	right := m.queuePanel(rightW, bodyH)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 }
@@ -352,7 +352,7 @@ func (m model) albumCoverPanel(w, h int) string {
 	innerH := h - 2
 	innerW := w - 2
 
-	metaLines := 7
+	metaLines := 3
 	coverCols, coverRows := squareDims(innerW, innerH-metaLines)
 
 	var coverStr string
@@ -578,8 +578,8 @@ func (m model) currentCoverSizes() [][2]int {
 
 	innerW := leftW - 2
 	innerH := bodyH - 2
-	if innerW > 0 && innerH > 7 {
-		if cols, rows := squareDims(innerW, innerH-7); cols > 0 && rows > 0 {
+	if innerW > 0 && innerH > 3 {
+		if cols, rows := squareDims(innerW, innerH-3); cols > 0 && rows > 0 {
 			sizes = append(sizes, [2]int{cols, rows})
 		}
 	}

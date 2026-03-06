@@ -26,12 +26,12 @@ type coverKey struct {
 }
 
 type imgCache struct {
-	mu         sync.RWMutex
-	imgs       *cache.LRU[string, image.Image]
-	covers     *cache.LRU[coverKey, string]
-	inflight   map[string]struct{}
-	rendering  map[coverKey]chan struct{}
-	stats      imageCacheStats
+	mu        sync.RWMutex
+	imgs      *cache.LRU[string, image.Image]
+	covers    *cache.LRU[coverKey, string]
+	inflight  map[string]struct{}
+	rendering map[coverKey]chan struct{}
+	stats     imageCacheStats
 }
 
 type imageCacheStats struct {
@@ -44,10 +44,10 @@ type imageCacheStats struct {
 
 func newImgCache() *imgCache {
 	return &imgCache{
-		imgs:       cache.NewLRU[string, image.Image](maxCachedImages),
-		covers:     cache.NewLRU[coverKey, string](maxCachedCoverRenders),
-		inflight:   make(map[string]struct{}),
-		rendering:  make(map[coverKey]chan struct{}),
+		imgs:      cache.NewLRU[string, image.Image](maxCachedImages),
+		covers:    cache.NewLRU[coverKey, string](maxCachedCoverRenders),
+		inflight:  make(map[string]struct{}),
+		rendering: make(map[coverKey]chan struct{}),
 	}
 }
 
@@ -260,20 +260,65 @@ func fetchImage(ctx context.Context, url string) (image.Image, error) {
 	return img, nil
 }
 
-func resizeNN(src image.Image, width, height int) *image.RGBA {
+func resizeBilinear(src image.Image, width, height int) *image.RGBA {
 	dst := image.NewRGBA(image.Rect(0, 0, width, height))
 	sb := src.Bounds()
 	sw := sb.Dx()
 	sh := sb.Dy()
+	if sw <= 0 || sh <= 0 || width <= 0 || height <= 0 {
+		return dst
+	}
+	if sw == 1 || sh == 1 || width == 1 || height == 1 {
+		for y := 0; y < height; y++ {
+			sy := sb.Min.Y + y*sh/height
+			for x := 0; x < width; x++ {
+				sx := sb.Min.X + x*sw/width
+				r, g, b, _ := src.At(sx, sy).RGBA()
+				dst.SetRGBA(x, y, color.RGBA{
+					R: uint8(r >> 8),
+					G: uint8(g >> 8),
+					B: uint8(b >> 8),
+					A: 255,
+				})
+			}
+		}
+		return dst
+	}
+
+	scaleX := float64(sw-1) / float64(width-1)
+	scaleY := float64(sh-1) / float64(height-1)
 	for y := 0; y < height; y++ {
-		sy := sb.Min.Y + y*sh/height
+		fy := float64(y) * scaleY
+		y0 := int(fy)
+		y1 := y0 + 1
+		if y1 >= sh {
+			y1 = sh - 1
+		}
+		wy := fy - float64(y0)
 		for x := 0; x < width; x++ {
-			sx := sb.Min.X + x*sw/width
-			r, g, b, _ := src.At(sx, sy).RGBA()
+			fx := float64(x) * scaleX
+			x0 := int(fx)
+			x1 := x0 + 1
+			if x1 >= sw {
+				x1 = sw - 1
+			}
+			wx := fx - float64(x0)
+
+			r00, g00, b00, _ := src.At(sb.Min.X+x0, sb.Min.Y+y0).RGBA()
+			r10, g10, b10, _ := src.At(sb.Min.X+x1, sb.Min.Y+y0).RGBA()
+			r01, g01, b01, _ := src.At(sb.Min.X+x0, sb.Min.Y+y1).RGBA()
+			r11, g11, b11, _ := src.At(sb.Min.X+x1, sb.Min.Y+y1).RGBA()
+
+			interp := func(c00, c10, c01, c11 uint32) uint8 {
+				top := (1.0-wx)*float64(c00) + wx*float64(c10)
+				bot := (1.0-wx)*float64(c01) + wx*float64(c11)
+				v := (1.0-wy)*top + wy*bot
+				return uint8((uint32(v) >> 8) & 0xff)
+			}
 			dst.SetRGBA(x, y, color.RGBA{
-				R: uint8(r >> 8),
-				G: uint8(g >> 8),
-				B: uint8(b >> 8),
+				R: interp(r00, r10, r01, r11),
+				G: interp(g00, g10, g01, g11),
+				B: interp(b00, b10, b01, b11),
 				A: 255,
 			})
 		}
@@ -286,7 +331,7 @@ func renderHalfBlock(img image.Image, cols, rows int) string {
 		return ""
 	}
 
-	px := resizeNN(img, cols, rows*2)
+	px := resizeBilinear(img, cols, rows*2)
 
 	var sb strings.Builder
 	sb.Grow(cols * rows * 30)
