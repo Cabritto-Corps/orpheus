@@ -25,6 +25,7 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 	m.playlistList.SetSize(listInnerW, listInnerH)
 	m.albumList.SetSize(listInnerW, listInnerH)
+	m.normalizeLibraryPagination()
 	return m, tea.Batch(
 		m.loadVisiblePlaylistCoversCmd(),
 		m.maybeLoadMorePlaylistsCmd(m.playlistList),

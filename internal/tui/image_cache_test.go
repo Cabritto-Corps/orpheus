@@ -58,6 +58,44 @@ func TestHandleAlbumKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
 	}
 }
 
+func TestTabSwitchClampsTargetPaginationAndQueuesCoverLoad(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	playlists := make([]list.Item, 0, 24)
+	for i := 0; i < 24; i++ {
+		playlists = append(playlists, playlistItem{
+			summary: spotify.PlaylistSummary{ID: fmt.Sprintf("p-%d", i), Name: fmt.Sprintf("playlist-%d", i), ImageURL: fmt.Sprintf("purl-%d", i)},
+		})
+	}
+	albums := []list.Item{
+		playlistItem{summary: spotify.PlaylistSummary{ID: "a-1", Kind: spotify.ContextKindAlbum, Name: "album-1", ImageURL: "aurl-1"}},
+		playlistItem{summary: spotify.PlaylistSummary{ID: "a-2", Kind: spotify.ContextKindAlbum, Name: "album-2", ImageURL: "aurl-2"}},
+	}
+	m.playlistList.SetItems(playlists)
+	m.albumList.SetItems(albums)
+	m.playlistList.Paginator.PerPage = 1
+	m.playlistList.Paginator.Page = 20
+	m.playlistList.Select(20)
+	m.albumList.Paginator.PerPage = 1
+	m.albumList.Paginator.Page = 20
+	m.activeTab = tabPlaylists
+
+	nextModel, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	got := nextModel.(model)
+	if got.activeTab != tabAlbums {
+		t.Fatal("expected tab switch to albums")
+	}
+	if got.albumList.Paginator.Page > 1 {
+		t.Fatalf("expected album page to clamp within range, got %d", got.albumList.Paginator.Page)
+	}
+	sel, ok := got.selectedAlbum()
+	if !ok {
+		t.Fatal("expected album selection to remain valid after tab switch")
+	}
+	if !hasInflightURL(got.imgs, sel.summary.ImageURL) {
+		t.Fatal("expected selected album cover to queue on tab switch even after page clamp")
+	}
+}
+
 func TestImageCacheEvictsOldestImageAndItsRenderedCovers(t *testing.T) {
 	cache := newImgCache()
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
@@ -539,7 +577,7 @@ func TestKittyOverlayDeletesWhenHelpOpens(t *testing.T) {
 	}
 }
 
-func TestKittyOverlayPlayerKeepsPreviousImageWhileNextLoads(t *testing.T) {
+func TestKittyOverlayPlayerClearsPreviousImageWhileNextLoads(t *testing.T) {
 	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
 	m.width = 120
 	m.height = 40
@@ -555,8 +593,36 @@ func TestKittyOverlayPlayerKeepsPreviousImageWhileNextLoads(t *testing.T) {
 	m.status.AlbumImageURL = "u2"
 
 	loading := m.kittyOverlay()
-	if strings.Contains(loading, kittyDeleteAll) {
-		t.Fatal("expected no delete-all while next player cover is still loading")
+	if !strings.Contains(loading, kittyDeleteAll) {
+		t.Fatal("expected stale player image to be cleared while next cover is loading")
+	}
+}
+
+func TestKittyOverlayClearsStaleImageOnTabSwitchWithoutEncodedCover(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.width = 120
+	m.height = 40
+	m.activeTab = tabPlaylists
+	m.playlistList.SetItems([]list.Item{
+		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", ImageURL: "u1"}},
+	})
+	m.playlistList.Select(0)
+	m.imgs.protocol = imageProtocolKitty
+	m.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	if first := m.kittyOverlay(); !strings.Contains(first, kittyDeleteAll) {
+		t.Fatal("expected initial playlist kitty render")
+	}
+
+	m.activeTab = tabAlbums
+	m.albumList.SetItems([]list.Item{
+		playlistItem{summary: spotify.PlaylistSummary{ID: "a1", Name: "album", Kind: spotify.ContextKindAlbum, ImageURL: "u2"}},
+	})
+	m.albumList.Select(0)
+
+	overlay := m.kittyOverlay()
+	if !strings.Contains(overlay, kittyDeleteAll) {
+		t.Fatal("expected stale kitty image to clear when switched tab cover is not yet encoded")
 	}
 }
 

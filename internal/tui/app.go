@@ -211,6 +211,27 @@ func selectedImageURLFromList(l list.Model) string {
 	return sel.summary.ImageURL
 }
 
+func normalizeListPagination(l *list.Model) {
+	visible := l.VisibleItems()
+	if len(visible) == 0 {
+		l.Paginator.Page = 0
+		l.Select(0)
+		return
+	}
+	perPage := l.Paginator.PerPage
+	if perPage <= 0 {
+		perPage = len(visible)
+	}
+	maxPage := (len(visible) - 1) / perPage
+	l.Paginator.Page = clampInt(l.Paginator.Page, 0, maxPage)
+	l.Select(clampInt(l.GlobalIndex(), 0, len(visible)-1))
+}
+
+func (m *model) normalizeLibraryPagination() {
+	normalizeListPagination(&m.playlistList)
+	normalizeListPagination(&m.albumList)
+}
+
 func (m model) needsImageURL(url string) bool {
 	if url == "" {
 		return false
@@ -557,6 +578,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case tabPlayer:
 				m.activeTab = tabPlaylists
 			}
+			m.normalizeLibraryPagination()
 			m.coverRefreshTick = 0
 			return m, m.loadVisiblePlaylistCoversCmd()
 		}
@@ -768,6 +790,7 @@ func (m *model) scheduleNavDebounceCmd() tea.Cmd {
 }
 
 func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
+	m.normalizeLibraryPagination()
 	seen := make(map[string]struct{})
 
 	add := func(url string) {
