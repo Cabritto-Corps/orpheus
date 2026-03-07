@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -20,26 +21,30 @@ import (
 type tab string
 
 const (
-	tabPlaylists            tab = "playlists"
-	tabAlbums               tab = "albums"
-	tabPlayer               tab = "player"
-	playlistItemPageSize        = 100
-	queuePollEvery              = 4
-	playlistLoadBatchSize       = 25
-	playlistLoadMax             = 500
-	playlistItemPreloadMax      = 500
-	coverPreloadWindow          = 14
-	imageLoadRetryMax           = 4
-	coverRefreshEvery           = 25 // ticks (5 s at 200 ms/tick)
-	trackMetadataTTL            = 2 * time.Hour
-	uiTickInterval              = 200 * time.Millisecond
-	navDebounceInterval         = 120 * time.Millisecond
-	volSeekDebounceInterval     = 150 * time.Millisecond
-	volSettleWindow             = 3 * time.Second
-	seekSettleWindow            = 1200 * time.Millisecond
-	reconcileActionWindow       = 2 * time.Second
-	actionFastPollWindow        = 3 * time.Second
-	idlePollBackoffMax          = 5 * time.Second
+	tabPlaylists             tab = "playlists"
+	tabAlbums                tab = "albums"
+	tabPlayer                tab = "player"
+	playlistItemPageSize         = 100
+	queuePollEvery               = 4
+	playlistLoadBatchSize        = 25
+	playlistLoadMax              = 500
+	playlistItemPreloadMax       = 500
+	coverPreloadWindow           = 14
+	imageLoadRetryMax            = 4
+	coverRefreshEvery            = 25 // ticks (5 s at 200 ms/tick)
+	playerCoverRefreshEvery      = 10 // ticks (2 s)
+	libraryCoverRefreshEvery     = 150
+	libraryCoverRefreshBatch     = 32
+	libraryMetaRefreshEvery      = 300
+	trackMetadataTTL             = 2 * time.Hour
+	uiTickInterval               = 200 * time.Millisecond
+	navDebounceInterval          = 120 * time.Millisecond
+	volSeekDebounceInterval      = 150 * time.Millisecond
+	volSettleWindow              = 3 * time.Second
+	seekSettleWindow             = 1200 * time.Millisecond
+	reconcileActionWindow        = 2 * time.Second
+	actionFastPollWindow         = 3 * time.Second
+	idlePollBackoffMax           = 5 * time.Second
 )
 
 type model struct {
@@ -49,11 +54,14 @@ type model struct {
 	deviceName string
 	tuiCmdCh   chan librespot.TUICommand
 
-	pollInterval        time.Duration
-	pollTick            int
-	pollElapsed         time.Duration
-	coverRefreshTick    int
-	actionFastPollUntil time.Time
+	pollInterval            time.Duration
+	pollTick                int
+	pollElapsed             time.Duration
+	coverRefreshTick        int
+	playerCoverRefreshTick  int
+	libraryCoverRefreshTick int
+	libraryMetaRefreshTick  int
+	actionFastPollUntil     time.Time
 
 	activeTab      tab
 	helpOpen       bool
@@ -73,8 +81,8 @@ type model struct {
 	queue                        []spotify.QueueItem
 	queueHasMore                 bool
 	stableQueueLen               int
-	pendingContextFrom     string
-	pendingContextFromAt   time.Time
+	pendingContextFrom           string
+	pendingContextFromAt         time.Time
 	transportTransitionPending   bool
 	transportTransitionFromTrack string
 	transportTransitionStartedAt time.Time
@@ -95,6 +103,7 @@ type model struct {
 	trackCache                   *cache.TTL[string, spotify.QueueItem]
 	imageRetryCount              map[string]int
 	imageRetryToken              map[string]int
+	coverResolveInFlight         map[string]struct{}
 	playlistsLoading             bool
 	playlistsExhausted           bool
 	albumsForbidden              bool
@@ -159,28 +168,29 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 	h := newHelp()
 
 	return model{
-		ctx:                 ctx,
-		catalog:             catalog,
-		service:             service,
-		deviceName:          cfg.DeviceName,
-		tuiCmdCh:            tuiCmdCh,
-		pollInterval:        cfg.PollInterval,
-		activeTab:           tabPlaylists,
-		playlistList:        browser,
-		albumList:           albums,
-		imgs:                newImgCache(),
-		preloadedItemIDs:    make(map[string]struct{}),
-		trackCache:          cache.NewTTL[string, spotify.QueueItem](4096, trackMetadataTTL),
-		imageRetryCount:     make(map[string]int),
-		imageRetryToken:     make(map[string]int),
-		playlistsLoading:    true,
-		nerdFonts:           cfg.NerdFonts,
-		volDebouncePending:  -1,
-		seekDebouncePending: -1,
-		volSentTarget:       -1,
-		seekSentTarget:      -1,
-		help:                h,
-		keys:                newKeys(),
+		ctx:                  ctx,
+		catalog:              catalog,
+		service:              service,
+		deviceName:           cfg.DeviceName,
+		tuiCmdCh:             tuiCmdCh,
+		pollInterval:         cfg.PollInterval,
+		activeTab:            tabPlaylists,
+		playlistList:         browser,
+		albumList:            albums,
+		imgs:                 newImgCache(),
+		preloadedItemIDs:     make(map[string]struct{}),
+		trackCache:           cache.NewTTL[string, spotify.QueueItem](4096, trackMetadataTTL),
+		imageRetryCount:      make(map[string]int),
+		imageRetryToken:      make(map[string]int),
+		coverResolveInFlight: make(map[string]struct{}),
+		playlistsLoading:     true,
+		nerdFonts:            cfg.NerdFonts,
+		volDebouncePending:   -1,
+		seekDebouncePending:  -1,
+		volSentTarget:        -1,
+		seekSentTarget:       -1,
+		help:                 h,
+		keys:                 newKeys(),
 	}
 }
 
@@ -215,7 +225,187 @@ func (m model) needsImageURL(url string) bool {
 			return true
 		}
 	}
+	if m.libraryHasImageURL(url) {
+		return true
+	}
 	return false
+}
+
+func (m model) libraryHasImageURL(url string) bool {
+	if url == "" {
+		return false
+	}
+	for _, item := range m.playlistList.Items() {
+		pl, ok := item.(playlistItem)
+		if ok && pl.summary.ImageURL == url {
+			return true
+		}
+	}
+	for _, item := range m.albumList.Items() {
+		al, ok := item.(playlistItem)
+		if ok && al.summary.ImageURL == url {
+			return true
+		}
+	}
+	return false
+}
+
+func (m model) hasMissingLibraryImageURLs() bool {
+	for _, item := range m.playlistList.Items() {
+		pl, ok := item.(playlistItem)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(pl.summary.ImageURL) == "" {
+			return true
+		}
+	}
+	for _, item := range m.albumList.Items() {
+		al, ok := item.(playlistItem)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(al.summary.ImageURL) == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func coverResolveKey(kind, id string) string {
+	return strings.TrimSpace(kind) + ":" + strings.TrimSpace(id)
+}
+
+func (m *model) queueCoverResolveCmd(kind, id string) tea.Cmd {
+	kind = strings.TrimSpace(kind)
+	id = strings.TrimSpace(id)
+	if kind == "" || id == "" {
+		return nil
+	}
+	key := coverResolveKey(kind, id)
+	if _, exists := m.coverResolveInFlight[key]; exists {
+		return nil
+	}
+	cmd := m.resolveContextImageURLCmd(kind, id)
+	if cmd == nil {
+		return nil
+	}
+	m.coverResolveInFlight[key] = struct{}{}
+	return cmd
+}
+
+func (m *model) queueMissingLibraryImageResolvesCmd(limit int) tea.Cmd {
+	if limit <= 0 {
+		return nil
+	}
+	cmds := make([]tea.Cmd, 0, limit)
+	for _, item := range m.playlistList.Items() {
+		if len(cmds) >= limit {
+			break
+		}
+		pl, ok := item.(playlistItem)
+		if !ok || strings.TrimSpace(pl.summary.ImageURL) != "" {
+			continue
+		}
+		if cmd := m.queueCoverResolveCmd(spotify.ContextKindPlaylist, pl.summary.ID); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	for _, item := range m.albumList.Items() {
+		if len(cmds) >= limit {
+			break
+		}
+		al, ok := item.(playlistItem)
+		if !ok || strings.TrimSpace(al.summary.ImageURL) != "" {
+			continue
+		}
+		if cmd := m.queueCoverResolveCmd(spotify.ContextKindAlbum, al.summary.ID); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *model) queueResolvesForImageURLCmd(url string, limit int) tea.Cmd {
+	url = strings.TrimSpace(url)
+	if url == "" || limit <= 0 {
+		return nil
+	}
+	cmds := make([]tea.Cmd, 0, limit)
+	for _, item := range m.playlistList.Items() {
+		if len(cmds) >= limit {
+			break
+		}
+		pl, ok := item.(playlistItem)
+		if !ok || strings.TrimSpace(pl.summary.ImageURL) != url {
+			continue
+		}
+		if cmd := m.queueCoverResolveCmd(spotify.ContextKindPlaylist, pl.summary.ID); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	for _, item := range m.albumList.Items() {
+		if len(cmds) >= limit {
+			break
+		}
+		al, ok := item.(playlistItem)
+		if !ok || strings.TrimSpace(al.summary.ImageURL) != url {
+			continue
+		}
+		if cmd := m.queueCoverResolveCmd(spotify.ContextKindAlbum, al.summary.ID); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *model) applyResolvedContextImageURL(kind, id, imageURL string) bool {
+	kind = strings.TrimSpace(kind)
+	id = strings.TrimSpace(id)
+	imageURL = strings.TrimSpace(imageURL)
+	if kind == "" || id == "" || imageURL == "" {
+		return false
+	}
+	updated := false
+	switch kind {
+	case spotify.ContextKindPlaylist:
+		items := m.playlistList.Items()
+		for i, item := range items {
+			pl, ok := item.(playlistItem)
+			if !ok || pl.summary.ID != id {
+				continue
+			}
+			if strings.TrimSpace(pl.summary.ImageURL) == imageURL {
+				return false
+			}
+			pl.summary.ImageURL = imageURL
+			items[i] = pl
+			updated = true
+			break
+		}
+		if updated {
+			m.playlistList.SetItems(items)
+		}
+	case spotify.ContextKindAlbum:
+		items := m.albumList.Items()
+		for i, item := range items {
+			al, ok := item.(playlistItem)
+			if !ok || al.summary.ID != id {
+				continue
+			}
+			if strings.TrimSpace(al.summary.ImageURL) == imageURL {
+				return false
+			}
+			al.summary.ImageURL = imageURL
+			items[i] = al
+			updated = true
+			break
+		}
+		if updated {
+			m.albumList.SetItems(items)
+		}
+	}
+	return updated
 }
 
 func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, playbackStateCh <-chan *librespot.PlaybackStateUpdate) error {
@@ -761,6 +951,55 @@ func (m model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 			}
 			add(pl.summary.ImageURL)
 		}
+	}
+
+	return tea.Batch(cmds...)
+}
+
+func (m model) loadLibraryCoversCmd(limit int) tea.Cmd {
+	seen := make(map[string]struct{})
+	capHint := len(m.playlistList.Items()) + len(m.albumList.Items())
+	if limit > 0 {
+		capHint = min(capHint, limit)
+	}
+	cmds := make([]tea.Cmd, 0, capHint)
+
+	add := func(url string) {
+		if limit > 0 && len(cmds) >= limit {
+			return
+		}
+		if url == "" {
+			return
+		}
+		if _, ok := seen[url]; ok {
+			return
+		}
+		if !m.imgs.shouldQueueLoad(url) {
+			return
+		}
+		seen[url] = struct{}{}
+		cmds = append(cmds, m.loadImageCmd(url))
+	}
+
+	for _, item := range m.playlistList.Items() {
+		if limit > 0 && len(cmds) >= limit {
+			break
+		}
+		pl, ok := item.(playlistItem)
+		if !ok {
+			continue
+		}
+		add(pl.summary.ImageURL)
+	}
+	for _, item := range m.albumList.Items() {
+		if limit > 0 && len(cmds) >= limit {
+			break
+		}
+		al, ok := item.(playlistItem)
+		if !ok {
+			continue
+		}
+		add(al.summary.ImageURL)
 	}
 
 	return tea.Batch(cmds...)

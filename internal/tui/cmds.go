@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,6 +81,13 @@ type imageLoadedMsg struct {
 type imageRetryMsg struct {
 	url   string
 	token int
+}
+
+type coverImageResolvedMsg struct {
+	kind string
+	id   string
+	url  string
+	err  error
 }
 
 type tickMsg time.Time
@@ -320,10 +328,9 @@ func (m model) loadPlaylistsCmd(offset, limit int) tea.Cmd {
 			albumMore := true
 			albumsForbidden := false
 
-			for len(all) < playlistLoadMax && (playlistMore || albumMore) {
-				remaining := playlistLoadMax - len(all)
-				pageSize := min(playlistAPIPageSize, remaining)
-				if playlistMore && pageSize > 0 {
+			for playlistMore || albumMore {
+				if playlistMore {
+					pageSize := playlistAPIPageSize
 					page, err := catalog.ListUserPlaylistsPage(ctx, playlistOffset, pageSize)
 					if err != nil {
 						return playlistsMsg{offset: 0, limit: limit, err: err}
@@ -335,9 +342,8 @@ func (m model) loadPlaylistsCmd(offset, limit int) tea.Cmd {
 					playlistOffset = page.NextOffset
 				}
 
-				remaining = playlistLoadMax - len(all)
-				pageSize = min(playlistAPIPageSize, remaining)
-				if albumMore && pageSize > 0 {
+				if albumMore {
+					pageSize := playlistAPIPageSize
 					page, err := catalog.ListSavedAlbumsPage(ctx, albumOffset, pageSize)
 					if err != nil {
 						if spotify.IsForbidden(err) {
@@ -408,15 +414,15 @@ func (m model) loadImageCmd(url string) tea.Cmd {
 	return func() tea.Msg {
 		defer cache.finishLoad(url)
 
-		ctx, cancel := context.WithTimeout(m.ctx, imageFetchTimeout)
-		defer cancel()
-
 		select {
 		case imgSemaphore <- struct{}{}:
 			defer func() { <-imgSemaphore }()
-		case <-ctx.Done():
-			return imageLoadedMsg{url: url, err: ctx.Err()}
+		case <-m.ctx.Done():
+			return imageLoadedMsg{url: url, err: m.ctx.Err()}
 		}
+
+		ctx, cancel := context.WithTimeout(m.ctx, imageFetchTimeout)
+		defer cancel()
 
 		if _, ok := cache.getImage(url); ok {
 			cache.preRenderCovers(url, coverSizes)
@@ -570,6 +576,33 @@ func (m model) loadPlaylistItemsCmd(playlistID string, offset int, token int) te
 			nextOffset: nextOffset,
 			hasMore:    hasMore,
 			token:      token,
+		}
+	}
+}
+
+func (m model) resolveContextImageURLCmd(kind, id string) tea.Cmd {
+	kind = strings.TrimSpace(kind)
+	id = strings.TrimSpace(id)
+	if kind == "" || id == "" {
+		return nil
+	}
+	var catalog spotify.PlaylistCatalog
+	if m.catalog != nil {
+		catalog = m.catalog
+	} else if m.service != nil {
+		catalog = m.service
+	} else {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, catalogRequestTimeout)
+		defer cancel()
+		url, err := catalog.ResolveContextImageURL(ctx, kind, id)
+		return coverImageResolvedMsg{
+			kind: kind,
+			id:   id,
+			url:  strings.TrimSpace(url),
+			err:  err,
 		}
 	}
 }

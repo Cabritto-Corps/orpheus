@@ -718,6 +718,10 @@ func (m model) kittyOverlay() string {
 	if m.imgs == nil || m.imgs.protocol != imageProtocolKitty {
 		return ""
 	}
+	if m.helpOpen {
+		m.imgs.beginKittyOverlayState("")
+		return kittyDeleteAll
+	}
 
 	bodyH := m.height - chromeH - 1
 	leftW, _ := m.splitWidths()
@@ -727,7 +731,11 @@ func (m model) kittyOverlay() string {
 	innerH := panelH - 2
 	coverCols, coverRows := squareDims(innerW, innerH-3)
 	if coverCols <= 0 || coverRows <= 0 {
-		return kittyDeleteAll
+		_, shouldDelete := m.imgs.beginKittyOverlayState("")
+		if shouldDelete {
+			return kittyDeleteAll
+		}
+		return ""
 	}
 
 	var url string
@@ -746,16 +754,31 @@ func (m model) kittyOverlay() string {
 		}
 	}
 	if url == "" {
-		return kittyDeleteAll
+		_, shouldDelete := m.imgs.beginKittyOverlayState("")
+		if shouldDelete {
+			return kittyDeleteAll
+		}
+		return ""
 	}
 
 	encoded := m.imgs.encodedFor(url)
 	if encoded == "" {
-		return kittyDeleteAll
+		_, shouldDelete := m.imgs.beginKittyOverlayState("")
+		if shouldDelete {
+			return kittyDeleteAll
+		}
+		return ""
 	}
 
 	const imageRow = 8
 	const imageCol = 2
+	key := fmt.Sprintf("%d:%d:%d:%d:%s", imageRow, imageCol, coverCols, coverRows, url)
+	changed, _ := m.imgs.beginKittyOverlayState(key)
+	if !changed {
+		return ""
+	}
+	// Always delete+draw on cover transitions so first paint and cover switches
+	// are deterministic across terminal implementations.
 	return kittyImageOverlay(imageRow, imageCol, encoded, coverCols, coverRows)
 }
 

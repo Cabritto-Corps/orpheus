@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"image"
+	"image/png"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"orpheus/internal/config"
+	"orpheus/internal/infra/ports"
 	"orpheus/internal/spotify"
 )
 
@@ -116,6 +120,52 @@ func TestHandleImageLoadedMsgSchedulesRetryOnError(t *testing.T) {
 	}
 }
 
+func TestHandleImageLoadedMsgExhaustedRetriesQueuesMetadataResolveWhenURLStillReferenced(t *testing.T) {
+	catalog := fakeCatalog{
+		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+		},
+		albums: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+		},
+	}
+	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.playlistsLoading = false
+	m.imageRetryCount["u1"] = imageLoadRetryMax
+	m.playlistList.SetItems([]list.Item{
+		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", ImageURL: "u1"}},
+	})
+
+	nextModel, cmd := m.handleImageLoadedMsg(imageLoadedMsg{url: "u1", err: fmt.Errorf("network")})
+	got := nextModel.(model)
+	if cmd == nil {
+		t.Fatal("expected metadata resolve command after retries exhausted for referenced URL")
+	}
+	if _, ok := got.coverResolveInFlight[coverResolveKey(spotify.ContextKindPlaylist, "p1")]; !ok {
+		t.Fatal("expected cover resolve to be queued for failed playlist image URL")
+	}
+}
+
+func TestHandleImageLoadedMsgExhaustedRetriesSkipsMetadataRefreshWhenURLNotReferenced(t *testing.T) {
+	catalog := fakeCatalog{
+		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+		},
+		albums: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+		},
+	}
+	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.playlistsLoading = false
+	m.imageRetryCount["u1"] = imageLoadRetryMax
+
+	nextModel, cmd := m.handleImageLoadedMsg(imageLoadedMsg{url: "u1", err: fmt.Errorf("network")})
+	_ = nextModel.(model)
+	if cmd != nil {
+		t.Fatal("expected no metadata refresh command for unreferenced failed URL")
+	}
+}
+
 func TestHandleImageRetryMsgSkipsStaleOrUnneededURL(t *testing.T) {
 	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
 	m.imageRetryToken["u-stale"] = 2
@@ -141,6 +191,121 @@ func TestHandleImageRetryMsgSkipsStaleOrUnneededURL(t *testing.T) {
 	}
 	if _, ok := got.imageRetryCount["u-drop"]; ok {
 		t.Fatalf("expected retry count cleanup for unneeded URL")
+	}
+}
+
+func TestNeedsImageURLIncludesWholeLibrary(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.playlistList.SetItems([]list.Item{
+		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", ImageURL: "u-library"}},
+	})
+	if !m.needsImageURL("u-library") {
+		t.Fatal("expected library image URL to be considered needed even when not selected")
+	}
+}
+
+func TestQueueMissingLibraryImageResolvesCmdQueuesEmptyImageEntries(t *testing.T) {
+	catalog := fakeCatalog{
+		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+		},
+		albums: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+		},
+	}
+	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.playlistList.SetItems([]list.Item{
+		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", Kind: spotify.ContextKindPlaylist, ImageURL: ""}},
+		playlistItem{summary: spotify.PlaylistSummary{ID: "p2", Name: "two", Kind: spotify.ContextKindPlaylist, ImageURL: "u2"}},
+	})
+	cmd := m.queueMissingLibraryImageResolvesCmd(4)
+	if cmd == nil {
+		t.Fatal("expected cover resolve command batch")
+	}
+	if _, ok := m.coverResolveInFlight[coverResolveKey(spotify.ContextKindPlaylist, "p1")]; !ok {
+		t.Fatal("expected missing-image playlist to be queued for resolve")
+	}
+}
+
+func TestLoadLibraryCoversCmdQueuesAllUniqueLibraryImages(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.playlistList.SetItems([]list.Item{
+		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", ImageURL: "u1"}},
+		playlistItem{summary: spotify.PlaylistSummary{ID: "p2", Name: "two", ImageURL: "u2"}},
+	})
+	m.albumList.SetItems([]list.Item{
+		playlistItem{summary: spotify.PlaylistSummary{ID: "a1", Name: "album", Kind: spotify.ContextKindAlbum, ImageURL: "u2"}},
+		playlistItem{summary: spotify.PlaylistSummary{ID: "a2", Name: "album2", Kind: spotify.ContextKindAlbum, ImageURL: "u3"}},
+	})
+
+	cmd := m.loadLibraryCoversCmd(0)
+	if cmd == nil {
+		t.Fatal("expected library cover preload command")
+	}
+	for _, url := range []string{"u1", "u2", "u3"} {
+		if !hasInflightURL(m.imgs, url) {
+			t.Fatalf("expected %s to be queued for preload", url)
+		}
+	}
+}
+
+func TestLoadLibraryCoversCmdRespectsLimit(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.playlistList.SetItems([]list.Item{
+		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", ImageURL: "u1"}},
+		playlistItem{summary: spotify.PlaylistSummary{ID: "p2", Name: "two", ImageURL: "u2"}},
+		playlistItem{summary: spotify.PlaylistSummary{ID: "p3", Name: "three", ImageURL: "u3"}},
+	})
+
+	cmd := m.loadLibraryCoversCmd(2)
+	if cmd == nil {
+		t.Fatal("expected limited library cover preload command")
+	}
+	for _, url := range []string{"u1", "u2"} {
+		if !hasInflightURL(m.imgs, url) {
+			t.Fatalf("expected %s to be queued within limit", url)
+		}
+	}
+	if hasInflightURL(m.imgs, "u3") {
+		t.Fatal("expected third URL to remain unqueued when limit is reached")
+	}
+}
+
+func TestHandleCoverImageResolvedMsgUpdatesItemAndQueuesImageLoad(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.playlistList.SetItems([]list.Item{
+		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", Kind: spotify.ContextKindPlaylist, ImageURL: ""}},
+	})
+	key := coverResolveKey(spotify.ContextKindPlaylist, "p1")
+	m.coverResolveInFlight[key] = struct{}{}
+
+	nextModel, cmd := m.handleCoverImageResolvedMsg(coverImageResolvedMsg{
+		kind: spotify.ContextKindPlaylist,
+		id:   "p1",
+		url:  "u1",
+	})
+	got := nextModel.(model)
+	if cmd == nil {
+		t.Fatal("expected image load command after resolving image URL")
+	}
+	if _, ok := got.coverResolveInFlight[key]; ok {
+		t.Fatal("expected resolve inflight marker to be cleared")
+	}
+	if !hasInflightURL(got.imgs, "u1") {
+		t.Fatal("expected resolved URL to be queued for image load")
+	}
+}
+
+func TestHandleTickMsgPlayerTabQueuesCurrentAlbumImageRefresh(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.activeTab = tabPlayer
+	m.status = &spotify.PlaybackStatus{AlbumImageURL: "player-u1"}
+	m.playerCoverRefreshTick = playerCoverRefreshEvery - 1
+
+	nextModel, _ := m.handleTickMsg()
+	got := nextModel.(model)
+	if !hasInflightURL(got.imgs, "player-u1") {
+		t.Fatal("expected periodic player cover refresh to queue current album image")
 	}
 }
 
@@ -181,9 +346,142 @@ func TestImageCacheShouldQueueLoad(t *testing.T) {
 	}
 }
 
+func TestLoadImageCmdWaitsForSemaphoreBeforeFetchTimeoutStarts(t *testing.T) {
+	oldProvider := imageProvider
+	oldSemaphore := imgSemaphore
+	defer func() {
+		imageProvider = oldProvider
+		imgSemaphore = oldSemaphore
+	}()
+
+	imgSemaphore = make(chan struct{}, 1)
+	imgSemaphore <- struct{}{}
+
+	providerCalled := make(chan struct{}, 1)
+	imageProvider = imageProviderFunc(func(ctx context.Context, url string) ([]byte, error) {
+		providerCalled <- struct{}{}
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	})
+
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	cmd := m.loadImageCmd("u1")
+	if cmd == nil {
+		t.Fatal("expected image load command")
+	}
+
+	done := make(chan tea.Msg, 1)
+	go func() {
+		done <- cmd()
+	}()
+
+	select {
+	case <-providerCalled:
+		t.Fatal("expected fetch to wait for semaphore slot")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	<-imgSemaphore
+
+	select {
+	case <-providerCalled:
+	case <-time.After(time.Second):
+		t.Fatal("expected fetch to start after semaphore release")
+	}
+
+	select {
+	case msg := <-done:
+		loaded, ok := msg.(imageLoadedMsg)
+		if !ok || loaded.err != nil {
+			t.Fatalf("expected successful imageLoadedMsg, got %#v", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected command to finish")
+	}
+}
+
+func TestKittyOverlayStateAvoidsRedrawWhenUnchanged(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.width = 120
+	m.height = 40
+	m.activeTab = tabPlayer
+	m.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	m.imgs.protocol = imageProtocolKitty
+	m.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	first := m.kittyOverlay()
+	if first == "" {
+		t.Fatal("expected first overlay render")
+	}
+	if !strings.Contains(first, kittyDeleteAll) {
+		t.Fatal("expected transition render to include delete-all for deterministic first paint")
+	}
+	second := m.kittyOverlay()
+	if second != "" {
+		t.Fatalf("expected unchanged overlay to skip redraw, got %q", second)
+	}
+}
+
+func TestKittyOverlayDeletesOnceWhenImageDisappears(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.width = 120
+	m.height = 40
+	m.activeTab = tabPlayer
+	m.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	m.imgs.protocol = imageProtocolKitty
+	m.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	if m.kittyOverlay() == "" {
+		t.Fatal("expected initial overlay render")
+	}
+	m.status.AlbumImageURL = ""
+
+	overlay := m.kittyOverlay()
+	if !strings.Contains(overlay, kittyDeleteAll) {
+		t.Fatal("expected delete-all when image disappears")
+	}
+	if again := m.kittyOverlay(); again != "" {
+		t.Fatalf("expected repeated empty state to avoid repeated delete, got %q", again)
+	}
+}
+
+func TestKittyOverlayDeletesWhenHelpOpens(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.width = 120
+	m.height = 40
+	m.activeTab = tabPlayer
+	m.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	m.imgs.protocol = imageProtocolKitty
+	m.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	if m.kittyOverlay() == "" {
+		t.Fatal("expected initial overlay render")
+	}
+	m.helpOpen = true
+
+	overlay := m.kittyOverlay()
+	if !strings.Contains(overlay, kittyDeleteAll) {
+		t.Fatal("expected help modal to clear Kitty image")
+	}
+	if again := m.kittyOverlay(); !strings.Contains(again, kittyDeleteAll) {
+		t.Fatalf("expected help-open state to keep emitting delete-all, got %q", again)
+	}
+}
+
 func hasInflightURL(cache *imgCache, url string) bool {
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
 	_, ok := cache.inflight[url]
 	return ok
 }
+
+type imageProviderFunc func(ctx context.Context, url string) ([]byte, error)
+
+func (f imageProviderFunc) Fetch(ctx context.Context, url string) ([]byte, error) {
+	return f(ctx, url)
+}
+
+var _ ports.ImageProvider = imageProviderFunc(nil)

@@ -148,6 +148,67 @@ func (s *Service) ListSavedAlbumsPage(ctx context.Context, offset, limit int) (*
 	return out, nil
 }
 
+func (s *Service) ResolveContextImageURL(ctx context.Context, kind, id string) (string, error) {
+	kind = strings.TrimSpace(kind)
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", errors.New("context ID must not be empty")
+	}
+	if s.itemsHTTPClient == nil {
+		return "", errors.New("items http client is not configured")
+	}
+	switch kind {
+	case ContextKindPlaylist:
+		u := spotifyAPIBase + "playlists/" + url.PathEscape(id) + "/images"
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Accept", "application/json")
+		resp, err := s.itemsHTTPClient.Do(req)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		var images []PlaylistImage
+		if err := DecodeWebAPIJSON(resp, http.StatusOK, &images, func(status int, body string) error {
+			return &httpStatusError{status: status, err: fmt.Errorf("playlist images: %s", body)}
+		}); err != nil {
+			return "", err
+		}
+		if len(images) == 0 {
+			return "", nil
+		}
+		return strings.TrimSpace(images[0].URL), nil
+	case ContextKindAlbum:
+		u := spotifyAPIBase + "albums/" + url.PathEscape(id)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Accept", "application/json")
+		resp, err := s.itemsHTTPClient.Do(req)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		var album struct {
+			Images []PlaylistImage `json:"images"`
+		}
+		if err := DecodeWebAPIJSON(resp, http.StatusOK, &album, func(status int, body string) error {
+			return &httpStatusError{status: status, err: fmt.Errorf("album details: %s", body)}
+		}); err != nil {
+			return "", err
+		}
+		if len(album.Images) == 0 {
+			return "", nil
+		}
+		return strings.TrimSpace(album.Images[0].URL), nil
+	default:
+		return "", fmt.Errorf("unsupported context kind %q", kind)
+	}
+}
+
 func (s *Service) ListPlaylistItemIDs(ctx context.Context, playlistID string, max int) ([]string, error) {
 	playlistID = strings.TrimSpace(playlistID)
 	if playlistID == "" {

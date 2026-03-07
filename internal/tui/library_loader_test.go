@@ -28,31 +28,44 @@ func (f fakeCatalog) ListPlaylistItemsPage(_ context.Context, _ string, offset, 
 	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 }
 
+func (f fakeCatalog) ResolveContextImageURL(_ context.Context, _ string, _ string) (string, error) {
+	return "", nil
+}
+
 func (f fakeCatalog) CurrentUserID(_ context.Context) (string, error) { return "u", nil }
 
 func TestLoadPlaylistsCmdInitialInterleavesAlbums(t *testing.T) {
+	const totalPerKind = playlistAPIPageSize + 10
 	catalog := fakeCatalog{
 		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			if offset >= totalPerKind {
+				return &spotify.PlaylistPage{Items: nil, Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+			}
+			count := min(limit, totalPerKind-offset)
 			items := make([]spotify.PlaylistSummary, 0, limit)
-			for i := 0; i < limit; i++ {
+			for i := 0; i < count; i++ {
 				items = append(items, spotify.PlaylistSummary{
 					ID:   fmt.Sprintf("p-%d", offset+i),
 					Name: "Playlist",
 					Kind: spotify.ContextKindPlaylist,
 				})
 			}
-			return &spotify.PlaylistPage{Items: items, Offset: offset, Limit: limit, NextOffset: offset + len(items), HasMore: true}, nil
+			return &spotify.PlaylistPage{Items: items, Offset: offset, Limit: limit, NextOffset: offset + len(items), HasMore: offset+len(items) < totalPerKind}, nil
 		},
 		albums: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			if offset >= totalPerKind {
+				return &spotify.PlaylistPage{Items: nil, Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+			}
+			count := min(limit, totalPerKind-offset)
 			items := make([]spotify.PlaylistSummary, 0, limit)
-			for i := 0; i < limit; i++ {
+			for i := 0; i < count; i++ {
 				items = append(items, spotify.PlaylistSummary{
 					ID:   fmt.Sprintf("a-%d", offset+i),
 					Name: "Album",
 					Kind: spotify.ContextKindAlbum,
 				})
 			}
-			return &spotify.PlaylistPage{Items: items, Offset: offset, Limit: limit, NextOffset: offset + len(items), HasMore: true}, nil
+			return &spotify.PlaylistPage{Items: items, Offset: offset, Limit: limit, NextOffset: offset + len(items), HasMore: offset+len(items) < totalPerKind}, nil
 		},
 	}
 	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
@@ -102,5 +115,46 @@ func TestLoadPlaylistsCmdInitialAlbumsForbiddenSetsHintFlag(t *testing.T) {
 	}
 	if !msg.albumsForbidden {
 		t.Fatalf("expected albumsForbidden flag when album API is forbidden")
+	}
+}
+
+func TestLoadPlaylistsCmdInitialLoadsBeyondPlaylistLoadMax(t *testing.T) {
+	const totalPlaylists = playlistLoadMax + 25
+	catalog := fakeCatalog{
+		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			if offset >= totalPlaylists {
+				return &spotify.PlaylistPage{Items: nil, Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+			}
+			count := min(limit, totalPlaylists-offset)
+			items := make([]spotify.PlaylistSummary, 0, count)
+			for i := 0; i < count; i++ {
+				items = append(items, spotify.PlaylistSummary{
+					ID:   fmt.Sprintf("p-%d", offset+i),
+					Name: "Playlist",
+					Kind: spotify.ContextKindPlaylist,
+				})
+			}
+			return &spotify.PlaylistPage{
+				Items:      items,
+				Offset:     offset,
+				Limit:      limit,
+				NextOffset: offset + len(items),
+				HasMore:    offset+len(items) < totalPlaylists,
+			}, nil
+		},
+		albums: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Items: nil, Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+		},
+	}
+	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	msg, ok := m.loadPlaylistsCmd(0, playlistLoadBatchSize)().(playlistsMsg)
+	if !ok {
+		t.Fatalf("expected playlistsMsg")
+	}
+	if msg.err != nil {
+		t.Fatalf("unexpected error: %v", msg.err)
+	}
+	if len(msg.items) != totalPlaylists {
+		t.Fatalf("expected %d items, got %d", totalPlaylists, len(msg.items))
 	}
 }

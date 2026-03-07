@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	_ "golang.org/x/image/webp"
+
 	"orpheus/internal/cache"
 	"orpheus/internal/infra/ports"
 )
@@ -36,15 +38,17 @@ const (
 )
 
 type imgCache struct {
-	mu        sync.RWMutex
-	imgs      *cache.LRU[string, image.Image]
-	covers    *cache.LRU[coverKey, string]
-	encoded   map[string]string
-	inflight  map[string]struct{}
-	failedAt  map[string]time.Time
-	rendering map[coverKey]chan struct{}
-	protocol  imageProtocol
-	stats     imageCacheStats
+	mu               sync.RWMutex
+	imgs             *cache.LRU[string, image.Image]
+	covers           *cache.LRU[coverKey, string]
+	encoded          map[string]string
+	inflight         map[string]struct{}
+	failedAt         map[string]time.Time
+	rendering        map[coverKey]chan struct{}
+	protocol         imageProtocol
+	stats            imageCacheStats
+	lastKittyOverlay string
+	kittyVisible     bool
 }
 
 type imageCacheStats struct {
@@ -90,6 +94,24 @@ func (c *imgCache) encodedFor(url string) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.encoded[url]
+}
+
+func (c *imgCache) beginKittyOverlayState(key string) (changed bool, shouldDelete bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	shouldDelete = c.kittyVisible
+	if key == "" {
+		c.lastKittyOverlay = ""
+		c.kittyVisible = false
+		return false, shouldDelete
+	}
+	if c.kittyVisible && c.lastKittyOverlay == key {
+		return false, false
+	}
+	c.lastKittyOverlay = key
+	c.kittyVisible = true
+	return true, shouldDelete
 }
 
 func (c *imgCache) setImage(url string, img image.Image) {
