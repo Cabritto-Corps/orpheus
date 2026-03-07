@@ -30,6 +30,7 @@ const (
 	playlistItemPreloadMax      = 500
 	coverPreloadWindow          = 14
 	imageLoadRetryMax           = 4
+	coverRefreshEvery           = 25 // ticks (5 s at 200 ms/tick)
 	trackMetadataTTL            = 2 * time.Hour
 	uiTickInterval              = 200 * time.Millisecond
 	navDebounceInterval         = 120 * time.Millisecond
@@ -51,6 +52,7 @@ type model struct {
 	pollInterval        time.Duration
 	pollTick            int
 	pollElapsed         time.Duration
+	coverRefreshTick    int
 	actionFastPollUntil time.Time
 
 	activeTab      tab
@@ -71,7 +73,8 @@ type model struct {
 	queue                        []spotify.QueueItem
 	queueHasMore                 bool
 	stableQueueLen               int
-	pendingContextFrom           string
+	pendingContextFrom     string
+	pendingContextFromAt   time.Time
 	transportTransitionPending   bool
 	transportTransitionFromTrack string
 	transportTransitionStartedAt time.Time
@@ -269,15 +272,15 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 		m.seekSentTarget = -1
 	}
 	refreshQueue := len(m.queue) == 0 || (nextTrackID != "" && nextTrackID != prevTrackID)
-	if nextTrackID != m.pendingContextFrom {
-		m.pendingContextFrom = ""
-	}
 	prevShuffleState := false
 	if prevStatus != nil {
 		prevShuffleState = prevStatus.ShuffleState
 	}
 	shuffleChanged := msg.status != nil && msg.status.ShuffleState != prevShuffleState
-	m.applyMergedQueue(msg.queue, msg.queueHasMore, refreshQueue || shuffleChanged, true)
+	newShuffleActive := msg.status != nil && msg.status.ShuffleState
+	if m.shouldApplyIncomingQueue(nextTrackID) {
+		m.applyMergedQueue(msg.queue, msg.queueHasMore, refreshQueue || shuffleChanged, true, newShuffleActive)
+	}
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, msg.status, m.trackCache)
 	m.maybeClearTransportTransition(m.status)
 	m.playbackErr = nil
@@ -350,7 +353,7 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 			incomingTrack = normalizeQueueID(msg.status.TrackID)
 		}
 		if m.shouldApplyIncomingQueue(incomingTrack) {
-			m.applyMergedQueue(msg.queue, false, true, true)
+			m.applyMergedQueue(msg.queue, false, true, true, m.status != nil && m.status.ShuffleState)
 		}
 	}
 	if msg.queueErr != nil {
@@ -439,7 +442,7 @@ func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.
 			incomingTrack = normalizeQueueID(msg.status.TrackID)
 		}
 		if m.shouldApplyIncomingQueue(incomingTrack) {
-			m.applyMergedQueue(msg.queue, false, true, true)
+			m.applyMergedQueue(msg.queue, false, true, true, m.status != nil && m.status.ShuffleState)
 		}
 	}
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, m.status, m.trackCache)
@@ -491,7 +494,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case tabPlayer:
 				m.activeTab = tabPlaylists
 			}
-			return m, nil
+			m.coverRefreshTick = 0
+			return m, m.loadVisiblePlaylistCoversCmd()
 		}
 	}
 
@@ -626,6 +630,7 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 	m.setActivePlaylist(activeID, canReadTracks, ownerID, collaborative)
 	if m.status != nil {
 		m.pendingContextFrom = normalizeQueueID(m.status.TrackID)
+		m.pendingContextFromAt = time.Now()
 	}
 	m.queue = nil
 	m.queueHasMore = false

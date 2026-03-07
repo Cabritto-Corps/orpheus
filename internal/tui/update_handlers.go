@@ -33,11 +33,19 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	m.interpolatePlaybackProgress(uiTickInterval)
 	inputCmd := m.pumpInputExecutor()
+
+	m.coverRefreshTick++
+	var coverCmd tea.Cmd
+	if m.activeTab != tabPlayer && m.coverRefreshTick >= coverRefreshEvery {
+		m.coverRefreshTick = 0
+		coverCmd = m.loadVisiblePlaylistCoversCmd()
+	}
+
 	if m.tuiCmdCh != nil {
-		return m, tea.Batch(m.tickCmd(), inputCmd)
+		return m, tea.Batch(m.tickCmd(), inputCmd, coverCmd)
 	}
 	if m.activeTab != tabPlayer {
-		return m, tea.Batch(m.tickCmd(), inputCmd)
+		return m, tea.Batch(m.tickCmd(), inputCmd, coverCmd)
 	}
 	interval := m.pollInterval
 	if interval <= 0 {
@@ -237,6 +245,7 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 	if attempt > imageLoadRetryMax {
 		delete(m.imageRetryCount, msg.url)
 		delete(m.imageRetryToken, msg.url)
+		m.imgs.markFailed(msg.url)
 		slog.Warn("image load retries exhausted", "url", msg.url, "error", msg.err)
 		return m, nil
 	}

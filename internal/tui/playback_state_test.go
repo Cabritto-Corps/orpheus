@@ -170,16 +170,31 @@ func TestClearSeekSettleTargetToleranceAndTimeout(t *testing.T) {
 
 func TestShouldApplyIncomingQueueClearsPendingContextQueue(t *testing.T) {
 	m := model{
-		pendingContextFrom: "track-a",
-		queue:              []spotify.QueueItem{{ID: "old"}},
-		stableQueueLen:     1,
-		queueHasMore:       true,
+		pendingContextFrom:   "track-a",
+		pendingContextFromAt: time.Now(),
+		queue:                []spotify.QueueItem{{ID: "old"}},
+		stableQueueLen:       1,
+		queueHasMore:         true,
 	}
 	if m.shouldApplyIncomingQueue("track-a") {
 		t.Fatal("expected queue update to be gated for matching pending context")
 	}
 	if m.queue != nil || m.stableQueueLen != 0 || m.queueHasMore {
 		t.Fatalf("expected queue state reset while waiting for context switch, got queue=%v stable=%d hasMore=%t", m.queue, m.stableQueueLen, m.queueHasMore)
+	}
+}
+
+func TestShouldApplyIncomingQueueTimeoutAllowsApply(t *testing.T) {
+	m := model{
+		pendingContextFrom:   "track-a",
+		pendingContextFromAt: time.Now().Add(-(pendingContextTimeout + time.Second)),
+		queue:                []spotify.QueueItem{{ID: "old"}},
+	}
+	if !m.shouldApplyIncomingQueue("track-a") {
+		t.Fatal("expected timeout to override pending context guard and allow queue apply")
+	}
+	if m.pendingContextFrom != "" {
+		t.Fatal("expected pendingContextFrom to be cleared after timeout")
 	}
 }
 
@@ -198,6 +213,7 @@ func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 		false,
 		true,
 		true,
+		false,
 	)
 
 	if _, ok := m.preloadedItemIDs["new-1"]; !ok {
@@ -213,6 +229,50 @@ func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 		t.Fatalf("expected preloaded id set to rebuild from merged queue, got %d entries", len(m.preloadedItemIDs))
 	}
 }
+
+func TestApplyMergedQueueShuffleActiveDiscardsTail(t *testing.T) {
+	// Build a large prev queue that would normally qualify for tail preservation.
+	prev := make([]spotify.QueueItem, 40)
+	for i := range prev {
+		prev[i] = spotify.QueueItem{ID: fmt.Sprintf("track-%d", i), Name: fmt.Sprintf("Track %d", i)}
+	}
+	next := []spotify.QueueItem{
+		{ID: "shuffled-a"},
+		{ID: "shuffled-b"},
+	}
+	m := model{
+		status:           &spotify.PlaybackStatus{ShuffleState: false}, // intentionally stale: old state says shuffle off
+		queue:            prev,
+		preloadedItemIDs: make(map[string]struct{}),
+		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
+	}
+	// Pass shuffleActive=true (the NEW shuffle state) — tail must be discarded even though m.status.ShuffleState is false
+	m.applyMergedQueue(next, false, true, true, true)
+	if len(m.queue) != 2 {
+		t.Fatalf("expected shuffle-active apply to discard old tail, got %d queue entries", len(m.queue))
+	}
+}
+
+func TestApplyMergedQueueShuffleInactivePreservesTail(t *testing.T) {
+	// Large prev queue so tail preservation kicks in.
+	prev := make([]spotify.QueueItem, 40)
+	for i := range prev {
+		prev[i] = spotify.QueueItem{ID: fmt.Sprintf("track-%d", i), Name: fmt.Sprintf("Track %d", i)}
+	}
+	next := prev[:3] // incoming is small window (within librespotQueueWindow)
+	m := model{
+		status:           &spotify.PlaybackStatus{ShuffleState: true}, // intentionally stale: old state says shuffle on
+		queue:            prev,
+		preloadedItemIDs: make(map[string]struct{}),
+		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
+	}
+	// Pass shuffleActive=false (the NEW shuffle state) — tail must be preserved even though m.status.ShuffleState is true
+	m.applyMergedQueue(next, false, true, true, false)
+	if len(m.queue) <= 3 {
+		t.Fatalf("expected shuffle-inactive apply to preserve old tail, got %d queue entries", len(m.queue))
+	}
+}
+
 
 func TestMergeQueueWithRestPreservesTailWithoutDuplicates(t *testing.T) {
 	prev := make([]spotify.QueueItem, 34)

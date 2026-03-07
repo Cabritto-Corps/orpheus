@@ -211,8 +211,14 @@ func absInt(v int) int {
 	return v
 }
 
+const pendingContextTimeout = 8 * time.Second
+
 func (m *model) shouldApplyIncomingQueue(incomingTrack string) bool {
 	if m.pendingContextFrom == "" {
+		return true
+	}
+	if time.Since(m.pendingContextFromAt) > pendingContextTimeout {
+		m.pendingContextFrom = ""
 		return true
 	}
 	if incomingTrack == m.pendingContextFrom {
@@ -225,8 +231,8 @@ func (m *model) shouldApplyIncomingQueue(incomingTrack string) bool {
 	return true
 }
 
-func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool) {
-	preserveTail := !(m.status != nil && m.status.ShuffleState)
+func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool, shuffleActive bool) {
+	preserveTail := !shuffleActive
 	m.queue = mergeQueueWithRest(m.queue, incoming, m.trackCache, preserveTail)
 	if updateStable {
 		m.stableQueueLen = len(m.queue)

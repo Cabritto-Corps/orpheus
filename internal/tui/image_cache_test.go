@@ -79,6 +79,7 @@ func TestImageCacheEvictsOldestImageAndItsRenderedCovers(t *testing.T) {
 
 func TestImageCacheEvictsOldestRenderedCover(t *testing.T) {
 	cache := newImgCache()
+	cache.protocol = imageProtocolNone // force ANSI path; Kitty skips pre-rendering
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	cache.setImage("u", img)
 

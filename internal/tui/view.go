@@ -37,13 +37,15 @@ const (
 
 func (m model) View() string {
 	if m.width < 40 || m.height < 12 {
-		return styleError.Render("terminal too small — please resize")
+		return styleError.Render("terminal too small — please resize") + m.kittyOverlay()
 	}
 
 	header := m.headerView()
 
 	if m.helpOpen {
-		return header + "\n" + m.helpModalView()
+		// kittyOverlay emits a delete-all command when Kitty is active,
+		// clearing any previously rendered image so it doesn't bleed through.
+		return header + "\n" + m.helpModalView() + m.kittyOverlay()
 	}
 
 	tabBar := m.tabBarView()
@@ -59,8 +61,7 @@ func (m model) View() string {
 	}
 
 	bar := m.playerBarView()
-
-	return header + "\n" + tabBar + "\n" + body + "\n" + bar
+	return header + "\n" + tabBar + "\n" + body + "\n" + bar + m.kittyOverlay()
 }
 
 func (m model) headerView() string {
@@ -243,7 +244,14 @@ func (m model) coverPreviewPanel(w, h int) string {
 	coverCols, coverRows := squareDims(innerW, innerH-3)
 	var coverStr string
 	if pl, ok := m.selectedPlaylist(); ok && pl.summary.ImageURL != "" {
-		if s, cached := m.imgs.cover(pl.summary.ImageURL, coverCols, coverRows); cached {
+		url := pl.summary.ImageURL
+		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
+			if m.imgs.hasImage(url) {
+				coverStr = m.blankArt(coverCols, coverRows)
+			} else {
+				coverStr = m.placeholderArt(coverCols, coverRows)
+			}
+		} else if s, cached := m.imgs.cover(url, coverCols, coverRows); cached {
 			coverStr = s
 		} else {
 			coverStr = m.placeholderArt(coverCols, coverRows)
@@ -265,7 +273,7 @@ func (m model) coverPreviewPanel(w, h int) string {
 		meta = "\n" + styleDimmed.Render("select an item")
 	}
 
-	content := labelLine + "\n " + strings.ReplaceAll(coverStr+meta, "\n", "\n ")
+	content := labelLine + "\n" + m.composeCoverSection(coverStr, meta)
 	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
 }
 
@@ -324,7 +332,14 @@ func (m model) albumPreviewPanel(w, h int) string {
 	coverCols, coverRows := squareDims(innerW, innerH-3)
 	var coverStr string
 	if pl, ok := m.selectedAlbum(); ok && pl.summary.ImageURL != "" {
-		if s, cached := m.imgs.cover(pl.summary.ImageURL, coverCols, coverRows); cached {
+		url := pl.summary.ImageURL
+		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
+			if m.imgs.hasImage(url) {
+				coverStr = m.blankArt(coverCols, coverRows)
+			} else {
+				coverStr = m.placeholderArt(coverCols, coverRows)
+			}
+		} else if s, cached := m.imgs.cover(url, coverCols, coverRows); cached {
 			coverStr = s
 		} else {
 			coverStr = m.placeholderArt(coverCols, coverRows)
@@ -342,7 +357,7 @@ func (m model) albumPreviewPanel(w, h int) string {
 		meta = "\n" + styleDimmed.Render("select an album")
 	}
 
-	content := labelLine + "\n " + strings.ReplaceAll(coverStr+meta, "\n", "\n ")
+	content := labelLine + "\n" + m.composeCoverSection(coverStr, meta)
 	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
 }
 
@@ -357,7 +372,14 @@ func (m model) albumCoverPanel(w, h int) string {
 
 	var coverStr string
 	if m.status != nil && m.status.AlbumImageURL != "" {
-		if s, cached := m.imgs.cover(m.status.AlbumImageURL, coverCols, coverRows); cached {
+		url := m.status.AlbumImageURL
+		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
+			if m.imgs.hasImage(url) {
+				coverStr = m.blankArt(coverCols, coverRows)
+			} else {
+				coverStr = m.placeholderArt(coverCols, coverRows)
+			}
+		} else if s, cached := m.imgs.cover(url, coverCols, coverRows); cached {
 			coverStr = s
 		} else {
 			coverStr = m.placeholderArt(coverCols, coverRows)
@@ -387,7 +409,7 @@ func (m model) albumCoverPanel(w, h int) string {
 		meta = "\n" + styleDimmed.Render("nothing playing")
 	}
 
-	content := labelLine + "\n " + strings.ReplaceAll(coverStr+meta, "\n", "\n ")
+	content := labelLine + "\n" + m.composeCoverSection(coverStr, meta)
 	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
 }
 
@@ -672,6 +694,87 @@ func centerBlockLines(s string, w int) string {
 		lines[i] = centerText(lines[i], w)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// kittyOverlay computes the absolute terminal position of the active cover
+// panel's image area and returns a Kitty graphics overlay string. It always
+// begins with a delete-all command so stale images are cleared on every frame
+// (handling resize, tab-switch, and navigation without accumulation).
+//
+// Layout (1-indexed terminal rows):
+//
+//	1-3  header (line1, line2, separator)
+//	4-5  tab bar (labels, underline)
+//	6+   body panels
+//
+// Each cover panel begins with: label (row 6) + divider (row 7), so the
+// image area starts at row 8. composeCoverSection adds one space of left
+// indent, so the image starts at column 2.
+//
+// When Kitty protocol is not active, returns "".
+// When Kitty is active but there is nothing to render, returns kittyDeleteAll
+// so previously rendered images are cleared (e.g. when the help modal opens).
+func (m model) kittyOverlay() string {
+	if m.imgs == nil || m.imgs.protocol != imageProtocolKitty {
+		return ""
+	}
+
+	bodyH := m.height - chromeH - 1
+	leftW, _ := m.splitWidths()
+	panelW := leftW - 1
+	panelH := bodyH
+	innerW := panelW - 2
+	innerH := panelH - 2
+	coverCols, coverRows := squareDims(innerW, innerH-3)
+	if coverCols <= 0 || coverRows <= 0 {
+		return kittyDeleteAll
+	}
+
+	var url string
+	switch m.activeTab {
+	case tabPlaylists:
+		if pl, ok := m.selectedPlaylist(); ok {
+			url = pl.summary.ImageURL
+		}
+	case tabAlbums:
+		if al, ok := m.selectedAlbum(); ok {
+			url = al.summary.ImageURL
+		}
+	case tabPlayer:
+		if m.status != nil {
+			url = m.status.AlbumImageURL
+		}
+	}
+	if url == "" {
+		return kittyDeleteAll
+	}
+
+	encoded := m.imgs.encodedFor(url)
+	if encoded == "" {
+		return kittyDeleteAll
+	}
+
+	const imageRow = 8
+	const imageCol = 2
+	return kittyImageOverlay(imageRow, imageCol, encoded, coverCols, coverRows)
+}
+
+func (m model) composeCoverSection(coverStr, meta string) string {
+	return " " + strings.ReplaceAll(coverStr+meta, "\n", "\n ")
+}
+
+func (m model) blankArt(cols, rows int) string {
+	if cols <= 0 || rows <= 0 {
+		return ""
+	}
+	line := strings.Repeat(" ", cols)
+	var sb strings.Builder
+	sb.WriteString(line)
+	for i := 1; i < rows; i++ {
+		sb.WriteByte('\n')
+		sb.WriteString(line)
+	}
+	return sb.String()
 }
 
 func (m model) placeholderArt(cols, rows int) string {
