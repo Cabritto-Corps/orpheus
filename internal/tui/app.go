@@ -21,30 +21,32 @@ import (
 type tab string
 
 const (
-	tabPlaylists             tab = "playlists"
-	tabAlbums                tab = "albums"
-	tabPlayer                tab = "player"
-	playlistItemPageSize         = 100
-	queuePollEvery               = 4
-	playlistLoadBatchSize        = 25
-	playlistLoadMax              = 500
-	playlistItemPreloadMax       = 500
-	coverPreloadWindow           = 14
-	imageLoadRetryMax            = 4
-	coverRefreshEvery            = 25 // ticks (5 s at 200 ms/tick)
-	playerCoverRefreshEvery      = 10 // ticks (2 s)
-	libraryCoverRefreshEvery     = 150
-	libraryCoverRefreshBatch     = 32
-	libraryMetaRefreshEvery      = 300
-	trackMetadataTTL             = 2 * time.Hour
-	uiTickInterval               = 200 * time.Millisecond
-	navDebounceInterval          = 120 * time.Millisecond
-	volSeekDebounceInterval      = 150 * time.Millisecond
-	volSettleWindow              = 3 * time.Second
-	seekSettleWindow             = 1200 * time.Millisecond
-	reconcileActionWindow        = 2 * time.Second
-	actionFastPollWindow         = 3 * time.Second
-	idlePollBackoffMax           = 5 * time.Second
+	tabPlaylists                  tab = "playlists"
+	tabAlbums                     tab = "albums"
+	tabPlayer                     tab = "player"
+	playlistItemPageSize              = 100
+	queuePollEvery                    = 4
+	playlistLoadBatchSize             = 25
+	playlistLoadMax                   = 500
+	playlistItemPreloadMax            = 500
+	coverPreloadWindow                = 14
+	imageLoadRetryMax                 = 4
+	coverRefreshEvery                 = 25
+	playerCoverRefreshEvery           = 10
+	libraryCoverRefreshEvery          = 150
+	libraryCoverRefreshBatch          = 32
+	libraryMetaRefreshEvery           = 300
+	coverQueueDrainBatch              = 12
+	kittyProtocolFallbackFailures     = 8
+	trackMetadataTTL                  = 2 * time.Hour
+	uiTickInterval                    = 200 * time.Millisecond
+	navDebounceInterval               = 120 * time.Millisecond
+	volSeekDebounceInterval           = 150 * time.Millisecond
+	volSettleWindow                   = 3 * time.Second
+	seekSettleWindow                  = 1200 * time.Millisecond
+	reconcileActionWindow             = 2 * time.Second
+	actionFastPollWindow              = 3 * time.Second
+	idlePollBackoffMax                = 5 * time.Second
 )
 
 type model struct {
@@ -104,6 +106,10 @@ type model struct {
 	imageRetryCount              map[string]int
 	imageRetryToken              map[string]int
 	coverResolveInFlight         map[string]struct{}
+	coverQueue                   []string
+	coverQueued                  map[string]struct{}
+	coverStats                   coverPipelineStats
+	playerCoverFailStreak        int
 	playlistsLoading             bool
 	playlistsExhausted           bool
 	albumsForbidden              bool
@@ -124,6 +130,17 @@ type model struct {
 
 	help help.Model
 	keys keyMap
+}
+
+type coverPipelineStats struct {
+	Enqueued      uint64
+	Launched      uint64
+	Loaded        uint64
+	Failed        uint64
+	Retried       uint64
+	ResolveOK     uint64
+	ResolveFailed uint64
+	Skipped       uint64
 }
 
 type playlistItem struct {
@@ -183,6 +200,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		imageRetryCount:      make(map[string]int),
 		imageRetryToken:      make(map[string]int),
 		coverResolveInFlight: make(map[string]struct{}),
+		coverQueued:          make(map[string]struct{}),
 		playlistsLoading:     true,
 		nerdFonts:            cfg.NerdFonts,
 		volDebouncePending:   -1,
@@ -357,6 +375,60 @@ func (m *model) queueResolvesForImageURLCmd(url string, limit int) tea.Cmd {
 		}
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m *model) enqueueCoverURL(url string) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return
+	}
+	if _, exists := m.coverQueued[url]; exists {
+		return
+	}
+	m.coverQueued[url] = struct{}{}
+	m.coverQueue = append(m.coverQueue, url)
+	m.coverStats.Enqueued++
+}
+
+func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
+	if limit <= 0 {
+		limit = coverQueueDrainBatch
+	}
+	cmds := make([]tea.Cmd, 0, limit)
+	for len(m.coverQueue) > 0 && len(cmds) < limit {
+		url := m.coverQueue[0]
+		m.coverQueue = m.coverQueue[1:]
+		delete(m.coverQueued, url)
+		if !m.imgs.shouldQueueLoad(url) {
+			m.coverStats.Skipped++
+			continue
+		}
+		cmd := m.loadImageCmd(url)
+		if cmd == nil {
+			m.coverStats.Skipped++
+			continue
+		}
+		cmds = append(cmds, cmd)
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *model) maybeFallbackFromKittyOnPlayerFailures(url string) {
+	if m.imgs == nil || m.imgs.protocol != imageProtocolKitty {
+		return
+	}
+	if m.status == nil || strings.TrimSpace(m.status.AlbumImageURL) == "" {
+		return
+	}
+	if strings.TrimSpace(m.status.AlbumImageURL) != strings.TrimSpace(url) {
+		return
+	}
+	if m.playerCoverFailStreak < kittyProtocolFallbackFailures {
+		return
+	}
+	m.imgs.protocol = imageProtocolNone
+	m.playerCoverFailStreak = 0
+	slog.Warn("disabling kitty image protocol after repeated player cover failures", "url", url)
 }
 
 func (m *model) applyResolvedContextImageURL(kind, id, imageURL string) bool {
@@ -894,9 +966,8 @@ func (m *model) scheduleNavDebounceCmd() tea.Cmd {
 	return m.navDebounceCmd(m.navToken)
 }
 
-func (m model) loadVisiblePlaylistCoversCmd() tea.Cmd {
+func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 	seen := make(map[string]struct{})
-	cmds := make([]tea.Cmd, 0, m.playlistList.Paginator.PerPage+coverPreloadWindow+1)
 
 	add := func(url string) {
 		if url == "" {
@@ -909,7 +980,7 @@ func (m model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 			return
 		}
 		seen[url] = struct{}{}
-		cmds = append(cmds, m.loadImageCmd(url))
+		m.enqueueCoverURL(url)
 	}
 
 	if sel, ok := m.selectedPlaylist(); ok {
@@ -953,19 +1024,15 @@ func (m model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 		}
 	}
 
-	return tea.Batch(cmds...)
+	return m.drainCoverQueueCmd(coverQueueDrainBatch)
 }
 
-func (m model) loadLibraryCoversCmd(limit int) tea.Cmd {
+func (m *model) loadLibraryCoversCmd(limit int) tea.Cmd {
 	seen := make(map[string]struct{})
-	capHint := len(m.playlistList.Items()) + len(m.albumList.Items())
-	if limit > 0 {
-		capHint = min(capHint, limit)
-	}
-	cmds := make([]tea.Cmd, 0, capHint)
+	added := 0
 
 	add := func(url string) {
-		if limit > 0 && len(cmds) >= limit {
+		if limit > 0 && added >= limit {
 			return
 		}
 		if url == "" {
@@ -978,11 +1045,12 @@ func (m model) loadLibraryCoversCmd(limit int) tea.Cmd {
 			return
 		}
 		seen[url] = struct{}{}
-		cmds = append(cmds, m.loadImageCmd(url))
+		m.enqueueCoverURL(url)
+		added++
 	}
 
 	for _, item := range m.playlistList.Items() {
-		if limit > 0 && len(cmds) >= limit {
+		if limit > 0 && added >= limit {
 			break
 		}
 		pl, ok := item.(playlistItem)
@@ -992,7 +1060,7 @@ func (m model) loadLibraryCoversCmd(limit int) tea.Cmd {
 		add(pl.summary.ImageURL)
 	}
 	for _, item := range m.albumList.Items() {
-		if limit > 0 && len(cmds) >= limit {
+		if limit > 0 && added >= limit {
 			break
 		}
 		al, ok := item.(playlistItem)
@@ -1002,7 +1070,7 @@ func (m model) loadLibraryCoversCmd(limit int) tea.Cmd {
 		add(al.summary.ImageURL)
 	}
 
-	return tea.Batch(cmds...)
+	return m.drainCoverQueueCmd(coverQueueDrainBatch)
 }
 
 func (m model) visiblePlaylistItems() []playlistItem {

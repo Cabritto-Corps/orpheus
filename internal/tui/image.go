@@ -348,16 +348,8 @@ func detectImageProtocol(getenv func(string) string) imageProtocol {
 	return imageProtocolNone
 }
 
-// kittyDeleteAll is a Kitty graphics protocol command that removes all visible
-// image placements from the terminal. It must be sent before rendering a new
-// image so that stale images (from a previous size, position, or content) do
-// not accumulate.
 const kittyDeleteAll = "\x1b_Ga=d,d=A\x1b\\"
 
-// kittyImageOverlay returns a cursor-save + absolute-position + Kitty
-// graphics payload (sized to cols×rows cells) + cursor-restore sequence.
-// A delete-all command is prepended so any previously rendered image is
-// cleared first, preventing image multiplication on resize or navigation.
 func kittyImageOverlay(row, col int, encoded string, cols, rows int) string {
 	if encoded == "" || cols <= 0 || rows <= 0 || row <= 0 || col <= 0 {
 		return kittyDeleteAll
@@ -369,8 +361,6 @@ func kittyImageOverlay(row, col int, encoded string, cols, rows int) string {
 	return kittyDeleteAll + fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", row, col, payload)
 }
 
-// renderKittyImageRaw returns the Kitty APC payload without trailing newlines.
-// Use kittyImageOverlay for cursor-positioned overlay rendering.
 func renderKittyImageRaw(encoded string, cols, rows int) string {
 	if encoded == "" || cols <= 0 || rows <= 0 {
 		return ""

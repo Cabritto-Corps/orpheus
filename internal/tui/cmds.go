@@ -402,7 +402,7 @@ func (m model) getCurrentUserIDCmd() tea.Cmd {
 	}
 }
 
-func (m model) loadImageCmd(url string) tea.Cmd {
+func (m *model) loadImageCmd(url string) tea.Cmd {
 	if url == "" {
 		return nil
 	}
@@ -410,6 +410,7 @@ func (m model) loadImageCmd(url string) tea.Cmd {
 	if !cache.beginLoad(url) {
 		return nil
 	}
+	m.coverStats.Launched++
 	coverSizes := m.currentCoverSizes()
 	return func() tea.Msg {
 		defer cache.finishLoad(url)

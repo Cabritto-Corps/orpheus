@@ -83,7 +83,7 @@ func TestImageCacheEvictsOldestImageAndItsRenderedCovers(t *testing.T) {
 
 func TestImageCacheEvictsOldestRenderedCover(t *testing.T) {
 	cache := newImgCache()
-	cache.protocol = imageProtocolNone // force ANSI path; Kitty skips pre-rendering
+	cache.protocol = imageProtocolNone
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	cache.setImage("u", img)
 
@@ -306,6 +306,35 @@ func TestHandleTickMsgPlayerTabQueuesCurrentAlbumImageRefresh(t *testing.T) {
 	got := nextModel.(model)
 	if !hasInflightURL(got.imgs, "player-u1") {
 		t.Fatal("expected periodic player cover refresh to queue current album image")
+	}
+}
+
+func TestCoverQueueDedupesAndDrains(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.enqueueCoverURL("u1")
+	m.enqueueCoverURL("u1")
+	if len(m.coverQueue) != 1 {
+		t.Fatalf("expected deduped cover queue size 1, got %d", len(m.coverQueue))
+	}
+	cmd := m.drainCoverQueueCmd(4)
+	if cmd == nil {
+		t.Fatal("expected drain command")
+	}
+	if !hasInflightURL(m.imgs, "u1") {
+		t.Fatal("expected queued URL to launch image load")
+	}
+}
+
+func TestPlayerCoverFailuresFallbackFromKitty(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.imgs.protocol = imageProtocolKitty
+	m.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	for i := 0; i < kittyProtocolFallbackFailures; i++ {
+		nextModel, _ := m.handleImageLoadedMsg(imageLoadedMsg{url: "u1", err: fmt.Errorf("network")})
+		m = nextModel.(model)
+	}
+	if m.imgs.protocol != imageProtocolNone {
+		t.Fatal("expected kitty protocol to fallback to ansi after repeated player cover failures")
 	}
 }
 

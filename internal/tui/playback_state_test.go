@@ -231,7 +231,6 @@ func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 }
 
 func TestApplyMergedQueueShuffleActiveDiscardsTail(t *testing.T) {
-	// Build a large prev queue that would normally qualify for tail preservation.
 	prev := make([]spotify.QueueItem, 40)
 	for i := range prev {
 		prev[i] = spotify.QueueItem{ID: fmt.Sprintf("track-%d", i), Name: fmt.Sprintf("Track %d", i)}
@@ -241,12 +240,11 @@ func TestApplyMergedQueueShuffleActiveDiscardsTail(t *testing.T) {
 		{ID: "shuffled-b"},
 	}
 	m := model{
-		status:           &spotify.PlaybackStatus{ShuffleState: false}, // intentionally stale: old state says shuffle off
+		status:           &spotify.PlaybackStatus{ShuffleState: false},
 		queue:            prev,
 		preloadedItemIDs: make(map[string]struct{}),
 		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 	}
-	// Pass shuffleActive=true (the NEW shuffle state) — tail must be discarded even though m.status.ShuffleState is false
 	m.applyMergedQueue(next, false, true, true, true)
 	if len(m.queue) != 2 {
 		t.Fatalf("expected shuffle-active apply to discard old tail, got %d queue entries", len(m.queue))
@@ -254,25 +252,22 @@ func TestApplyMergedQueueShuffleActiveDiscardsTail(t *testing.T) {
 }
 
 func TestApplyMergedQueueShuffleInactivePreservesTail(t *testing.T) {
-	// Large prev queue so tail preservation kicks in.
 	prev := make([]spotify.QueueItem, 40)
 	for i := range prev {
 		prev[i] = spotify.QueueItem{ID: fmt.Sprintf("track-%d", i), Name: fmt.Sprintf("Track %d", i)}
 	}
-	next := prev[:3] // incoming is small window (within librespotQueueWindow)
+	next := prev[:3]
 	m := model{
-		status:           &spotify.PlaybackStatus{ShuffleState: true}, // intentionally stale: old state says shuffle on
+		status:           &spotify.PlaybackStatus{ShuffleState: true},
 		queue:            prev,
 		preloadedItemIDs: make(map[string]struct{}),
 		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 	}
-	// Pass shuffleActive=false (the NEW shuffle state) — tail must be preserved even though m.status.ShuffleState is true
 	m.applyMergedQueue(next, false, true, true, false)
 	if len(m.queue) <= 3 {
 		t.Fatalf("expected shuffle-inactive apply to preserve old tail, got %d queue entries", len(m.queue))
 	}
 }
-
 
 func TestMergeQueueWithRestPreservesTailWithoutDuplicates(t *testing.T) {
 	prev := make([]spotify.QueueItem, 34)

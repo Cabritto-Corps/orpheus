@@ -43,8 +43,6 @@ func (m model) View() string {
 	header := m.headerView()
 
 	if m.helpOpen {
-		// kittyOverlay emits a delete-all command when Kitty is active,
-		// clearing any previously rendered image so it doesn't bleed through.
 		return header + "\n" + m.helpModalView() + m.kittyOverlay()
 	}
 
@@ -696,24 +694,6 @@ func centerBlockLines(s string, w int) string {
 	return strings.Join(lines, "\n")
 }
 
-// kittyOverlay computes the absolute terminal position of the active cover
-// panel's image area and returns a Kitty graphics overlay string. It always
-// begins with a delete-all command so stale images are cleared on every frame
-// (handling resize, tab-switch, and navigation without accumulation).
-//
-// Layout (1-indexed terminal rows):
-//
-//	1-3  header (line1, line2, separator)
-//	4-5  tab bar (labels, underline)
-//	6+   body panels
-//
-// Each cover panel begins with: label (row 6) + divider (row 7), so the
-// image area starts at row 8. composeCoverSection adds one space of left
-// indent, so the image starts at column 2.
-//
-// When Kitty protocol is not active, returns "".
-// When Kitty is active but there is nothing to render, returns kittyDeleteAll
-// so previously rendered images are cleared (e.g. when the help modal opens).
 func (m model) kittyOverlay() string {
 	if m.imgs == nil || m.imgs.protocol != imageProtocolKitty {
 		return ""
@@ -777,8 +757,6 @@ func (m model) kittyOverlay() string {
 	if !changed {
 		return ""
 	}
-	// Always delete+draw on cover transitions so first paint and cover switches
-	// are deterministic across terminal implementations.
 	return kittyImageOverlay(imageRow, imageCol, encoded, coverCols, coverRows)
 }
 

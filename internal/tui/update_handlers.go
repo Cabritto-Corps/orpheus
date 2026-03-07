@@ -274,9 +274,18 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.err == nil {
+		m.coverStats.Loaded++
+		if m.status != nil && strings.TrimSpace(m.status.AlbumImageURL) == strings.TrimSpace(msg.url) {
+			m.playerCoverFailStreak = 0
+		}
 		delete(m.imageRetryCount, msg.url)
 		delete(m.imageRetryToken, msg.url)
 		return m, nil
+	}
+	m.coverStats.Failed++
+	if m.status != nil && strings.TrimSpace(m.status.AlbumImageURL) == strings.TrimSpace(msg.url) {
+		m.playerCoverFailStreak++
+		m.maybeFallbackFromKittyOnPlayerFailures(msg.url)
 	}
 
 	attempt := m.imageRetryCount[msg.url] + 1
@@ -292,6 +301,7 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 	}
 	m.imageRetryCount[msg.url] = attempt
 	m.imageRetryToken[msg.url]++
+	m.coverStats.Retried++
 	token := m.imageRetryToken[msg.url]
 	return m, m.imageRetryCmd(msg.url, attempt, token)
 }
@@ -315,6 +325,7 @@ func (m model) handleCoverImageResolvedMsg(msg coverImageResolvedMsg) (tea.Model
 	key := coverResolveKey(msg.kind, msg.id)
 	delete(m.coverResolveInFlight, key)
 	if msg.err != nil {
+		m.coverStats.ResolveFailed++
 		slog.Warn("resolve context image URL failed", "kind", msg.kind, "id", msg.id, "error", msg.err)
 		return m, nil
 	}
@@ -324,6 +335,7 @@ func (m model) handleCoverImageResolvedMsg(msg coverImageResolvedMsg) (tea.Model
 	if !m.applyResolvedContextImageURL(msg.kind, msg.id, msg.url) {
 		return m, nil
 	}
+	m.coverStats.ResolveOK++
 	return m, m.loadImageCmd(msg.url)
 }
 
