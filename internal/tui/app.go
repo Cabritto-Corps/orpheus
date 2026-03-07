@@ -41,7 +41,7 @@ const (
 	trackMetadataTTL                  = 2 * time.Hour
 	uiTickInterval                    = 200 * time.Millisecond
 	navDebounceInterval               = 120 * time.Millisecond
-	volSeekDebounceInterval           = 150 * time.Millisecond
+	volSeekDebounceInterval           = 50 * time.Millisecond
 	volSettleWindow                   = 3 * time.Second
 	seekSettleWindow                  = 1200 * time.Millisecond
 	reconcileActionWindow             = 2 * time.Second
@@ -570,6 +570,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		filtering := (m.activeTab == tabPlaylists && m.playlistList.FilterState() == list.Filtering) ||
 			(m.activeTab == tabAlbums && m.albumList.FilterState() == list.Filtering)
 		if !filtering {
+			prevTab := m.activeTab
 			switch m.activeTab {
 			case tabPlaylists:
 				m.activeTab = tabAlbums

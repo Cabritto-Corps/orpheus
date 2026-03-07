@@ -390,17 +390,24 @@ func (m model) handleVolDebounceMsg(msg volDebounceMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	target := m.volDebouncePending
+	if m.tuiCmdCh != nil {
+		select {
+		case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandSetVolume, Volume: target}:
+			m.volDebouncePending = -1
+			m.volSentTarget = target
+			m.volSentAt = time.Now()
+			m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
+		default:
+			m.volDebouncePending = target
+			m.volDebounceToken++
+			return m, m.volDebounceCmd(m.volDebounceToken)
+		}
+		return m, m.pumpInputExecutor()
+	}
 	m.volDebouncePending = -1
 	m.volSentTarget = target
 	m.volSentAt = time.Now()
 	m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
-	if m.tuiCmdCh != nil {
-		select {
-		case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandSetVolume, Volume: target}:
-		default:
-		}
-		return m, nil
-	}
 	rollback := cloneStatus(m.status)
 	if m.status != nil {
 		m.status.Volume = target
@@ -431,7 +438,7 @@ func (m model) handleSeekDebounceMsg(msg seekDebounceMsg) (tea.Model, tea.Cmd) {
 			m.seekDebounceToken++
 			return m, m.seekDebounceCmd(m.seekDebounceToken)
 		}
-		return m, nil
+		return m, m.pumpInputExecutor()
 	}
 	rollback := cloneStatus(m.status)
 	if m.status != nil {
