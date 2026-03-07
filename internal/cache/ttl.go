@@ -7,8 +7,6 @@ type ttlEntry[V any] struct {
 	expiresAt time.Time
 }
 
-// TTL wraps LRU and expires entries after a fixed duration.
-// It is intentionally not synchronized; callers should guard it if shared.
 type TTL[K comparable, V any] struct {
 	lru *LRU[K, ttlEntry[V]]
 	ttl time.Duration

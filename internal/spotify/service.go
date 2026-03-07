@@ -59,8 +59,6 @@ const (
 	deviceActivationWaitTimeout             = 2 * time.Second
 	transferInitialRetryDelay               = 150 * time.Millisecond
 	transferMaxAttempts                     = 3
-	// apiRetryMaxAttempts bounds 5xx server-error retries only; rate limits
-	// are handled transparently by rateLimitTransport before reaching here.
 	apiRetryInitialDelay = 250 * time.Millisecond
 	apiRetryMaxDelay     = 8 * time.Second
 	apiRetryMaxAttempts  = 4 // total backoff ≤ 250ms+500ms+1s+2s ≈ 4 s
@@ -319,17 +317,6 @@ func (s *Service) CurrentUserID(ctx context.Context) (string, error) {
 	return s.currentUserID, nil
 }
 
-// rateLimitTransport wraps an http.RoundTripper to transparently handle
-// Spotify HTTP 429 rate-limit responses. When a 429 is received it:
-//   - reads the Retry-After response header (defaults to 5 s)
-//   - records a global "don't send before" deadline shared by all goroutines
-//   - drains and closes the 429 body
-//   - waits, then retries the same request
-//
-// On context cancellation the transport returns ctx.Err() immediately, so
-// callers always get a clean error rather than the confusing
-// "spotify: couldn't decode error: (17) [Too many requests]" string that
-// zmb3/spotify produces when it falls through its own broken retry path.
 type rateLimitTransport struct {
 	base      http.RoundTripper
 	mu        sync.Mutex
@@ -344,7 +331,6 @@ func newRateLimitTransport(base http.RoundTripper) *rateLimitTransport {
 }
 
 func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Buffer body so it can be replayed on retry (GET requests have nil body).
 	var bodyBytes []byte
 	if req.Body != nil {
 		var err error
@@ -356,7 +342,6 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 	}
 
 	for {
-		// Honour the global rate-limit window before each attempt.
 		t.mu.Lock()
 		waitUntil := t.waitUntil
 		t.mu.Unlock()
@@ -369,7 +354,6 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 			}
 		}
 
-		// Restore body for this attempt.
 		if bodyBytes != nil {
 			req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 			req.ContentLength = int64(len(bodyBytes))
@@ -383,7 +367,6 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 			return resp, nil
 		}
 
-		// Parse Retry-After (fall back to 5 s if absent or unparseable).
 		delay := rateLimitRetryDelay
 		if raw := resp.Header.Get("Retry-After"); raw != "" {
 			if secs, parseErr := strconv.ParseInt(strings.TrimSpace(raw), 10, 32); parseErr == nil && secs > 0 {
@@ -391,7 +374,6 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 			}
 		}
 
-		// Drain and close the 429 body; update the global wait window.
 		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 
@@ -410,14 +392,6 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 }
 
 func NewClient(_ context.Context, tokenSource oauth2.TokenSource) *spotifyapi.Client {
-	// Build the transport chain explicitly instead of using oauth2.NewClient(ctx, ...)
-	// because that call inherits the HTTP client stored in ctx via the
-	// oauth2.HTTPClient context key.  The stored client (oauthHTTPClient) has
-	// ResponseHeaderTimeout=20 s which is appropriate for short OAuth token
-	// refreshes, but too aggressive for Spotify API calls that may involve
-	// rate-limit waits inside rateLimitTransport.  We use a clone of
-	// http.DefaultTransport with ResponseHeaderTimeout disabled so that
-	// per-operation context deadlines are the sole timeout mechanism.
 	var base http.RoundTripper = http.DefaultTransport
 	if t, ok := http.DefaultTransport.(*http.Transport); ok {
 		clone := t.Clone()

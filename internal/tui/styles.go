@@ -10,9 +10,10 @@ import (
 const (
 	colorBlue      = lipgloss.Color("#4A90D9")
 	colorBlueLight = lipgloss.Color("#7AB8E6")
-	colorOffWhite  = lipgloss.Color("#E8EAED")
-	colorGray      = lipgloss.Color("#9CA3AF")
+	colorOffWhite  = lipgloss.Color("#C8CDD4")
+	colorGray      = lipgloss.Color("#808897")
 	colorMutedBlue = lipgloss.Color("#5B7A9E")
+	colorDimBlue   = lipgloss.Color("#728FB0")
 	colorDivider   = lipgloss.Color("#2A3A4A")
 	colorError     = lipgloss.Color("#FF5757")
 )
@@ -74,7 +75,7 @@ var (
 				Foreground(colorOffWhite)
 
 	stylePlaylistOwner = lipgloss.NewStyle().
-				Foreground(colorBlue)
+				Foreground(colorGray)
 )
 
 var (
@@ -83,7 +84,7 @@ var (
 			Foreground(colorOffWhite)
 
 	styleArtistName = lipgloss.NewStyle().
-			Foreground(colorBlue)
+			Foreground(colorGray)
 
 	styleAlbumName = lipgloss.NewStyle().
 			Foreground(colorMutedBlue)
@@ -151,7 +152,7 @@ func newPlaylistDelegate() list.DefaultDelegate {
 		Padding(0, 0, 0, 1)
 
 	d.Styles.SelectedDesc = lipgloss.NewStyle().
-		Foreground(colorGray).
+		Foreground(colorMutedBlue).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
 		BorderForeground(colorBlue).
 		Padding(0, 0, 0, 1)
@@ -165,7 +166,7 @@ func newPlaylistDelegate() list.DefaultDelegate {
 		Padding(0, 0, 0, 2)
 
 	d.Styles.DimmedTitle = lipgloss.NewStyle().
-		Foreground(colorMutedBlue).
+		Foreground(colorDimBlue).
 		Padding(0, 0, 0, 2)
 
 	d.Styles.DimmedDesc = lipgloss.NewStyle().

@@ -410,7 +410,7 @@ func (m *model) loadImageCmd(url string) tea.Cmd {
 	if !cache.beginLoad(url) {
 		return nil
 	}
-	m.coverStats.Launched++
+	m.cover.stats.Launched++
 	coverSizes := m.currentCoverSizes()
 	return func() tea.Msg {
 		defer cache.finishLoad(url)

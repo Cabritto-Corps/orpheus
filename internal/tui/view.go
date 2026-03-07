@@ -743,6 +743,9 @@ func (m model) kittyOverlay() string {
 
 	encoded := m.imgs.encodedFor(url)
 	if encoded == "" {
+		if m.activeTab == tabPlayer {
+			return ""
+		}
 		_, shouldDelete := m.imgs.beginKittyOverlayState("")
 		if shouldDelete {
 			return kittyDeleteAll

@@ -47,10 +47,14 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 		m.coverRefreshTick = 0
 		coverCmd = m.loadVisiblePlaylistCoversCmd()
 	}
-	if m.activeTab == tabPlayer && m.playerCoverRefreshTick >= playerCoverRefreshEvery {
-		m.playerCoverRefreshTick = 0
-		if m.status != nil {
-			playerCoverCmd = m.loadImageCmd(m.status.AlbumImageURL)
+	if m.activeTab == tabPlayer && m.status != nil {
+		url := strings.TrimSpace(m.status.AlbumImageURL)
+		if url != "" && m.imgs.shouldQueueLoad(url) {
+			playerCoverCmd = m.loadImageCmd(url)
+			m.playerCoverRefreshTick = 0
+		} else if m.playerCoverRefreshTick >= playerCoverRefreshEvery {
+			m.playerCoverRefreshTick = 0
+			playerCoverCmd = m.loadImageCmd(url)
 		}
 	}
 	if m.libraryCoverRefreshTick >= libraryCoverRefreshEvery {
@@ -164,6 +168,18 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 		idx := clampInt(prevAlbumIndex, 0, len(alItems)-1)
 		m.albumList.Select(idx)
 	}
+	playlistPreviewURL := selectedImageURLFromList(m.playlistList)
+	if playlistPreviewURL == "" && len(plItems) > 0 {
+		if first, ok := plItems[0].(playlistItem); ok {
+			playlistPreviewURL = strings.TrimSpace(first.summary.ImageURL)
+		}
+	}
+	albumPreviewURL := selectedImageURLFromList(m.albumList)
+	if albumPreviewURL == "" && len(alItems) > 0 {
+		if first, ok := alItems[0].(playlistItem); ok {
+			albumPreviewURL = strings.TrimSpace(first.summary.ImageURL)
+		}
+	}
 
 	if len(msg.items) == 0 || !msg.hasMore {
 		m.playlistsExhausted = true
@@ -183,6 +199,8 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	}
 	slog.Info("library items loaded", "playlists", len(plItems), "albums", len(alItems), "missing_image_urls", missingImageURLs)
 	return m, tea.Batch(
+		m.loadImageCmd(playlistPreviewURL),
+		m.loadImageCmd(albumPreviewURL),
 		m.loadLibraryCoversCmd(0),
 		m.loadVisiblePlaylistCoversCmd(),
 		m.queueMissingLibraryImageResolvesCmd(libraryCoverRefreshBatch),
@@ -274,24 +292,22 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.err == nil {
-		m.coverStats.Loaded++
+		m.cover.stats.Loaded++
 		if m.status != nil && strings.TrimSpace(m.status.AlbumImageURL) == strings.TrimSpace(msg.url) {
-			m.playerCoverFailStreak = 0
+			m.cover.playerCoverFailStreak = 0
 		}
-		delete(m.imageRetryCount, msg.url)
-		delete(m.imageRetryToken, msg.url)
+		m.cover.clearRetry(msg.url)
 		return m, nil
 	}
-	m.coverStats.Failed++
+	m.cover.stats.Failed++
 	if m.status != nil && strings.TrimSpace(m.status.AlbumImageURL) == strings.TrimSpace(msg.url) {
-		m.playerCoverFailStreak++
+		m.cover.playerCoverFailStreak++
 		m.maybeFallbackFromKittyOnPlayerFailures(msg.url)
 	}
 
-	attempt := m.imageRetryCount[msg.url] + 1
+	attempt := m.cover.imageRetryCount[msg.url] + 1
 	if attempt > imageLoadRetryMax {
-		delete(m.imageRetryCount, msg.url)
-		delete(m.imageRetryToken, msg.url)
+		m.cover.clearRetry(msg.url)
 		m.imgs.markFailed(msg.url)
 		slog.Warn("image load retries exhausted", "url", msg.url, "error", msg.err)
 		if m.libraryHasImageURL(msg.url) {
@@ -299,10 +315,8 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	m.imageRetryCount[msg.url] = attempt
-	m.imageRetryToken[msg.url]++
-	m.coverStats.Retried++
-	token := m.imageRetryToken[msg.url]
+	_, token := m.cover.nextRetry(msg.url)
+	m.cover.stats.Retried++
 	return m, m.imageRetryCmd(msg.url, attempt, token)
 }
 
@@ -310,12 +324,11 @@ func (m model) handleImageRetryMsg(msg imageRetryMsg) (tea.Model, tea.Cmd) {
 	if msg.url == "" {
 		return m, nil
 	}
-	if current := m.imageRetryToken[msg.url]; current != msg.token {
+	if current := m.cover.retryToken(msg.url); current != msg.token {
 		return m, nil
 	}
 	if !m.needsImageURL(msg.url) {
-		delete(m.imageRetryCount, msg.url)
-		delete(m.imageRetryToken, msg.url)
+		m.cover.clearRetry(msg.url)
 		return m, nil
 	}
 	return m, m.loadImageCmd(msg.url)
@@ -323,9 +336,9 @@ func (m model) handleImageRetryMsg(msg imageRetryMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleCoverImageResolvedMsg(msg coverImageResolvedMsg) (tea.Model, tea.Cmd) {
 	key := coverResolveKey(msg.kind, msg.id)
-	delete(m.coverResolveInFlight, key)
+	delete(m.cover.resolveInFlight, key)
 	if msg.err != nil {
-		m.coverStats.ResolveFailed++
+		m.cover.stats.ResolveFailed++
 		slog.Warn("resolve context image URL failed", "kind", msg.kind, "id", msg.id, "error", msg.err)
 		return m, nil
 	}
@@ -335,7 +348,7 @@ func (m model) handleCoverImageResolvedMsg(msg coverImageResolvedMsg) (tea.Model
 	if !m.applyResolvedContextImageURL(msg.kind, msg.id, msg.url) {
 		return m, nil
 	}
-	m.coverStats.ResolveOK++
+	m.cover.stats.ResolveOK++
 	return m, m.loadImageCmd(msg.url)
 }
 

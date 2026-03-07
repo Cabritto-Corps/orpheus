@@ -13,9 +13,6 @@ type LogrusAdapter struct {
 	Log *logrus.Entry
 }
 
-// authKeywords are substrings that indicate the user must take action.
-// When matched, the message is echoed to stderr so it's visible even though
-// the main log goes to a file.
 var authKeywords = []string{
 	"complete authentication",
 	"visit the following link",

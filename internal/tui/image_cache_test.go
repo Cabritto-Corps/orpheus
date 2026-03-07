@@ -112,10 +112,10 @@ func TestHandleImageLoadedMsgSchedulesRetryOnError(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected retry command on image load failure")
 	}
-	if got.imageRetryCount["u1"] != 1 {
-		t.Fatalf("expected retry count 1, got %d", got.imageRetryCount["u1"])
+	if got.cover.imageRetryCount["u1"] != 1 {
+		t.Fatalf("expected retry count 1, got %d", got.cover.imageRetryCount["u1"])
 	}
-	if got.imageRetryToken["u1"] == 0 {
+	if got.cover.imageRetryToken["u1"] == 0 {
 		t.Fatalf("expected retry token to be set")
 	}
 }
@@ -131,7 +131,7 @@ func TestHandleImageLoadedMsgExhaustedRetriesQueuesMetadataResolveWhenURLStillRe
 	}
 	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
 	m.playlistsLoading = false
-	m.imageRetryCount["u1"] = imageLoadRetryMax
+	m.cover.imageRetryCount["u1"] = imageLoadRetryMax
 	m.playlistList.SetItems([]list.Item{
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", ImageURL: "u1"}},
 	})
@@ -141,7 +141,7 @@ func TestHandleImageLoadedMsgExhaustedRetriesQueuesMetadataResolveWhenURLStillRe
 	if cmd == nil {
 		t.Fatal("expected metadata resolve command after retries exhausted for referenced URL")
 	}
-	if _, ok := got.coverResolveInFlight[coverResolveKey(spotify.ContextKindPlaylist, "p1")]; !ok {
+	if _, ok := got.cover.resolveInFlight[coverResolveKey(spotify.ContextKindPlaylist, "p1")]; !ok {
 		t.Fatal("expected cover resolve to be queued for failed playlist image URL")
 	}
 }
@@ -157,7 +157,7 @@ func TestHandleImageLoadedMsgExhaustedRetriesSkipsMetadataRefreshWhenURLNotRefer
 	}
 	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
 	m.playlistsLoading = false
-	m.imageRetryCount["u1"] = imageLoadRetryMax
+	m.cover.imageRetryCount["u1"] = imageLoadRetryMax
 
 	nextModel, cmd := m.handleImageLoadedMsg(imageLoadedMsg{url: "u1", err: fmt.Errorf("network")})
 	_ = nextModel.(model)
@@ -168,28 +168,28 @@ func TestHandleImageLoadedMsgExhaustedRetriesSkipsMetadataRefreshWhenURLNotRefer
 
 func TestHandleImageRetryMsgSkipsStaleOrUnneededURL(t *testing.T) {
 	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
-	m.imageRetryToken["u-stale"] = 2
+	m.cover.imageRetryToken["u-stale"] = 2
 
 	nextModel, cmd := m.handleImageRetryMsg(imageRetryMsg{url: "u-stale", token: 1})
 	if cmd != nil {
 		t.Fatalf("expected stale retry token to be ignored")
 	}
 	got := nextModel.(model)
-	if got.imageRetryToken["u-stale"] != 2 {
+	if got.cover.imageRetryToken["u-stale"] != 2 {
 		t.Fatalf("expected stale token state unchanged")
 	}
 
-	got.imageRetryToken["u-drop"] = 1
-	got.imageRetryCount["u-drop"] = 2
+	got.cover.imageRetryToken["u-drop"] = 1
+	got.cover.imageRetryCount["u-drop"] = 2
 	nextModel, cmd = got.handleImageRetryMsg(imageRetryMsg{url: "u-drop", token: 1})
 	if cmd != nil {
 		t.Fatalf("expected no retry command when URL is no longer needed")
 	}
 	got = nextModel.(model)
-	if _, ok := got.imageRetryToken["u-drop"]; ok {
+	if _, ok := got.cover.imageRetryToken["u-drop"]; ok {
 		t.Fatalf("expected retry token cleanup for unneeded URL")
 	}
-	if _, ok := got.imageRetryCount["u-drop"]; ok {
+	if _, ok := got.cover.imageRetryCount["u-drop"]; ok {
 		t.Fatalf("expected retry count cleanup for unneeded URL")
 	}
 }
@@ -222,7 +222,7 @@ func TestQueueMissingLibraryImageResolvesCmdQueuesEmptyImageEntries(t *testing.T
 	if cmd == nil {
 		t.Fatal("expected cover resolve command batch")
 	}
-	if _, ok := m.coverResolveInFlight[coverResolveKey(spotify.ContextKindPlaylist, "p1")]; !ok {
+	if _, ok := m.cover.resolveInFlight[coverResolveKey(spotify.ContextKindPlaylist, "p1")]; !ok {
 		t.Fatal("expected missing-image playlist to be queued for resolve")
 	}
 }
@@ -277,7 +277,7 @@ func TestHandleCoverImageResolvedMsgUpdatesItemAndQueuesImageLoad(t *testing.T) 
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", Kind: spotify.ContextKindPlaylist, ImageURL: ""}},
 	})
 	key := coverResolveKey(spotify.ContextKindPlaylist, "p1")
-	m.coverResolveInFlight[key] = struct{}{}
+	m.cover.resolveInFlight[key] = struct{}{}
 
 	nextModel, cmd := m.handleCoverImageResolvedMsg(coverImageResolvedMsg{
 		kind: spotify.ContextKindPlaylist,
@@ -288,11 +288,50 @@ func TestHandleCoverImageResolvedMsgUpdatesItemAndQueuesImageLoad(t *testing.T) 
 	if cmd == nil {
 		t.Fatal("expected image load command after resolving image URL")
 	}
-	if _, ok := got.coverResolveInFlight[key]; ok {
+	if _, ok := got.cover.resolveInFlight[key]; ok {
 		t.Fatal("expected resolve inflight marker to be cleared")
 	}
 	if !hasInflightURL(got.imgs, "u1") {
 		t.Fatal("expected resolved URL to be queued for image load")
+	}
+}
+
+func TestApplyResolvedContextImageURLKeepsSelectionIndex(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.playlistList.SetItems([]list.Item{
+		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", Kind: spotify.ContextKindPlaylist, ImageURL: ""}},
+		playlistItem{summary: spotify.PlaylistSummary{ID: "p2", Name: "two", Kind: spotify.ContextKindPlaylist, ImageURL: "u2"}},
+	})
+	m.playlistList.Select(1)
+
+	if !m.applyResolvedContextImageURL(spotify.ContextKindPlaylist, "p1", "u1") {
+		t.Fatal("expected playlist image URL update")
+	}
+	sel, ok := m.selectedPlaylist()
+	if !ok || sel.summary.ID != "p2" {
+		t.Fatal("expected playlist selection to remain on previously selected item")
+	}
+}
+
+func TestHandlePlaylistsMsgQueuesInitialPlaylistAndAlbumPreviewCover(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.playlistsLoading = true
+
+	nextModel, _ := m.handlePlaylistsMsg(playlistsMsg{
+		offset: 0,
+		limit:  2,
+		items: []spotify.PlaylistSummary{
+			{ID: "p1", Name: "playlist", Kind: spotify.ContextKindPlaylist, ImageURL: "u-playlist"},
+			{ID: "a1", Name: "album", Kind: spotify.ContextKindAlbum, ImageURL: "u-album"},
+		},
+		hasMore: false,
+	})
+	got := nextModel.(model)
+	if !hasInflightURL(got.imgs, "u-playlist") {
+		t.Fatal("expected startup selected playlist cover to queue image load")
+	}
+	if !hasInflightURL(got.imgs, "u-album") {
+		t.Fatal("expected startup selected album cover to queue image load")
 	}
 }
 
@@ -313,8 +352,8 @@ func TestCoverQueueDedupesAndDrains(t *testing.T) {
 	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
 	m.enqueueCoverURL("u1")
 	m.enqueueCoverURL("u1")
-	if len(m.coverQueue) != 1 {
-		t.Fatalf("expected deduped cover queue size 1, got %d", len(m.coverQueue))
+	if len(m.cover.queue) != 1 {
+		t.Fatalf("expected deduped cover queue size 1, got %d", len(m.cover.queue))
 	}
 	cmd := m.drainCoverQueueCmd(4)
 	if cmd == nil {
@@ -497,6 +536,27 @@ func TestKittyOverlayDeletesWhenHelpOpens(t *testing.T) {
 	}
 	if again := m.kittyOverlay(); !strings.Contains(again, kittyDeleteAll) {
 		t.Fatalf("expected help-open state to keep emitting delete-all, got %q", again)
+	}
+}
+
+func TestKittyOverlayPlayerKeepsPreviousImageWhileNextLoads(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.width = 120
+	m.height = 40
+	m.activeTab = tabPlayer
+	m.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	m.imgs.protocol = imageProtocolKitty
+	m.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	first := m.kittyOverlay()
+	if !strings.Contains(first, kittyDeleteAll) {
+		t.Fatal("expected initial kitty render with delete-all")
+	}
+	m.status.AlbumImageURL = "u2"
+
+	loading := m.kittyOverlay()
+	if strings.Contains(loading, kittyDeleteAll) {
+		t.Fatal("expected no delete-all while next player cover is still loading")
 	}
 }
 

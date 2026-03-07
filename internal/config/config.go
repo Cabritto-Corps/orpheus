@@ -46,8 +46,6 @@ func LoadFromEnv() (Config, error) {
 	return cfg, nil
 }
 
-// ValidateForAuth checks that all fields required for the PKCE auth login flow
-// are present. The main TUI path does not require a client ID.
 func (c Config) ValidateForAuth() error {
 	if c.SpotifyClientID == "" {
 		return errors.New("spotify_client_id / SPOTIFY_CLIENT_ID is not set\n" +

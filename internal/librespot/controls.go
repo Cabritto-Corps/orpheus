@@ -486,7 +486,6 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 	var requiresUpdate bool
 	if next.RepeatContext != curr.RepeatContext {
 		p.state.player.Options.RepeatingContext = next.RepeatContext
-		// Repeat-context toggle should preserve already-played cycle state.
 		p.invalidateQueueDerivation(false)
 		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeRepeatContext, Data: ApiEventDataRepeatContext{Value: next.RepeatContext}})
 		requiresUpdate = true

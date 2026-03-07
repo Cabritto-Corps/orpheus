@@ -17,8 +17,6 @@ type Stats struct {
 	Clears    uint64
 }
 
-// LRU is a small in-memory least-recently-used cache.
-// It is intentionally not synchronized; callers should guard it if shared.
 type LRU[K comparable, V any] struct {
 	capacity int
 	items    map[K]*list.Element

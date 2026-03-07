@@ -22,7 +22,6 @@ func IsTransientAPIError(err error) bool {
 	return strings.Contains(msg, "too many requests") || strings.Contains(msg, "rate limit")
 }
 
-// IsRateLimitError reports whether err is a Spotify 429 / rate-limit error.
 func IsRateLimitError(err error) bool {
 	return isRateLimitError(err)
 }
