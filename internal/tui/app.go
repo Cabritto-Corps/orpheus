@@ -570,7 +570,6 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		filtering := (m.activeTab == tabPlaylists && m.playlistList.FilterState() == list.Filtering) ||
 			(m.activeTab == tabAlbums && m.albumList.FilterState() == list.Filtering)
 		if !filtering {
-			prevTab := m.activeTab
 			switch m.activeTab {
 			case tabPlaylists:
 				m.activeTab = tabAlbums
