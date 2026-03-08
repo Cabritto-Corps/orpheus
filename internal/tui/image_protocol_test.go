@@ -66,3 +66,17 @@ func TestRenderKittyImageChunks(t *testing.T) {
 		t.Fatalf("expected row padding to preserve panel height")
 	}
 }
+
+func TestRenderKittyImageRawWithIDIncludesImageID(t *testing.T) {
+	out := renderKittyImageRawWithID("ZmFrZQ==", 10, 6, 42)
+	if !strings.Contains(out, "i=42") {
+		t.Fatalf("expected kitty payload to include image id, got %q", out)
+	}
+}
+
+func TestKittyImageOverlayDoesNotDeleteOnNormalDraw(t *testing.T) {
+	out := kittyImageOverlay(8, 2, "ZmFrZQ==", 10, 6, 7)
+	if strings.Contains(out, kittyDeleteAll) {
+		t.Fatalf("expected normal kitty draw not to prepend delete-all, got %q", out)
+	}
+}

@@ -29,14 +29,14 @@ const (
 	playlistLoadBatchSize             = 25
 	playlistLoadMax                   = 500
 	playlistItemPreloadMax            = 500
-	coverPreloadWindow                = 14
+	coverPreloadWindow                = 20
 	imageLoadRetryMax                 = 4
-	coverRefreshEvery                 = 25
+	coverRefreshEvery                 = 15
 	playerCoverRefreshEvery           = 10
 	libraryCoverRefreshEvery          = 150
 	libraryCoverRefreshBatch          = 32
 	libraryMetaRefreshEvery           = 300
-	coverQueueDrainBatch              = 12
+	coverQueueDrainBatch              = 20
 	kittyProtocolFallbackFailures     = 8
 	trackMetadataTTL                  = 2 * time.Hour
 	uiTickInterval                    = 200 * time.Millisecond
@@ -86,10 +86,11 @@ type model struct {
 	pendingContextFrom           string
 	pendingContextFromAt         time.Time
 	transportTransitionPending   bool
-	transportTransitionFromTrack string
+	transportTransitionFromTrack  string
 	transportTransitionStartedAt time.Time
 	transportRecoveryPending     bool
 	transportStuckCount          int
+	playerCoverEpoch             uint64
 	inputQueue                   []playbackInput
 	executorState                commandExecutorState
 
@@ -124,17 +125,6 @@ type model struct {
 
 	help help.Model
 	keys keyMap
-}
-
-type coverPipelineStats struct {
-	Enqueued      uint64
-	Launched      uint64
-	Loaded        uint64
-	Failed        uint64
-	Retried       uint64
-	ResolveOK     uint64
-	ResolveFailed uint64
-	Skipped       uint64
 }
 
 type playlistItem struct {
@@ -211,11 +201,24 @@ func selectedImageURLFromList(l list.Model) string {
 	return sel.summary.ImageURL
 }
 
+func (m model) shouldEnsureAlbumImageLoad(prev, next *spotify.PlaybackStatus) bool {
+	if shouldQueueAlbumImageLoad(prev, next) {
+		return true
+	}
+	if next == nil {
+		return false
+	}
+	url := strings.TrimSpace(next.AlbumImageURL)
+	if url == "" {
+		return false
+	}
+	return m.imgs != nil && m.imgs.shouldQueuePriorityLoad(url)
+}
+
 func normalizeListPagination(l *list.Model) {
 	visible := l.VisibleItems()
 	if len(visible) == 0 {
 		l.Paginator.Page = 0
-		l.Select(0)
 		return
 	}
 	perPage := l.Paginator.PerPage
@@ -259,6 +262,26 @@ func (m model) needsImageURL(url string) bool {
 		return true
 	}
 	return false
+}
+
+func (m model) shouldForceKittyRedrawForLoadedURL(url string) bool {
+	if m.imgs == nil || m.imgs.protocol != imageProtocolKitty {
+		return false
+	}
+	target := strings.TrimSpace(url)
+	if target == "" {
+		return false
+	}
+	switch m.activeTab {
+	case tabPlayer:
+		return m.status != nil && strings.TrimSpace(m.status.AlbumImageURL) == target
+	case tabPlaylists:
+		return strings.TrimSpace(selectedImageURLFromList(m.playlistList)) == target
+	case tabAlbums:
+		return strings.TrimSpace(selectedImageURLFromList(m.albumList)) == target
+	default:
+		return false
+	}
 }
 
 func (m model) libraryHasImageURL(url string) bool {
@@ -324,6 +347,7 @@ func (m model) Init() tea.Cmd {
 
 func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd) {
 	prevStatus := m.status
+	prevQueueHead := queueHeadTrackID(m.queue)
 	inVolSettle := m.volDebouncePending >= 0 ||
 		(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
 	if inVolSettle && msg.status != nil && prevStatus != nil {
@@ -366,11 +390,12 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 		m.applyMergedQueue(msg.queue, msg.queueHasMore, refreshQueue || shuffleChanged, true, newShuffleActive)
 	}
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, msg.status, m.trackCache)
+	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.status, prevQueueHead, queueHeadTrackID(m.queue))
 	m.maybeClearTransportTransition(m.status)
 	m.playbackErr = nil
 	cmds := []tea.Cmd{}
-	if shouldQueueAlbumImageLoad(prevStatus, m.status) {
-		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
+	if m.shouldEnsureAlbumImageLoad(prevStatus, m.status) {
+		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL, true))
 	}
 	if cmd := m.consumeTransportRecoveryCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
@@ -399,6 +424,7 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 	}
 	m.pollElapsed = 0
 	prevStatus := m.status
+	prevQueueHead := queueHeadTrackID(m.queue)
 	prevTrackID := ""
 	if m.status != nil {
 		prevTrackID = normalizeQueueID(m.status.TrackID)
@@ -445,10 +471,11 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 		slog.Error("fetch queue failed", "error", msg.queueErr)
 	}
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, m.status, m.trackCache)
+	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.status, prevQueueHead, queueHeadTrackID(m.queue))
 
 	cmds := make([]tea.Cmd, 0, 3)
-	if shouldQueueAlbumImageLoad(prevStatus, m.status) {
-		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
+	if m.shouldEnsureAlbumImageLoad(prevStatus, m.status) {
+		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL, true))
 	}
 	if msg.queueFetched {
 		if cmd := m.maybeLoadMorePlaylistItemsCmd(playlistItemPreloadMax); cmd != nil {
@@ -489,6 +516,7 @@ func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.
 	m.playbackErr = nil
 	m.pollElapsed = 0
 	prevStatus := m.status
+	prevQueueHead := queueHeadTrackID(m.queue)
 	prevTrackID := ""
 	if m.status != nil {
 		prevTrackID = normalizeQueueID(m.status.TrackID)
@@ -530,9 +558,10 @@ func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.
 		}
 	}
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, m.status, m.trackCache)
+	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.status, prevQueueHead, queueHeadTrackID(m.queue))
 	cmds := make([]tea.Cmd, 0, 3)
-	if shouldQueueAlbumImageLoad(prevStatus, m.status) {
-		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL))
+	if m.shouldEnsureAlbumImageLoad(prevStatus, m.status) {
+		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL, true))
 	}
 	if msg.queueFetched {
 		if cmd := m.maybeLoadMorePlaylistItemsCmd(playlistItemPreloadMax); cmd != nil {
@@ -603,7 +632,7 @@ func (m model) handlePlaylistKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		nextURL := selectedImageURLFromList(m.playlistList)
 		cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
 		if nextURL != "" && nextURL != prevURL {
-			cmds = append(cmds, m.loadImageCmd(nextURL))
+			cmds = append(cmds, m.loadImageCmd(nextURL, false))
 		}
 		return m, tea.Batch(cmds...)
 	}
@@ -630,7 +659,7 @@ func (m model) handlePlaylistKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	nextURL := selectedImageURLFromList(m.playlistList)
 	cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
 	if nextURL != "" && nextURL != prevURL {
-		cmds = append(cmds, m.loadImageCmd(nextURL))
+		cmds = append(cmds, m.loadImageCmd(nextURL, false))
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -644,7 +673,7 @@ func (m model) handleAlbumKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		nextURL := selectedImageURLFromList(m.albumList)
 		cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
 		if nextURL != "" && nextURL != prevURL {
-			cmds = append(cmds, m.loadImageCmd(nextURL))
+			cmds = append(cmds, m.loadImageCmd(nextURL, false))
 		}
 		return m, tea.Batch(cmds...)
 	}
@@ -663,7 +692,7 @@ func (m model) handleAlbumKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	nextURL := selectedImageURLFromList(m.albumList)
 	cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
 	if nextURL != "" && nextURL != prevURL {
-		cmds = append(cmds, m.loadImageCmd(nextURL))
+		cmds = append(cmds, m.loadImageCmd(nextURL, false))
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -726,7 +755,7 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 			m.beginTransportTransition()
 		default:
 		}
-		cmds := []tea.Cmd{m.loadImageCmd(sel.summary.ImageURL)}
+		cmds := []tea.Cmd{m.loadImageCmd(sel.summary.ImageURL, true)}
 		if canReadTracks {
 			m.activePlaylistItemLoading = true
 			m.activePlaylistLoadToken++
@@ -738,7 +767,7 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 		m.actionCmd(func(ctx context.Context) error {
 			return m.service.PlayPlaylist(ctx, m.deviceName, sel.summary.URI)
 		}, action),
-		m.loadImageCmd(sel.summary.ImageURL),
+		m.loadImageCmd(sel.summary.ImageURL, true),
 	}
 	m.beginTransportTransition()
 	m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)

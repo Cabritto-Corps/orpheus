@@ -12,7 +12,7 @@ import (
 	"orpheus/internal/spotify"
 )
 
-var imgSemaphore = make(chan struct{}, 8)
+var imgSemaphore = make(chan struct{}, 12)
 
 const (
 	pollRequestTimeout         = 5 * time.Second
@@ -159,14 +159,6 @@ type currentUserIDMsg struct {
 	err    error
 }
 
-func cloneStatusSnapshot(status *spotify.PlaybackStatus) *spotify.PlaybackStatus {
-	if status == nil {
-		return nil
-	}
-	cp := *status
-	return &cp
-}
-
 func cloneQueueSnapshot(queue []spotify.QueueItem) []spotify.QueueItem {
 	if len(queue) == 0 {
 		return nil
@@ -183,7 +175,7 @@ func fetchStatusAndQueue(ctx context.Context, svc *spotify.Service, allowCached 
 	if allowCached {
 		statusQueueCache.mu.RLock()
 		if statusQueueCache.valid && time.Since(statusQueueCache.at) <= statusQueueCacheTTL {
-			status := cloneStatusSnapshot(statusQueueCache.status)
+			status := cloneStatus(statusQueueCache.status)
 			queue := cloneQueueSnapshot(statusQueueCache.queue)
 			statusQueueCache.mu.RUnlock()
 			return status, queue, nil, nil
@@ -207,7 +199,7 @@ func fetchStatusAndQueue(ctx context.Context, svc *spotify.Service, allowCached 
 	wg.Wait()
 	if statusErr == nil && queueErr == nil {
 		statusQueueCache.mu.Lock()
-		statusQueueCache.status = cloneStatusSnapshot(status)
+		statusQueueCache.status = cloneStatus(status)
 		statusQueueCache.queue = cloneQueueSnapshot(queue)
 		statusQueueCache.at = time.Now()
 		statusQueueCache.valid = true
@@ -402,15 +394,17 @@ func (m model) getCurrentUserIDCmd() tea.Cmd {
 	}
 }
 
-func (m *model) loadImageCmd(url string) tea.Cmd {
+func (m *model) loadImageCmd(url string, priority bool) tea.Cmd {
 	if url == "" {
 		return nil
 	}
 	cache := m.imgs
+	if priority {
+		cache.clearFailed(url)
+	}
 	if !cache.beginLoad(url) {
 		return nil
 	}
-	m.cover.stats.Launched++
 	coverSizes := m.currentCoverSizes()
 	return func() tea.Msg {
 		defer cache.finishLoad(url)
@@ -425,7 +419,14 @@ func (m *model) loadImageCmd(url string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(m.ctx, imageFetchTimeout)
 		defer cancel()
 
-		if _, ok := cache.getImage(url); ok {
+		if img, ok := cache.getImage(url); ok {
+			displayCols, displayRows := 0, 0
+			if len(coverSizes) > 0 {
+				displayCols, displayRows = coverSizes[0][0], coverSizes[0][1]
+			}
+			if err := cache.ensureKittyEncoding(url, img, displayCols, displayRows); err != nil {
+				return imageLoadedMsg{url: url, err: err}
+			}
 			cache.preRenderCovers(url, coverSizes)
 			return imageLoadedMsg{url: url}
 		}
@@ -434,7 +435,11 @@ func (m *model) loadImageCmd(url string) tea.Cmd {
 		if err != nil {
 			return imageLoadedMsg{url: url, err: err}
 		}
-		cache.setImage(url, img)
+		displayCols, displayRows := 0, 0
+		if len(coverSizes) > 0 {
+			displayCols, displayRows = coverSizes[0][0], coverSizes[0][1]
+		}
+		cache.setImage(url, img, displayCols, displayRows)
 		cache.preRenderCovers(url, coverSizes)
 		return imageLoadedMsg{url: url}
 	}

@@ -100,11 +100,11 @@ func TestImageCacheEvictsOldestImageAndItsRenderedCovers(t *testing.T) {
 	cache := newImgCache()
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 
-	cache.setImage("u-0", img)
+	cache.setImage("u-0", img, 0, 0)
 	cache.preRenderCovers("u-0", [][2]int{{8, 4}})
 
 	for i := 1; i <= maxCachedImages; i++ {
-		cache.setImage(fmt.Sprintf("u-%d", i), img)
+		cache.setImage(fmt.Sprintf("u-%d", i), img, 0, 0)
 	}
 
 	if _, ok := cache.getImage("u-0"); ok {
@@ -123,7 +123,7 @@ func TestImageCacheEvictsOldestRenderedCover(t *testing.T) {
 	cache := newImgCache()
 	cache.protocol = imageProtocolNone
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	cache.setImage("u", img)
+	cache.setImage("u", img, 0, 0)
 
 	sizes := make([][2]int, 0, maxCachedCoverRenders+1)
 	for i := 0; i < maxCachedCoverRenders+1; i++ {
@@ -155,6 +155,35 @@ func TestHandleImageLoadedMsgSchedulesRetryOnError(t *testing.T) {
 	}
 	if got.cover.imageRetryToken["u1"] == 0 {
 		t.Fatalf("expected retry token to be set")
+	}
+}
+
+func TestHandleImageLoadedMsgForCurrentPlayerCoverForcesKittyRedraw(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.activeTab = tabPlayer
+	m.imgs.protocol = imageProtocolKitty
+	m.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+
+	nextModel, cmd := m.handleImageLoadedMsg(imageLoadedMsg{url: "u1"})
+	got := nextModel.(model)
+	if cmd != nil {
+		t.Fatal("expected no follow-up command on successful image load")
+	}
+	if !got.imgs.kittyForceRedraw {
+		t.Fatal("expected successful current player cover load to force kitty redraw")
+	}
+}
+
+func TestHandleImageLoadedMsgForOtherURLDoesNotForceKittyRedraw(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.activeTab = tabPlayer
+	m.imgs.protocol = imageProtocolKitty
+	m.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+
+	nextModel, _ := m.handleImageLoadedMsg(imageLoadedMsg{url: "u2"})
+	got := nextModel.(model)
+	if got.imgs.kittyForceRedraw {
+		t.Fatal("expected unrelated image load success not to force kitty redraw")
 	}
 }
 
@@ -424,7 +453,7 @@ func TestImageCacheBeginLoadStatsDedupesInflightAndCached(t *testing.T) {
 		t.Fatal("expected inflight beginLoad to be deduped")
 	}
 	cache.finishLoad("u1")
-	cache.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	cache.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)), 0, 0)
 	if cache.beginLoad("u1") {
 		t.Fatal("expected cached beginLoad to be skipped")
 	}
@@ -446,9 +475,55 @@ func TestImageCacheShouldQueueLoad(t *testing.T) {
 		t.Fatal("expected inflight URL to be skipped")
 	}
 	cache.finishLoad("u1")
-	cache.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	cache.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)), 0, 0)
 	if cache.shouldQueueLoad("u1") {
 		t.Fatal("expected cached URL to be skipped")
+	}
+}
+
+func TestImageCacheShouldQueueLoadWhenKittyEncodedMissing(t *testing.T) {
+	cache := newImgCache()
+	cache.protocol = imageProtocolKitty
+	cache.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)), 0, 0)
+
+	cache.mu.Lock()
+	delete(cache.encoded, "u1")
+	cache.mu.Unlock()
+
+	if !cache.shouldQueueLoad("u1") {
+		t.Fatal("expected kitty URL to be queueable when encoded payload is missing")
+	}
+	if !cache.shouldQueuePriorityLoad("u1") {
+		t.Fatal("expected kitty priority queue to include URLs missing encoded payload")
+	}
+}
+
+func TestLoadImageCmdRepairsMissingKittyEncodingFromCachedImage(t *testing.T) {
+	oldProvider := imageProvider
+	defer func() { imageProvider = oldProvider }()
+	imageProvider = imageProviderFunc(func(ctx context.Context, url string) ([]byte, error) {
+		t.Fatal("expected cached image path to avoid provider fetch")
+		return nil, nil
+	})
+
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.imgs.protocol = imageProtocolKitty
+	m.imgs.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)), 0, 0)
+	m.imgs.mu.Lock()
+	delete(m.imgs.encoded, "u1")
+	m.imgs.mu.Unlock()
+
+	cmd := m.loadImageCmd("u1", false)
+	if cmd == nil {
+		t.Fatal("expected image load command for cached kitty image missing encoded payload")
+	}
+	msg := cmd()
+	loaded, ok := msg.(imageLoadedMsg)
+	if !ok || loaded.err != nil {
+		t.Fatalf("expected successful imageLoadedMsg, got %#v", msg)
+	}
+	if strings.TrimSpace(m.imgs.encodedFor("u1")) == "" {
+		t.Fatal("expected kitty encoded payload to be repaired from cached image")
 	}
 }
 
@@ -474,7 +549,7 @@ func TestLoadImageCmdWaitsForSemaphoreBeforeFetchTimeoutStarts(t *testing.T) {
 	})
 
 	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
-	cmd := m.loadImageCmd("u1")
+	cmd := m.loadImageCmd("u1", false)
 	if cmd == nil {
 		t.Fatal("expected image load command")
 	}
@@ -522,12 +597,22 @@ func TestKittyOverlayStateAvoidsRedrawWhenUnchanged(t *testing.T) {
 	if first == "" {
 		t.Fatal("expected first overlay render")
 	}
-	if !strings.Contains(first, kittyDeleteAll) {
-		t.Fatal("expected transition render to include delete-all for deterministic first paint")
-	}
 	second := m.kittyOverlay()
 	if second != "" {
 		t.Fatalf("expected unchanged overlay to skip redraw, got %q", second)
+	}
+	m.imgs.forceKittyRedraw()
+	forced := m.kittyOverlay()
+	if forced == "" {
+		t.Fatal("expected force redraw to emit overlay even when key is unchanged")
+	}
+	if forced == first {
+		t.Fatal("expected force redraw payload to differ so renderer dedup cannot skip write")
+	}
+	m.imgs.resetKittyOverlayState()
+	third := m.kittyOverlay()
+	if third == "" {
+		t.Fatal("expected overlay redraw after kitty state reset")
 	}
 }
 
@@ -587,14 +672,189 @@ func TestKittyOverlayPlayerClearsPreviousImageWhileNextLoads(t *testing.T) {
 	m.imgs.encoded["u1"] = "ZmFrZQ=="
 
 	first := m.kittyOverlay()
-	if !strings.Contains(first, kittyDeleteAll) {
-		t.Fatal("expected initial kitty render with delete-all")
+	if first == "" {
+		t.Fatal("expected initial kitty render")
 	}
 	m.status.AlbumImageURL = "u2"
 
 	loading := m.kittyOverlay()
 	if !strings.Contains(loading, kittyDeleteAll) {
 		t.Fatal("expected stale player image to be cleared while next cover is loading")
+	}
+}
+
+func TestKittyOverlayPlayerClearsWhileTransportTransitionPending(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.width = 120
+	m.height = 40
+	m.activeTab = tabPlayer
+	m.status = &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
+	m.imgs.protocol = imageProtocolKitty
+	m.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	if first := m.kittyOverlay(); first == "" {
+		t.Fatal("expected initial kitty render")
+	}
+	m.transportTransitionPending = true
+	m.transportTransitionFromTrack = "track-1"
+	m.status.AlbumImageURL = "u2"
+	loading := m.kittyOverlay()
+	if !strings.Contains(loading, kittyDeleteAll) {
+		t.Fatal("expected kitty overlay to clear while transport transition is pending")
+	}
+}
+
+func TestKittyOverlayPlayerDoesNotForceClearForSameCoverDuringTransition(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.width = 120
+	m.height = 40
+	m.activeTab = tabPlayer
+	m.status = &spotify.PlaybackStatus{TrackID: "track-2", AlbumImageURL: "u1"}
+	m.imgs.protocol = imageProtocolKitty
+	m.imgs.encoded["u1"] = "ZmFrZQ=="
+	m.transportTransitionPending = true
+	m.transportTransitionFromTrack = "track-1"
+
+	overlay := m.kittyOverlay()
+	if !strings.Contains(overlay, "ZmFrZQ==") {
+		t.Fatal("expected kitty overlay to keep rendering for same cover during transition")
+	}
+}
+
+func TestKittyOverlayResetStateNextLoadReturnsEmptyWhenNothingDisplayed(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.width = 120
+	m.height = 40
+	m.activeTab = tabPlayer
+	m.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	m.imgs.protocol = imageProtocolKitty
+	m.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	if first := m.kittyOverlay(); first == "" {
+		t.Fatal("expected initial kitty render")
+	}
+	m.imgs.resetKittyOverlayState()
+	m.status.AlbumImageURL = "u2"
+
+	loading := m.kittyOverlay()
+	if loading != "" {
+		t.Fatalf("expected no overlay when reset and next url has no encoding and nothing was displayed, got %q", loading)
+	}
+}
+
+func TestAlbumCoverPanelKittyShowsPlaceholderWhileLoading(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.width = 120
+	m.height = 40
+	m.imgs.protocol = imageProtocolKitty
+	m.status = &spotify.PlaybackStatus{
+		AlbumImageURL: "u-missing",
+		TrackName:     "track",
+		ArtistName:    "artist",
+	}
+
+	panel := m.albumCoverPanel(40, 20)
+	if !strings.Contains(panel, "╭") {
+		t.Fatal("expected kitty loading state to show placeholder like ansi")
+	}
+}
+
+func TestAlbumCoverPanelAnsiShowsPlaceholderWhileLoading(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.width = 120
+	m.height = 40
+	m.imgs.protocol = imageProtocolNone
+	m.status = &spotify.PlaybackStatus{
+		AlbumImageURL: "u-missing",
+		TrackName:     "track",
+		ArtistName:    "artist",
+	}
+
+	panel := m.albumCoverPanel(40, 20)
+	if !strings.Contains(panel, "╭") {
+		t.Fatal("expected ansi loading state to keep placeholder box")
+	}
+}
+
+func TestKittyOverlayPlayerSameCoverDifferentTrackStillRedraws(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.width = 120
+	m.height = 40
+	m.activeTab = tabPlayer
+	m.status = &spotify.PlaybackStatus{
+		TrackID:       "track-1",
+		TrackName:     "one",
+		ArtistName:    "artist",
+		AlbumImageURL: "u1",
+	}
+	m.imgs.protocol = imageProtocolKitty
+	m.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	first := m.kittyOverlay()
+	if first == "" {
+		t.Fatal("expected first kitty render")
+	}
+	m.status.TrackID = "track-2"
+	m.status.TrackName = "two"
+
+	second := m.kittyOverlay()
+	if second == "" {
+		t.Fatal("expected redraw for same image URL on track change")
+	}
+	if second == first {
+		t.Fatal("expected redraw payload to differ for same-cover track transition")
+	}
+	if strings.Contains(second, kittyDeleteAll) {
+		t.Fatal("expected same-cover redraw not to clear globally before drawing")
+	}
+}
+
+func TestKittyOverlayPlayerEpochForcesRedrawWithSameKeyInputs(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.width = 120
+	m.height = 40
+	m.activeTab = tabPlayer
+	m.status = &spotify.PlaybackStatus{
+		TrackID:       "track-1",
+		TrackName:     "one",
+		ArtistName:    "artist",
+		AlbumImageURL: "u1",
+	}
+	m.imgs.protocol = imageProtocolKitty
+	m.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	first := m.kittyOverlay()
+	if first == "" {
+		t.Fatal("expected first kitty render")
+	}
+	if second := m.kittyOverlay(); second != "" {
+		t.Fatalf("expected unchanged state to skip redraw, got %q", second)
+	}
+	m.playerCoverEpoch++
+	third := m.kittyOverlay()
+	if third == "" {
+		t.Fatal("expected epoch increment to force kitty redraw even with same cover/subject")
+	}
+}
+
+func TestKittyOverlaySameURLWithoutEncodingKeepsCurrentImage(t *testing.T) {
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.width = 120
+	m.height = 40
+	m.activeTab = tabPlayer
+	m.status = &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
+	m.imgs.protocol = imageProtocolKitty
+	m.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	first := m.kittyOverlay()
+	if first == "" {
+		t.Fatal("expected first kitty render")
+	}
+	delete(m.imgs.encoded, "u1")
+
+	loading := m.kittyOverlay()
+	if strings.Contains(loading, kittyDeleteAll) {
+		t.Fatal("expected same-url missing encoding to keep current kitty image visible")
 	}
 }
 
@@ -610,7 +870,7 @@ func TestKittyOverlayClearsStaleImageOnTabSwitchWithoutEncodedCover(t *testing.T
 	m.imgs.protocol = imageProtocolKitty
 	m.imgs.encoded["u1"] = "ZmFrZQ=="
 
-	if first := m.kittyOverlay(); !strings.Contains(first, kittyDeleteAll) {
+	if first := m.kittyOverlay(); first == "" {
 		t.Fatal("expected initial playlist kitty render")
 	}
 

@@ -61,7 +61,7 @@ const (
 	transferMaxAttempts                     = 3
 	apiRetryInitialDelay = 250 * time.Millisecond
 	apiRetryMaxDelay     = 8 * time.Second
-	apiRetryMaxAttempts  = 4 // total backoff ≤ 250ms+500ms+1s+2s ≈ 4 s
+	apiRetryMaxAttempts  = 4
 	apiRetryExponentCap  = 5
 	rateLimitRetryDelay  = 5 * time.Second
 	pollStatusBackoffMax = 10 * time.Second
@@ -142,7 +142,7 @@ type PlaylistPage struct {
 
 type PlaylistItemsPage struct {
 	ItemIDs    []string
-	ItemInfos  []QueueItem // parallel slice: metadata for each ItemID
+	ItemInfos  []QueueItem
 	Offset     int
 	Limit      int
 	NextOffset int

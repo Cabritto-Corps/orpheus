@@ -699,7 +699,7 @@ func (m model) kittyOverlay() string {
 		return ""
 	}
 	if m.helpOpen {
-		m.imgs.beginKittyOverlayState("")
+		m.imgs.beginKittyOverlayState("", "")
 		return kittyDeleteAll
 	}
 
@@ -711,30 +711,36 @@ func (m model) kittyOverlay() string {
 	innerH := panelH - 2
 	coverCols, coverRows := squareDims(innerW, innerH-3)
 	if coverCols <= 0 || coverRows <= 0 {
-		_, shouldDelete := m.imgs.beginKittyOverlayState("")
+		_, shouldDelete := m.imgs.beginKittyOverlayState("", "")
 		if shouldDelete {
 			return kittyDeleteAll
 		}
 		return ""
 	}
 
-	var url string
+	var url, subjectID string
 	switch m.activeTab {
 	case tabPlaylists:
 		if pl, ok := m.selectedPlaylist(); ok {
 			url = pl.summary.ImageURL
+			subjectID = strings.TrimSpace(pl.summary.ID)
 		}
 	case tabAlbums:
 		if al, ok := m.selectedAlbum(); ok {
 			url = al.summary.ImageURL
+			subjectID = strings.TrimSpace(al.summary.ID)
 		}
 	case tabPlayer:
 		if m.status != nil {
 			url = m.status.AlbumImageURL
+			subjectID = normalizeQueueID(m.status.TrackID)
+			if subjectID == "" {
+				subjectID = strings.TrimSpace(m.status.TrackName) + "|" + strings.TrimSpace(m.status.ArtistName) + "|" + fmt.Sprintf("%d", m.status.DurationMS)
+			}
 		}
 	}
 	if url == "" {
-		_, shouldDelete := m.imgs.beginKittyOverlayState("")
+		_, shouldDelete := m.imgs.beginKittyOverlayState("", "")
 		if shouldDelete {
 			return kittyDeleteAll
 		}
@@ -743,21 +749,41 @@ func (m model) kittyOverlay() string {
 
 	encoded := m.imgs.encodedFor(url)
 	if encoded == "" {
-		_, shouldDelete := m.imgs.beginKittyOverlayState("")
-		if shouldDelete {
-			return kittyDeleteAll
+		displayed := strings.TrimSpace(m.imgs.kittyDisplayedURL())
+		target := strings.TrimSpace(url)
+		shouldClear := displayed != "" && displayed != target
+		if shouldClear {
+			_, shouldDelete := m.imgs.beginKittyOverlayState("", "")
+			if shouldDelete {
+				return kittyDeleteAll
+			}
 		}
 		return ""
 	}
 
+	if m.activeTab == tabPlayer && m.status != nil && url != "" {
+		displayed := strings.TrimSpace(m.imgs.kittyDisplayedURL())
+		target := strings.TrimSpace(url)
+		if displayed != "" && displayed != target {
+			m.imgs.forceKittyRedraw()
+		}
+	}
 	const imageRow = 8
 	const imageCol = 2
-	key := fmt.Sprintf("%d:%d:%d:%d:%s", imageRow, imageCol, coverCols, coverRows, url)
-	changed, _ := m.imgs.beginKittyOverlayState(key)
+	playerEpoch := uint64(0)
+	if m.activeTab == tabPlayer {
+		playerEpoch = m.playerCoverEpoch
+	}
+	key := fmt.Sprintf("%d:%d:%d:%d:%s:%s:%s:%d", imageRow, imageCol, coverCols, coverRows, m.activeTab, subjectID, url, playerEpoch)
+	changed, _ := m.imgs.beginKittyOverlayState(key, url)
 	if !changed {
 		return ""
 	}
-	return kittyImageOverlay(imageRow, imageCol, encoded, coverCols, coverRows)
+	payload := m.imgs.buildKittyPayload(url, encoded, coverCols, coverRows, m.imgs.nextKittyImageID())
+	if payload == "" {
+		return kittyDeleteAll
+	}
+	return fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", imageRow, imageCol, payload)
 }
 
 func (m model) composeCoverSection(coverStr, meta string) string {

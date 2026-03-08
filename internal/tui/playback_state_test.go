@@ -2,12 +2,14 @@ package tui
 
 import (
 	"fmt"
+	"image"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"orpheus/internal/cache"
+	"orpheus/internal/config"
 	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
@@ -67,6 +69,16 @@ func TestMergeStatusFromPreviousUsesTrackCacheFallback(t *testing.T) {
 	merged := mergeStatusFromPrevious(nil, nil, next, cache)
 	if merged.TrackName != "Cached Name" || merged.ArtistName != "Cached Artist" || merged.DurationMS != 654 {
 		t.Fatalf("expected cache fallback metadata, got %+v", merged)
+	}
+}
+
+func TestMergeStatusFromPreviousFillsAlbumImageURLOnTrackChange(t *testing.T) {
+	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "https://same-album.jpg"}
+	next := &spotify.PlaybackStatus{TrackID: "track-2"}
+
+	merged := mergeStatusFromPrevious(prev, nil, next, nil)
+	if merged.AlbumImageURL != "https://same-album.jpg" {
+		t.Fatalf("expected AlbumImageURL from prev on track change when next has none, got %q", merged.AlbumImageURL)
 	}
 }
 
@@ -290,15 +302,67 @@ func TestMergeQueueWithRestPreservesTailWithoutDuplicates(t *testing.T) {
 }
 
 func TestShouldQueueAlbumImageLoad(t *testing.T) {
-	prev := &spotify.PlaybackStatus{AlbumImageURL: "a"}
-	if !shouldQueueAlbumImageLoad(nil, &spotify.PlaybackStatus{AlbumImageURL: "a"}) {
+	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "a"}
+	if !shouldQueueAlbumImageLoad(nil, &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "a"}) {
 		t.Fatal("expected initial non-empty image to load")
 	}
-	if shouldQueueAlbumImageLoad(prev, &spotify.PlaybackStatus{AlbumImageURL: "a"}) {
+	if shouldQueueAlbumImageLoad(prev, &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "a"}) {
 		t.Fatal("expected same image URL to be skipped")
 	}
-	if !shouldQueueAlbumImageLoad(prev, &spotify.PlaybackStatus{AlbumImageURL: "b"}) {
+	if !shouldQueueAlbumImageLoad(prev, &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "b"}) {
 		t.Fatal("expected changed image URL to load")
+	}
+	if !shouldQueueAlbumImageLoad(prev, &spotify.PlaybackStatus{TrackID: "track-2", AlbumImageURL: "a"}) {
+		t.Fatal("expected same image URL to load when track changes")
+	}
+	prevNoID := &spotify.PlaybackStatus{TrackName: "track-one", ArtistName: "artist", DurationMS: 180000, AlbumImageURL: "a"}
+	nextNoID := &spotify.PlaybackStatus{TrackName: "track-two", ArtistName: "artist", DurationMS: 180000, AlbumImageURL: "a"}
+	if !shouldQueueAlbumImageLoad(prevNoID, nextNoID) {
+		t.Fatal("expected same image URL to load when metadata subject changes and track ids are missing")
+	}
+}
+
+func TestShouldEnsureAlbumImageLoadWhenCoverNotCached(t *testing.T) {
+	m := newModel(nil, nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
+	next := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
+	if !m.shouldEnsureAlbumImageLoad(prev, next) {
+		t.Fatal("expected load when current track cover is not cached")
+	}
+
+	m.imgs.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)), 0, 0)
+	if m.shouldEnsureAlbumImageLoad(prev, next) {
+		t.Fatal("expected no load when current track cover is already cached")
+	}
+}
+
+func TestAdvancePlayerCoverEpochOnQueueHeadChange(t *testing.T) {
+	m := newModel(nil, nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.imgs.protocol = imageProtocolKitty
+	prev := &spotify.PlaybackStatus{AlbumImageURL: "u1", ProgressMS: 10000}
+	next := &spotify.PlaybackStatus{AlbumImageURL: "u1", ProgressMS: 2000}
+
+	m.advancePlayerCoverEpochIfNeeded(prev, next, "q1", "q2")
+	if m.playerCoverEpoch == 0 {
+		t.Fatal("expected player cover epoch to advance when queue head changes")
+	}
+	if !m.imgs.kittyForceRedraw {
+		t.Fatal("expected kitty redraw to be forced when epoch advances")
+	}
+}
+
+func TestAdvancePlayerCoverEpochNoChangeWhenSignalsMissing(t *testing.T) {
+	m := newModel(nil, nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.imgs.protocol = imageProtocolKitty
+	prev := &spotify.PlaybackStatus{AlbumImageURL: "u1", TrackID: "t1", ProgressMS: 10000}
+	next := &spotify.PlaybackStatus{AlbumImageURL: "u1", TrackID: "t1", ProgressMS: 10200}
+
+	m.advancePlayerCoverEpochIfNeeded(prev, next, "q1", "q1")
+	if m.playerCoverEpoch != 0 {
+		t.Fatal("expected player cover epoch to remain unchanged")
+	}
+	if m.imgs.kittyForceRedraw {
+		t.Fatal("expected no kitty redraw force when transition signals are absent")
 	}
 }
 

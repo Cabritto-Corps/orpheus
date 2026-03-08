@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,6 +11,68 @@ import (
 	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
+
+func playbackCoverSubject(status *spotify.PlaybackStatus) string {
+	if status == nil {
+		return ""
+	}
+	if id := normalizeQueueID(status.TrackID); id != "" {
+		return "id:" + id
+	}
+	name := strings.TrimSpace(status.TrackName)
+	artist := strings.TrimSpace(status.ArtistName)
+	if name == "" && artist == "" && status.DurationMS <= 0 {
+		return ""
+	}
+	return "meta:" + name + "|" + artist + "|" + strconv.Itoa(status.DurationMS)
+}
+
+func playbackCoverSubjectChanged(prev, next *spotify.PlaybackStatus) bool {
+	prevSubject := playbackCoverSubject(prev)
+	nextSubject := playbackCoverSubject(next)
+	if prevSubject == "" || nextSubject == "" {
+		return false
+	}
+	return prevSubject != nextSubject
+}
+
+func queueHeadTrackID(queue []spotify.QueueItem) string {
+	if len(queue) == 0 {
+		return ""
+	}
+	return normalizeQueueID(queue[0].ID)
+}
+
+func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.PlaybackStatus, prevQueueHead, nextQueueHead string) {
+	prevTrack := ""
+	nextTrack := ""
+	prevURL := ""
+	nextURL := ""
+	prevProgress := -1
+	nextProgress := -1
+	if prevStatus != nil {
+		prevTrack = normalizeQueueID(prevStatus.TrackID)
+		prevURL = strings.TrimSpace(prevStatus.AlbumImageURL)
+		prevProgress = prevStatus.ProgressMS
+	}
+	if nextStatus != nil {
+		nextTrack = normalizeQueueID(nextStatus.TrackID)
+		nextURL = strings.TrimSpace(nextStatus.AlbumImageURL)
+		nextProgress = nextStatus.ProgressMS
+	}
+	subjectChanged := playbackCoverSubjectChanged(prevStatus, nextStatus)
+	trackChanged := prevTrack != "" && nextTrack != "" && prevTrack != nextTrack
+	queueHeadChanged := prevQueueHead != "" && nextQueueHead != "" && prevQueueHead != nextQueueHead
+	sameURL := prevURL != "" && prevURL == nextURL
+	progressRewind := sameURL && prevProgress >= 0 && nextProgress >= 0 && prevProgress > nextProgress+5000
+	shouldAdvance := nextURL != "" && (subjectChanged || trackChanged || queueHeadChanged || progressRewind)
+	if shouldAdvance {
+		m.playerCoverEpoch++
+		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
+			m.imgs.forceKittyRedraw()
+		}
+	}
+}
 
 func cloneStatus(status *spotify.PlaybackStatus) *spotify.PlaybackStatus {
 	if status == nil {
@@ -26,7 +89,10 @@ func shouldQueueAlbumImageLoad(prev, next *spotify.PlaybackStatus) bool {
 	if prev == nil {
 		return true
 	}
-	return strings.TrimSpace(next.AlbumImageURL) != strings.TrimSpace(prev.AlbumImageURL)
+	if strings.TrimSpace(next.AlbumImageURL) != strings.TrimSpace(prev.AlbumImageURL) {
+		return true
+	}
+	return playbackCoverSubjectChanged(prev, next)
 }
 
 func (m *model) beginTransportTransition() {
@@ -35,6 +101,9 @@ func (m *model) beginTransportTransition() {
 	m.transportTransitionFromTrack = ""
 	if m.status != nil {
 		m.transportTransitionFromTrack = normalizeQueueID(m.status.TrackID)
+	}
+	if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
+		m.imgs.forceKittyRedraw()
 	}
 	m.syncExecutorState()
 }
@@ -46,12 +115,18 @@ func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
 	nextTrack := normalizeQueueID(next.TrackID)
 	if nextTrack != "" && nextTrack != m.transportTransitionFromTrack {
 		m.transportTransitionPending = false
+		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
+			m.imgs.forceKittyRedraw()
+		}
 		m.syncExecutorState()
 		return
 	}
 	if nextTrack == m.transportTransitionFromTrack && next.ProgressMS < 2000 &&
 		time.Since(m.transportTransitionStartedAt) < 4*time.Second {
 		m.transportTransitionPending = false
+		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
+			m.imgs.forceKittyRedraw()
+		}
 		m.syncExecutorState()
 		return
 	}
@@ -100,7 +175,6 @@ func (m *model) applyOptimisticSkip(next bool) {
 		m.status.TrackID = m.queue[0].ID
 		m.status.TrackName = m.queue[0].Name
 		m.status.ArtistName = m.queue[0].Artist
-		m.status.AlbumImageURL = ""
 	}
 }
 
@@ -248,6 +322,9 @@ func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.Queue
 		return next
 	}
 	out := *next
+	if out.AlbumImageURL == "" && prev != nil && prev.AlbumImageURL != "" {
+		out.AlbumImageURL = prev.AlbumImageURL
+	}
 	if out.TrackName != "" && out.ArtistName != "" && out.DurationMS > 0 {
 		return &out
 	}

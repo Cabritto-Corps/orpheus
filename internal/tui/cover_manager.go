@@ -15,7 +15,6 @@ type coverManager struct {
 	resolveInFlight       map[string]struct{}
 	queue                 []string
 	queued                map[string]struct{}
-	stats                 coverPipelineStats
 	playerCoverFailStreak int
 }
 
@@ -68,7 +67,6 @@ func (c *coverManager) enqueueURL(url string) bool {
 	}
 	c.queued[url] = struct{}{}
 	c.queue = append(c.queue, url)
-	c.stats.Enqueued++
 	return true
 }
 
@@ -80,6 +78,21 @@ func (c *coverManager) popURL() (string, bool) {
 	c.queue = c.queue[1:]
 	delete(c.queued, url)
 	return url, true
+}
+
+func (c *coverManager) removeFromQueue(url string) bool {
+	url = strings.TrimSpace(url)
+	if _, ok := c.queued[url]; !ok {
+		return false
+	}
+	for i, u := range c.queue {
+		if strings.TrimSpace(u) == url {
+			c.queue = append(c.queue[:i], c.queue[i+1:]...)
+			delete(c.queued, url)
+			return true
+		}
+	}
+	return false
 }
 
 func coverResolveKey(kind, id string) string {
@@ -177,15 +190,21 @@ func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
 		limit = coverQueueDrainBatch
 	}
 	cmds := make([]tea.Cmd, 0, limit)
+	if m.status != nil {
+		playerURL := strings.TrimSpace(m.status.AlbumImageURL)
+		if playerURL != "" && m.cover.removeFromQueue(playerURL) && m.imgs.shouldQueueLoad(playerURL) {
+			if cmd := m.loadImageCmd(playerURL, true); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
 	for len(m.cover.queue) > 0 && len(cmds) < limit {
 		url, _ := m.cover.popURL()
 		if !m.imgs.shouldQueueLoad(url) {
-			m.cover.stats.Skipped++
 			continue
 		}
-		cmd := m.loadImageCmd(url)
+		cmd := m.loadImageCmd(url, false)
 		if cmd == nil {
-			m.cover.stats.Skipped++
 			continue
 		}
 		cmds = append(cmds, cmd)

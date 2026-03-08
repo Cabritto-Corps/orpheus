@@ -90,6 +90,9 @@ func (m *model) pumpInputExecutor() tea.Cmd {
 			return nil
 		}
 		idx := m.dequeueNextInputIndex()
+		if len(m.inputQueue) == 0 {
+			return nil
+		}
 		action := m.inputQueue[idx].kind
 		m.inputQueue = append(m.inputQueue[:idx], m.inputQueue[idx+1:]...)
 		if cmd := m.executePlaybackInput(action); cmd != nil {
@@ -307,6 +310,9 @@ func inputPriorityOf(action playbackInputKind) inputPriority {
 }
 
 func (m *model) dequeueNextInputIndex() int {
+	if len(m.inputQueue) == 0 {
+		return 0
+	}
 	bestIdx := 0
 	bestPriority := m.inputQueue[0].priority
 	for i := 1; i < len(m.inputQueue); i++ {
