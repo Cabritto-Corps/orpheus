@@ -32,7 +32,7 @@ const (
 	coverPreloadWindow                = 20
 	imageLoadRetryMax                 = 4
 	coverRefreshEvery                 = 15
-	playerCoverRefreshEvery           = 10
+	playerCoverRefreshEvery           = 5
 	libraryCoverRefreshEvery          = 150
 	libraryCoverRefreshBatch          = 32
 	libraryMetaRefreshEvery           = 300
@@ -429,24 +429,11 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 	if m.status != nil {
 		prevTrackID = normalizeQueueID(m.status.TrackID)
 	}
-	inVolSettle := m.volDebouncePending >= 0 ||
-		(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
 	incomingVol := -1
 	if msg.status != nil {
 		incomingVol = msg.status.Volume
 	}
-	if inVolSettle && msg.status != nil && m.volSentTarget >= 0 {
-		msg.status.Volume = m.volSentTarget
-	}
-	incomingProgress := -1
-	if msg.status != nil {
-		incomingProgress = msg.status.ProgressMS
-	}
-	if m.shouldApplySeekSettle(msg.status) {
-		msg.status.ProgressMS = m.clampSeekTarget(m.seekSettleProgress())
-	}
-	m.clearVolumeSettleTarget(incomingVol)
-	m.clearSeekSettleTarget(incomingProgress)
+	m.applyStatusSettleOverrides(msg.status, incomingVol)
 	if msg.status != nil {
 		nextTrackID := normalizeQueueID(msg.status.TrackID)
 		if prevTrackID != "" && nextTrackID != "" && nextTrackID != prevTrackID {
@@ -521,24 +508,11 @@ func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.
 	if m.status != nil {
 		prevTrackID = normalizeQueueID(m.status.TrackID)
 	}
-	inVolSettle := m.volDebouncePending >= 0 ||
-		(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
 	reconciledVol := -1
 	if msg.status != nil {
 		reconciledVol = msg.status.Volume
 	}
-	if inVolSettle && msg.status != nil && m.volSentTarget >= 0 {
-		msg.status.Volume = m.volSentTarget
-	}
-	incomingProgress := -1
-	if msg.status != nil {
-		incomingProgress = msg.status.ProgressMS
-	}
-	if m.shouldApplySeekSettle(msg.status) {
-		msg.status.ProgressMS = m.clampSeekTarget(m.seekSettleProgress())
-	}
-	m.clearVolumeSettleTarget(reconciledVol)
-	m.clearSeekSettleTarget(incomingProgress)
+	m.applyStatusSettleOverrides(msg.status, reconciledVol)
 	if msg.status != nil {
 		nextTrackID := normalizeQueueID(msg.status.TrackID)
 		if prevTrackID != "" && nextTrackID != "" && nextTrackID != prevTrackID {

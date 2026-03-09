@@ -422,6 +422,10 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	}
 	trackPosition := p.state.trackPosition()
 	p.state.updateTimestamp()
+	if p.state.player.Duration > 0 && p.state.player.PositionAsOfTimestamp > p.state.player.Duration {
+		p.state.player.PositionAsOfTimestamp = p.state.player.Duration
+	}
+	trackPosition = p.state.trackPosition()
 	p.state.player.IsPlaying = true
 	p.state.player.IsBuffering = true
 	p.state.player.IsPaused = paused

@@ -46,21 +46,12 @@ type imgCache struct {
 	failedAt         map[string]time.Time
 	rendering        map[coverKey]chan struct{}
 	protocol         imageProtocol
-	stats            imageCacheStats
 	lastKittyOverlay string
 	lastKittyURL     string
 	kittyVisible     bool
 	kittyForceRedraw bool
 	kittyImageID     uint64
 	kittyChunks      map[string][]string
-}
-
-type imageCacheStats struct {
-	imageHit         uint64
-	imageMiss        uint64
-	loadStarted      uint64
-	loadSkipCached   uint64
-	loadSkipInflight uint64
 }
 
 func newImgCache() *imgCache {
@@ -266,26 +257,13 @@ func (c *imgCache) beginLoad(url string) bool {
 		return false
 	}
 	if _, ok := c.imgs.Peek(url); ok && c.hasKittyEncodingLocked(url) {
-		c.stats.loadSkipCached++
 		return false
 	}
 	if _, ok := c.inflight[url]; ok {
-		c.stats.loadSkipInflight++
 		return false
 	}
 	c.inflight[url] = struct{}{}
-	c.stats.loadStarted++
 	return true
-}
-
-func (c *imgCache) snapshotStats() imageCacheStats {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	lruStats := c.imgs.Stats()
-	out := c.stats
-	out.imageHit = lruStats.Hits
-	out.imageMiss = lruStats.Misses
-	return out
 }
 
 func (c *imgCache) shouldQueueLoad(url string) bool {
@@ -724,15 +702,7 @@ func squareDims(innerW, innerH int) (cols, rows int) {
 	if innerW <= 0 || innerH <= 0 {
 		return 0, 0
 	}
-	cols = innerW
-	rows = cols / 2
-	if rows > innerH {
-		rows = innerH
-		cols = rows * 2
-		if cols > innerW {
-			cols = innerW
-			rows = cols / 2
-		}
-	}
+	rows = min(innerH, innerW/2)
+	cols = 2 * rows
 	return cols, rows
 }

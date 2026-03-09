@@ -35,7 +35,7 @@ func LoadFromEnv() (Config, error) {
 		DeviceResolutionMode: envDefault("orpheus_device_resolution_mode", "strict"),
 		AllowActiveFallback:  envBool("orpheus_allow_active_fallback", false),
 		TokenPath:            envDefault("orpheus_token_path", defaultTokenPath()),
-		PollInterval:         envDuration("orpheus_poll_interval", 2*time.Second),
+		PollInterval:         envDuration("orpheus_poll_interval", 1500*time.Millisecond),
 		NerdFonts:            envBool("orpheus_nerd_fonts", false),
 		LogFile:              envDefault("orpheus_log_file", defaultLogPath()),
 	}

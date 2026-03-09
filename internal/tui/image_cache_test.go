@@ -444,7 +444,7 @@ func TestPlayerCoverFailuresFallbackFromKitty(t *testing.T) {
 	}
 }
 
-func TestImageCacheBeginLoadStatsDedupesInflightAndCached(t *testing.T) {
+func TestImageCacheBeginLoadDedupesInflightAndCached(t *testing.T) {
 	cache := newImgCache()
 	if !cache.beginLoad("u1") {
 		t.Fatal("expected first beginLoad to start")
@@ -456,10 +456,6 @@ func TestImageCacheBeginLoadStatsDedupesInflightAndCached(t *testing.T) {
 	cache.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)), 0, 0)
 	if cache.beginLoad("u1") {
 		t.Fatal("expected cached beginLoad to be skipped")
-	}
-	stats := cache.snapshotStats()
-	if stats.loadStarted != 1 || stats.loadSkipInflight != 1 || stats.loadSkipCached != 1 {
-		t.Fatalf("unexpected cache load stats: %+v", stats)
 	}
 }
 

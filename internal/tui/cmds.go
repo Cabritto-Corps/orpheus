@@ -12,7 +12,7 @@ import (
 	"orpheus/internal/spotify"
 )
 
-var imgSemaphore = make(chan struct{}, 12)
+var imgSemaphore = make(chan struct{}, 16)
 
 const (
 	pollRequestTimeout         = 5 * time.Second

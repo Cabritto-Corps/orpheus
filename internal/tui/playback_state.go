@@ -64,7 +64,7 @@ func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.
 	trackChanged := prevTrack != "" && nextTrack != "" && prevTrack != nextTrack
 	queueHeadChanged := prevQueueHead != "" && nextQueueHead != "" && prevQueueHead != nextQueueHead
 	sameURL := prevURL != "" && prevURL == nextURL
-	progressRewind := sameURL && prevProgress >= 0 && nextProgress >= 0 && prevProgress > nextProgress+5000
+	progressRewind := sameURL && prevProgress >= 0 && nextProgress >= 0 && prevProgress > nextProgress+progressRewindThresholdMS
 	shouldAdvance := nextURL != "" && (subjectChanged || trackChanged || queueHeadChanged || progressRewind)
 	if shouldAdvance {
 		m.playerCoverEpoch++
@@ -121,7 +121,7 @@ func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
 		m.syncExecutorState()
 		return
 	}
-	if nextTrack == m.transportTransitionFromTrack && next.ProgressMS < 2000 &&
+	if nextTrack == m.transportTransitionFromTrack && next.ProgressMS < transportTransitionProgressMaxMS &&
 		time.Since(m.transportTransitionStartedAt) < 4*time.Second {
 		m.transportTransitionPending = false
 		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
@@ -199,7 +199,12 @@ func (m *model) clearVolumeSettleTarget(observed int) {
 	}
 }
 
-const seekSettleToleranceMS = 900
+const (
+	seekSettleToleranceMS           = 900
+	seekBarEndBufferMS               = 250
+	progressRewindThresholdMS        = 5000
+	transportTransitionProgressMaxMS = 2000
+)
 
 func (m *model) clampSeekTarget(target int) int {
 	if target < 0 {
@@ -208,7 +213,7 @@ func (m *model) clampSeekTarget(target int) int {
 	if m.status == nil || m.status.DurationMS <= 0 {
 		return target
 	}
-	maxTarget := m.status.DurationMS - 250
+	maxTarget := m.status.DurationMS - seekBarEndBufferMS
 	if maxTarget < 0 {
 		maxTarget = 0
 	}
@@ -264,6 +269,23 @@ func (m *model) clearSeekSettleTarget(observed int) {
 	if time.Since(m.seekSentAt) >= seekSettleWindow {
 		m.seekSentTarget = -1
 	}
+}
+
+func (m *model) applyStatusSettleOverrides(status *spotify.PlaybackStatus, observedVol int) {
+	inVolSettle := m.volDebouncePending >= 0 ||
+		(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
+	if inVolSettle && status != nil && m.volSentTarget >= 0 {
+		status.Volume = m.volSentTarget
+	}
+	incomingProgress := -1
+	if status != nil {
+		incomingProgress = status.ProgressMS
+	}
+	if m.shouldApplySeekSettle(status) {
+		status.ProgressMS = m.clampSeekTarget(m.seekSettleProgress())
+	}
+	m.clearVolumeSettleTarget(observedVol)
+	m.clearSeekSettleTarget(incomingProgress)
 }
 
 func (m *model) trySendTransportSkip(kind librespot.TUICommandKind) bool {

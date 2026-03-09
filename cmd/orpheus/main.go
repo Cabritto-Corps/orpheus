@@ -329,7 +329,7 @@ func runLibrespotTUI() error {
 
 	tuiCfg := config.Config{
 		DeviceName:   librespotCfg.DeviceName,
-		PollInterval: 2 * time.Second,
+		PollInterval: 1500 * time.Millisecond,
 		NerdFonts:    false,
 	}
 
