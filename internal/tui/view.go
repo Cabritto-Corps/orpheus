@@ -775,7 +775,7 @@ func (m model) kittyOverlay() string {
 		playerEpoch = m.playerCoverEpoch
 	}
 	key := fmt.Sprintf("%d:%d:%d:%d:%s:%s:%s:%d", imageRow, imageCol, coverCols, coverRows, m.activeTab, subjectID, url, playerEpoch)
-	changed, _ := m.imgs.beginKittyOverlayState(key, url)
+	changed, shouldDelete := m.imgs.beginKittyOverlayState(key, url)
 	if !changed {
 		return ""
 	}
@@ -783,7 +783,11 @@ func (m model) kittyOverlay() string {
 	if payload == "" {
 		return kittyDeleteAll
 	}
-	return fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", imageRow, imageCol, payload)
+	out := fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", imageRow, imageCol, payload)
+	if shouldDelete {
+		return kittyDeleteAll + out
+	}
+	return out
 }
 
 func (m model) composeCoverSection(coverStr, meta string) string {

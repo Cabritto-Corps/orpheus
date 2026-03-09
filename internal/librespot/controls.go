@@ -446,6 +446,11 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 		p.state.player.PositionAsOfTimestamp = p.state.player.Duration
 	}
 	trackPosition = p.state.trackPosition()
+	if p.state.player.Duration > 0 && trackPosition >= p.state.player.Duration {
+		trackPosition = 0
+		p.state.player.PositionAsOfTimestamp = 0
+		p.state.player.Timestamp = time.Now().UnixMilli()
+	}
 	p.state.player.IsPlaying = true
 	p.state.player.IsBuffering = true
 	p.state.player.IsPaused = paused
@@ -497,12 +502,18 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	if setPrimaryErr != nil {
 		return fmt.Errorf("failed setting stream for %s: %w", spotId, setPrimaryErr)
 	}
+	if err := p.player.SeekMs(trackPosition); err != nil {
+		p.runtime.Log.WithError(err).WithField("position_ms", trackPosition).Warn("seek after load failed")
+	}
 	p.sess.Events().PostPrimaryStreamLoad(p.primaryStream, paused)
 	p.runtime.Log.WithField("uri", spotId.Uri()).Infof("loaded %s %s (paused: %t, position: %dms, duration: %dms, prefetched: %t)", spotId.Type(), strconv.QuoteToGraphic(p.primaryStream.Media.Name()), paused, trackPosition, p.primaryStream.Media.Duration(), prefetched)
 	p.runtime.Log.WithField("uri", spotId.Uri()).Debugf("track load latency=%s source=%s", time.Since(loadStarted), prefetchSource)
 	p.state.updateTimestamp()
 	p.state.player.PlaybackId = hex.EncodeToString(p.primaryStream.PlaybackId)
 	p.state.player.Duration = int64(p.primaryStream.Media.Duration())
+	if p.state.player.Duration > 0 && p.state.player.PositionAsOfTimestamp > p.state.player.Duration {
+		p.state.player.PositionAsOfTimestamp = p.state.player.Duration
+	}
 	p.state.player.IsPlaying = true
 	p.state.player.IsBuffering = false
 	p.state.setPaused(paused)
