@@ -328,7 +328,7 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 	case "seek_to":
 		var position int64
 		if req.Command.Relative == "current" {
-			position = p.player.PositionMs() + req.Command.Position
+			position = p.currentPositionMs() + req.Command.Position
 		} else if req.Command.Relative == "beginning" {
 			position = req.Command.Position
 		} else if req.Command.Relative == "" {
