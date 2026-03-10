@@ -226,6 +226,7 @@ func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 		true,
 		true,
 		false,
+		false,
 	)
 
 	if _, ok := m.preloadedItemIDs["new-1"]; !ok {
@@ -257,7 +258,7 @@ func TestApplyMergedQueueShuffleActiveDiscardsTail(t *testing.T) {
 		preloadedItemIDs: make(map[string]struct{}),
 		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 	}
-	m.applyMergedQueue(next, false, true, true, true)
+	m.applyMergedQueue(next, false, true, true, true, true)
 	if len(m.queue) != 2 {
 		t.Fatalf("expected shuffle-active apply to discard old tail, got %d queue entries", len(m.queue))
 	}
@@ -275,9 +276,38 @@ func TestApplyMergedQueueShuffleInactivePreservesTail(t *testing.T) {
 		preloadedItemIDs: make(map[string]struct{}),
 		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 	}
-	m.applyMergedQueue(next, false, true, true, false)
+	m.applyMergedQueue(next, false, true, true, false, false)
 	if len(m.queue) <= 3 {
 		t.Fatalf("expected shuffle-inactive apply to preserve old tail, got %d queue entries", len(m.queue))
+	}
+}
+
+func TestApplyMergedQueueReplaceEntireQueueDiscardsTail(t *testing.T) {
+	prev := make([]spotify.QueueItem, 40)
+	for i := range prev {
+		prev[i] = spotify.QueueItem{ID: fmt.Sprintf("track-%d", i), Name: fmt.Sprintf("Track %d", i)}
+	}
+	next := []spotify.QueueItem{
+		{ID: "new-a"},
+		{ID: "new-b"},
+		{ID: "new-c"},
+		{ID: "new-d"},
+		{ID: "new-e"},
+	}
+	m := model{
+		status:           &spotify.PlaybackStatus{ShuffleState: false},
+		queue:            prev,
+		preloadedItemIDs: make(map[string]struct{}),
+		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
+	}
+	m.applyMergedQueue(next, false, true, true, false, true)
+	if len(m.queue) != 5 {
+		t.Fatalf("expected replaceEntireQueue to discard old tail, got %d queue entries", len(m.queue))
+	}
+	for i, item := range m.queue {
+		if item.ID != next[i].ID {
+			t.Fatalf("queue[%d]: expected %q, got %q", i, next[i].ID, item.ID)
+		}
 	}
 }
 
