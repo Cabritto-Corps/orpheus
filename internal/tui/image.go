@@ -436,10 +436,6 @@ func (c *imgCache) deleteCoversForURLLocked(url string) {
 	}
 }
 
-func encodeImageAsPNGBase64(img image.Image) (string, error) {
-	return encodeImageAsPNGBase64AtSize(img, 0, 0)
-}
-
 func encodeImageAsPNGBase64AtSize(img image.Image, displayCols, displayRows int) (string, error) {
 	if img == nil {
 		return "", nil

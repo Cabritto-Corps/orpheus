@@ -19,9 +19,9 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 	m.imgs.invalidateCovers()
 
-	leftW, _ := m.splitWidths()
-	listInnerW := leftW - 3
-	listInnerH := m.height - chromeH - 4
+	layout := m.bodyLayout()
+	listInnerW := layout.rightW - 1
+	listInnerH := layout.bodyH - 3
 
 	m.playlistList.SetSize(listInnerW, listInnerH)
 	m.albumList.SetSize(listInnerW, listInnerH)

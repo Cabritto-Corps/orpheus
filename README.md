@@ -6,9 +6,11 @@
 
 ### Notes
 
+**A terminal that supports kitty image protocol is needed to display non pixelated art (prints were taken in [ghostty](https://github.com/ghostty-org/ghostty))**
+
 - The code is not so shit anymore, but surely could be better
 
-- A lot of errors are still being fixed but you can use it if you really want to
+- A lot of errors are being fixed constantly but you can use it if you really want to
 
 ### Preview
 
