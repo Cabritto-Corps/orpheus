@@ -15,13 +15,6 @@ type NotifyingTokenSource struct {
 	lastToken string
 }
 
-func NewNotifyingTokenSource(src oauth2.TokenSource, fn TokenChangeFunc) *NotifyingTokenSource {
-	return &NotifyingTokenSource{
-		inner:    src,
-		onChange: fn,
-	}
-}
-
 func NewNotifyingTokenSourceWithInitial(src oauth2.TokenSource, fn TokenChangeFunc, initialAccessToken string) *NotifyingTokenSource {
 	return &NotifyingTokenSource{
 		inner:     src,

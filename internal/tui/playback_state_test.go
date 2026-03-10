@@ -2,12 +2,14 @@ package tui
 
 import (
 	"fmt"
+	"image"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"orpheus/internal/cache"
+	"orpheus/internal/config"
 	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
@@ -67,6 +69,16 @@ func TestMergeStatusFromPreviousUsesTrackCacheFallback(t *testing.T) {
 	merged := mergeStatusFromPrevious(nil, nil, next, cache)
 	if merged.TrackName != "Cached Name" || merged.ArtistName != "Cached Artist" || merged.DurationMS != 654 {
 		t.Fatalf("expected cache fallback metadata, got %+v", merged)
+	}
+}
+
+func TestMergeStatusFromPreviousFillsAlbumImageURLOnTrackChange(t *testing.T) {
+	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "https://same-album.jpg"}
+	next := &spotify.PlaybackStatus{TrackID: "track-2"}
+
+	merged := mergeStatusFromPrevious(prev, nil, next, nil)
+	if merged.AlbumImageURL != "https://same-album.jpg" {
+		t.Fatalf("expected AlbumImageURL from prev on track change when next has none, got %q", merged.AlbumImageURL)
 	}
 }
 
@@ -170,16 +182,31 @@ func TestClearSeekSettleTargetToleranceAndTimeout(t *testing.T) {
 
 func TestShouldApplyIncomingQueueClearsPendingContextQueue(t *testing.T) {
 	m := model{
-		pendingContextFrom: "track-a",
-		queue:              []spotify.QueueItem{{ID: "old"}},
-		stableQueueLen:     1,
-		queueHasMore:       true,
+		pendingContextFrom:   "track-a",
+		pendingContextFromAt: time.Now(),
+		queue:                []spotify.QueueItem{{ID: "old"}},
+		stableQueueLen:       1,
+		queueHasMore:         true,
 	}
 	if m.shouldApplyIncomingQueue("track-a") {
 		t.Fatal("expected queue update to be gated for matching pending context")
 	}
 	if m.queue != nil || m.stableQueueLen != 0 || m.queueHasMore {
 		t.Fatalf("expected queue state reset while waiting for context switch, got queue=%v stable=%d hasMore=%t", m.queue, m.stableQueueLen, m.queueHasMore)
+	}
+}
+
+func TestShouldApplyIncomingQueueTimeoutAllowsApply(t *testing.T) {
+	m := model{
+		pendingContextFrom:   "track-a",
+		pendingContextFromAt: time.Now().Add(-(pendingContextTimeout + time.Second)),
+		queue:                []spotify.QueueItem{{ID: "old"}},
+	}
+	if !m.shouldApplyIncomingQueue("track-a") {
+		t.Fatal("expected timeout to override pending context guard and allow queue apply")
+	}
+	if m.pendingContextFrom != "" {
+		t.Fatal("expected pendingContextFrom to be cleared after timeout")
 	}
 }
 
@@ -198,6 +225,7 @@ func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 		false,
 		true,
 		true,
+		false,
 	)
 
 	if _, ok := m.preloadedItemIDs["new-1"]; !ok {
@@ -211,6 +239,45 @@ func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 	}
 	if len(m.preloadedItemIDs) != 2 {
 		t.Fatalf("expected preloaded id set to rebuild from merged queue, got %d entries", len(m.preloadedItemIDs))
+	}
+}
+
+func TestApplyMergedQueueShuffleActiveDiscardsTail(t *testing.T) {
+	prev := make([]spotify.QueueItem, 40)
+	for i := range prev {
+		prev[i] = spotify.QueueItem{ID: fmt.Sprintf("track-%d", i), Name: fmt.Sprintf("Track %d", i)}
+	}
+	next := []spotify.QueueItem{
+		{ID: "shuffled-a"},
+		{ID: "shuffled-b"},
+	}
+	m := model{
+		status:           &spotify.PlaybackStatus{ShuffleState: false},
+		queue:            prev,
+		preloadedItemIDs: make(map[string]struct{}),
+		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
+	}
+	m.applyMergedQueue(next, false, true, true, true)
+	if len(m.queue) != 2 {
+		t.Fatalf("expected shuffle-active apply to discard old tail, got %d queue entries", len(m.queue))
+	}
+}
+
+func TestApplyMergedQueueShuffleInactivePreservesTail(t *testing.T) {
+	prev := make([]spotify.QueueItem, 40)
+	for i := range prev {
+		prev[i] = spotify.QueueItem{ID: fmt.Sprintf("track-%d", i), Name: fmt.Sprintf("Track %d", i)}
+	}
+	next := prev[:3]
+	m := model{
+		status:           &spotify.PlaybackStatus{ShuffleState: true},
+		queue:            prev,
+		preloadedItemIDs: make(map[string]struct{}),
+		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
+	}
+	m.applyMergedQueue(next, false, true, true, false)
+	if len(m.queue) <= 3 {
+		t.Fatalf("expected shuffle-inactive apply to preserve old tail, got %d queue entries", len(m.queue))
 	}
 }
 
@@ -235,15 +302,67 @@ func TestMergeQueueWithRestPreservesTailWithoutDuplicates(t *testing.T) {
 }
 
 func TestShouldQueueAlbumImageLoad(t *testing.T) {
-	prev := &spotify.PlaybackStatus{AlbumImageURL: "a"}
-	if !shouldQueueAlbumImageLoad(nil, &spotify.PlaybackStatus{AlbumImageURL: "a"}) {
+	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "a"}
+	if !shouldQueueAlbumImageLoad(nil, &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "a"}) {
 		t.Fatal("expected initial non-empty image to load")
 	}
-	if shouldQueueAlbumImageLoad(prev, &spotify.PlaybackStatus{AlbumImageURL: "a"}) {
+	if shouldQueueAlbumImageLoad(prev, &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "a"}) {
 		t.Fatal("expected same image URL to be skipped")
 	}
-	if !shouldQueueAlbumImageLoad(prev, &spotify.PlaybackStatus{AlbumImageURL: "b"}) {
+	if !shouldQueueAlbumImageLoad(prev, &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "b"}) {
 		t.Fatal("expected changed image URL to load")
+	}
+	if !shouldQueueAlbumImageLoad(prev, &spotify.PlaybackStatus{TrackID: "track-2", AlbumImageURL: "a"}) {
+		t.Fatal("expected same image URL to load when track changes")
+	}
+	prevNoID := &spotify.PlaybackStatus{TrackName: "track-one", ArtistName: "artist", DurationMS: 180000, AlbumImageURL: "a"}
+	nextNoID := &spotify.PlaybackStatus{TrackName: "track-two", ArtistName: "artist", DurationMS: 180000, AlbumImageURL: "a"}
+	if !shouldQueueAlbumImageLoad(prevNoID, nextNoID) {
+		t.Fatal("expected same image URL to load when metadata subject changes and track ids are missing")
+	}
+}
+
+func TestShouldEnsureAlbumImageLoadWhenCoverNotCached(t *testing.T) {
+	m := newModel(nil, nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
+	next := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
+	if !m.shouldEnsureAlbumImageLoad(prev, next) {
+		t.Fatal("expected load when current track cover is not cached")
+	}
+
+	m.imgs.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)), 0, 0)
+	if m.shouldEnsureAlbumImageLoad(prev, next) {
+		t.Fatal("expected no load when current track cover is already cached")
+	}
+}
+
+func TestAdvancePlayerCoverEpochOnQueueHeadChange(t *testing.T) {
+	m := newModel(nil, nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.imgs.protocol = imageProtocolKitty
+	prev := &spotify.PlaybackStatus{AlbumImageURL: "u1", ProgressMS: 10000}
+	next := &spotify.PlaybackStatus{AlbumImageURL: "u1", ProgressMS: 2000}
+
+	m.advancePlayerCoverEpochIfNeeded(prev, next, "q1", "q2")
+	if m.playerCoverEpoch == 0 {
+		t.Fatal("expected player cover epoch to advance when queue head changes")
+	}
+	if !m.imgs.kittyForceRedraw {
+		t.Fatal("expected kitty redraw to be forced when epoch advances")
+	}
+}
+
+func TestAdvancePlayerCoverEpochNoChangeWhenSignalsMissing(t *testing.T) {
+	m := newModel(nil, nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m.imgs.protocol = imageProtocolKitty
+	prev := &spotify.PlaybackStatus{AlbumImageURL: "u1", TrackID: "t1", ProgressMS: 10000}
+	next := &spotify.PlaybackStatus{AlbumImageURL: "u1", TrackID: "t1", ProgressMS: 10200}
+
+	m.advancePlayerCoverEpochIfNeeded(prev, next, "q1", "q1")
+	if m.playerCoverEpoch != 0 {
+		t.Fatal("expected player cover epoch to remain unchanged")
+	}
+	if m.imgs.kittyForceRedraw {
+		t.Fatal("expected no kitty redraw force when transition signals are absent")
 	}
 }
 

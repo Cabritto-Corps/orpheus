@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,6 +11,68 @@ import (
 	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
+
+func playbackCoverSubject(status *spotify.PlaybackStatus) string {
+	if status == nil {
+		return ""
+	}
+	if id := normalizeQueueID(status.TrackID); id != "" {
+		return "id:" + id
+	}
+	name := strings.TrimSpace(status.TrackName)
+	artist := strings.TrimSpace(status.ArtistName)
+	if name == "" && artist == "" && status.DurationMS <= 0 {
+		return ""
+	}
+	return "meta:" + name + "|" + artist + "|" + strconv.Itoa(status.DurationMS)
+}
+
+func playbackCoverSubjectChanged(prev, next *spotify.PlaybackStatus) bool {
+	prevSubject := playbackCoverSubject(prev)
+	nextSubject := playbackCoverSubject(next)
+	if prevSubject == "" || nextSubject == "" {
+		return false
+	}
+	return prevSubject != nextSubject
+}
+
+func queueHeadTrackID(queue []spotify.QueueItem) string {
+	if len(queue) == 0 {
+		return ""
+	}
+	return normalizeQueueID(queue[0].ID)
+}
+
+func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.PlaybackStatus, prevQueueHead, nextQueueHead string) {
+	prevTrack := ""
+	nextTrack := ""
+	prevURL := ""
+	nextURL := ""
+	prevProgress := -1
+	nextProgress := -1
+	if prevStatus != nil {
+		prevTrack = normalizeQueueID(prevStatus.TrackID)
+		prevURL = strings.TrimSpace(prevStatus.AlbumImageURL)
+		prevProgress = prevStatus.ProgressMS
+	}
+	if nextStatus != nil {
+		nextTrack = normalizeQueueID(nextStatus.TrackID)
+		nextURL = strings.TrimSpace(nextStatus.AlbumImageURL)
+		nextProgress = nextStatus.ProgressMS
+	}
+	subjectChanged := playbackCoverSubjectChanged(prevStatus, nextStatus)
+	trackChanged := prevTrack != "" && nextTrack != "" && prevTrack != nextTrack
+	queueHeadChanged := prevQueueHead != "" && nextQueueHead != "" && prevQueueHead != nextQueueHead
+	sameURL := prevURL != "" && prevURL == nextURL
+	progressRewind := sameURL && prevProgress >= 0 && nextProgress >= 0 && prevProgress > nextProgress+progressRewindThresholdMS
+	shouldAdvance := nextURL != "" && (subjectChanged || trackChanged || queueHeadChanged || progressRewind)
+	if shouldAdvance {
+		m.playerCoverEpoch++
+		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
+			m.imgs.forceKittyRedraw()
+		}
+	}
+}
 
 func cloneStatus(status *spotify.PlaybackStatus) *spotify.PlaybackStatus {
 	if status == nil {
@@ -26,7 +89,10 @@ func shouldQueueAlbumImageLoad(prev, next *spotify.PlaybackStatus) bool {
 	if prev == nil {
 		return true
 	}
-	return strings.TrimSpace(next.AlbumImageURL) != strings.TrimSpace(prev.AlbumImageURL)
+	if strings.TrimSpace(next.AlbumImageURL) != strings.TrimSpace(prev.AlbumImageURL) {
+		return true
+	}
+	return playbackCoverSubjectChanged(prev, next)
 }
 
 func (m *model) beginTransportTransition() {
@@ -35,6 +101,9 @@ func (m *model) beginTransportTransition() {
 	m.transportTransitionFromTrack = ""
 	if m.status != nil {
 		m.transportTransitionFromTrack = normalizeQueueID(m.status.TrackID)
+	}
+	if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
+		m.imgs.forceKittyRedraw()
 	}
 	m.syncExecutorState()
 }
@@ -46,12 +115,18 @@ func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
 	nextTrack := normalizeQueueID(next.TrackID)
 	if nextTrack != "" && nextTrack != m.transportTransitionFromTrack {
 		m.transportTransitionPending = false
+		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
+			m.imgs.forceKittyRedraw()
+		}
 		m.syncExecutorState()
 		return
 	}
-	if nextTrack == m.transportTransitionFromTrack && next.ProgressMS < 2000 &&
+	if nextTrack == m.transportTransitionFromTrack && next.ProgressMS < transportTransitionProgressMaxMS &&
 		time.Since(m.transportTransitionStartedAt) < 4*time.Second {
 		m.transportTransitionPending = false
+		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
+			m.imgs.forceKittyRedraw()
+		}
 		m.syncExecutorState()
 		return
 	}
@@ -100,7 +175,6 @@ func (m *model) applyOptimisticSkip(next bool) {
 		m.status.TrackID = m.queue[0].ID
 		m.status.TrackName = m.queue[0].Name
 		m.status.ArtistName = m.queue[0].Artist
-		m.status.AlbumImageURL = ""
 	}
 }
 
@@ -125,7 +199,12 @@ func (m *model) clearVolumeSettleTarget(observed int) {
 	}
 }
 
-const seekSettleToleranceMS = 900
+const (
+	seekSettleToleranceMS           = 900
+	seekBarEndBufferMS               = 250
+	progressRewindThresholdMS        = 5000
+	transportTransitionProgressMaxMS = 2000
+)
 
 func (m *model) clampSeekTarget(target int) int {
 	if target < 0 {
@@ -134,7 +213,7 @@ func (m *model) clampSeekTarget(target int) int {
 	if m.status == nil || m.status.DurationMS <= 0 {
 		return target
 	}
-	maxTarget := m.status.DurationMS - 250
+	maxTarget := m.status.DurationMS - seekBarEndBufferMS
 	if maxTarget < 0 {
 		maxTarget = 0
 	}
@@ -192,6 +271,23 @@ func (m *model) clearSeekSettleTarget(observed int) {
 	}
 }
 
+func (m *model) applyStatusSettleOverrides(status *spotify.PlaybackStatus, observedVol int) {
+	inVolSettle := m.volDebouncePending >= 0 ||
+		(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
+	if inVolSettle && status != nil && m.volSentTarget >= 0 {
+		status.Volume = m.volSentTarget
+	}
+	incomingProgress := -1
+	if status != nil {
+		incomingProgress = status.ProgressMS
+	}
+	if m.shouldApplySeekSettle(status) {
+		status.ProgressMS = m.clampSeekTarget(m.seekSettleProgress())
+	}
+	m.clearVolumeSettleTarget(observedVol)
+	m.clearSeekSettleTarget(incomingProgress)
+}
+
 func (m *model) trySendTransportSkip(kind librespot.TUICommandKind) bool {
 	if m.tuiCmdCh == nil {
 		return false
@@ -211,8 +307,14 @@ func absInt(v int) int {
 	return v
 }
 
+const pendingContextTimeout = 8 * time.Second
+
 func (m *model) shouldApplyIncomingQueue(incomingTrack string) bool {
 	if m.pendingContextFrom == "" {
+		return true
+	}
+	if time.Since(m.pendingContextFromAt) > pendingContextTimeout {
+		m.pendingContextFrom = ""
 		return true
 	}
 	if incomingTrack == m.pendingContextFrom {
@@ -225,8 +327,8 @@ func (m *model) shouldApplyIncomingQueue(incomingTrack string) bool {
 	return true
 }
 
-func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool) {
-	preserveTail := !(m.status != nil && m.status.ShuffleState)
+func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool, shuffleActive bool) {
+	preserveTail := !shuffleActive
 	m.queue = mergeQueueWithRest(m.queue, incoming, m.trackCache, preserveTail)
 	if updateStable {
 		m.stableQueueLen = len(m.queue)
@@ -242,6 +344,9 @@ func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.Queue
 		return next
 	}
 	out := *next
+	if out.AlbumImageURL == "" && prev != nil && prev.AlbumImageURL != "" {
+		out.AlbumImageURL = prev.AlbumImageURL
+	}
 	if out.TrackName != "" && out.ArtistName != "" && out.DurationMS > 0 {
 		return &out
 	}

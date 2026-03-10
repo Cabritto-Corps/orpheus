@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -15,6 +16,8 @@ const (
 	executorStateAwaitingAction    commandExecutorState = "awaiting-action"
 	executorStateAwaitingTransport commandExecutorState = "awaiting-transport"
 	maxInputQueueSize                                   = 96
+	seekStepMS                                          = 5000
+	maxInputActionsPerTick                              = 8
 )
 
 type playbackInputKind string
@@ -84,12 +87,15 @@ func (m *model) requeueFront(action playbackInputKind) {
 }
 
 func (m *model) pumpInputExecutor() tea.Cmd {
-	for i := 0; i < 8; i++ {
+	for i := 0; i < maxInputActionsPerTick; i++ {
 		m.syncExecutorState()
 		if m.executorState != executorStateIdle || len(m.inputQueue) == 0 {
 			return nil
 		}
 		idx := m.dequeueNextInputIndex()
+		if len(m.inputQueue) == 0 {
+			return nil
+		}
 		action := m.inputQueue[idx].kind
 		m.inputQueue = append(m.inputQueue[:idx], m.inputQueue[idx+1:]...)
 		if cmd := m.executePlaybackInput(action); cmd != nil {
@@ -150,6 +156,7 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 				return nil
 			}
 			m.beginTransportTransition()
+			m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
 			return nil
 		}
 		rollback := cloneStatus(m.status)
@@ -166,6 +173,7 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 				return nil
 			}
 			m.beginTransportTransition()
+			m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
 			return nil
 		}
 		rollback := cloneStatus(m.status)
@@ -253,7 +261,7 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 			return nil
 		}
 		current := m.seekSettleProgress()
-		target := m.clampSeekTarget(current - 5000)
+		target := m.clampSeekTarget(current - seekStepMS)
 		if target == current {
 			return nil
 		}
@@ -266,7 +274,7 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 			return nil
 		}
 		current := m.seekSettleProgress()
-		target := m.clampSeekTarget(current + 5000)
+		target := m.clampSeekTarget(current + seekStepMS)
 		if target == current {
 			return nil
 		}
@@ -307,6 +315,9 @@ func inputPriorityOf(action playbackInputKind) inputPriority {
 }
 
 func (m *model) dequeueNextInputIndex() int {
+	if len(m.inputQueue) == 0 {
+		return 0
+	}
 	bestIdx := 0
 	bestPriority := m.inputQueue[0].priority
 	for i := 1; i < len(m.inputQueue); i++ {

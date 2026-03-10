@@ -329,7 +329,7 @@ func runLibrespotTUI() error {
 
 	tuiCfg := config.Config{
 		DeviceName:   librespotCfg.DeviceName,
-		PollInterval: 2 * time.Second,
+		PollInterval: 1500 * time.Millisecond,
 		NerdFonts:    false,
 	}
 
@@ -339,10 +339,6 @@ func runLibrespotTUI() error {
 			if token, tokenErr := authMgr.LoadToken(); tokenErr == nil && token != nil {
 				oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, oauthHTTPClient())
 				baseTS := authMgr.TokenSource(oauthCtx, token)
-				// Wrap in a notifying source so any auto-refreshed token is
-				// immediately persisted to disk. Without this, the refresh token
-				// rotates but the new token is never saved, causing auth failures
-				// on the next launch.
 				ts := auth.NewNotifyingTokenSourceWithInitial(baseTS, func(t *oauth2.Token) {
 					_ = authMgr.SaveToken(t)
 				}, token.AccessToken)

@@ -241,6 +241,56 @@ func (c *playlistCatalog) ListSavedAlbumsPage(ctx context.Context, offset, limit
 	return out, nil
 }
 
+func (c *playlistCatalog) ResolveContextImageURL(ctx context.Context, kind, id string) (string, error) {
+	kind = strings.TrimSpace(kind)
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", fmt.Errorf("context ID must not be empty")
+	}
+	switch kind {
+	case spotify.ContextKindPlaylist:
+		resp, err := c.doWith429Retry(ctx, "GET", "v1/playlists/"+url.PathEscape(id)+"/images", nil, nil)
+		if err != nil {
+			return "", fmt.Errorf("webapi playlist images: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			return "", fmt.Errorf("webapi playlist images: %d %s", resp.StatusCode, string(body))
+		}
+		var images []spotify.PlaylistImage
+		if err := json.NewDecoder(resp.Body).Decode(&images); err != nil {
+			return "", fmt.Errorf("decode playlist images: %w", err)
+		}
+		if len(images) == 0 {
+			return "", nil
+		}
+		return strings.TrimSpace(images[0].URL), nil
+	case spotify.ContextKindAlbum:
+		resp, err := c.doWith429Retry(ctx, "GET", "v1/albums/"+url.PathEscape(id), nil, nil)
+		if err != nil {
+			return "", fmt.Errorf("webapi album details: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			return "", fmt.Errorf("webapi album details: %d %s", resp.StatusCode, string(body))
+		}
+		var album struct {
+			Images []spotify.PlaylistImage `json:"images"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&album); err != nil {
+			return "", fmt.Errorf("decode album details: %w", err)
+		}
+		if len(album.Images) == 0 {
+			return "", nil
+		}
+		return strings.TrimSpace(album.Images[0].URL), nil
+	default:
+		return "", fmt.Errorf("unsupported context kind %q", kind)
+	}
+}
+
 func (c *playlistCatalog) ListPlaylistItemsPage(ctx context.Context, playlistID string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
 	if playlistID == "" {
 		return nil, fmt.Errorf("playlist ID must not be empty")

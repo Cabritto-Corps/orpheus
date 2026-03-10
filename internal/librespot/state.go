@@ -70,6 +70,9 @@ func (s *State) trackPosition() int64 {
 	if calculated < 0 {
 		return s.player.PositionAsOfTimestamp
 	}
+	if s.player.Duration > 0 && calculated > s.player.Duration {
+		return s.player.Duration
+	}
 	return calculated
 }
 
@@ -79,6 +82,9 @@ func (s *State) updateTimestamp() {
 	advancedPositionMillis := int64(float64(advancedTimeMillis) * s.player.PlaybackSpeed)
 	s.player.PositionAsOfTimestamp += advancedPositionMillis
 	s.player.Timestamp = now.UnixMilli()
+	if s.player.Duration > 0 && s.player.PositionAsOfTimestamp > s.player.Duration {
+		s.player.PositionAsOfTimestamp = s.player.Duration
+	}
 }
 
 func (s *State) playOrigin() string {
@@ -147,8 +153,10 @@ func (p *AppPlayer) putConnectState(ctx context.Context, reason connectpb.PutSta
 	if t := p.state.activeSince; !t.IsZero() {
 		putStateReq.StartedPlayingAt = uint64(t.UnixMilli())
 	}
-	if t := p.player.HasBeenPlayingFor(); t > 0 {
-		putStateReq.HasBeenPlayingForMs = uint64(t.Milliseconds())
+	if p.state.active && !p.state.activeSince.IsZero() {
+		if t := time.Since(p.state.activeSince); t > 0 {
+			putStateReq.HasBeenPlayingForMs = uint64(t.Milliseconds())
+		}
 	}
 	putStateReq.IsActive = p.state.active
 	putStateReq.Device = &connectpb.Device{

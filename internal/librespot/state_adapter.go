@@ -62,6 +62,10 @@ func (p *AppPlayer) BuildPlaybackStateUpdate() *PlaybackStateUpdate {
 		}
 	}
 	if p.primaryStream != nil && p.prodInfo != nil {
+		durationMs := int64(p.primaryStream.Media.Duration())
+		if durationMs > 0 && pos > durationMs {
+			pos = durationMs
+		}
 		t := p.newApiResponseStatusTrack(p.primaryStream.Media, pos)
 		out.TrackName = t.Name
 		if len(t.ArtistNames) > 0 {
@@ -241,7 +245,7 @@ func providedTracksToQueueEntries(p *AppPlayer, tracks []*connectpb.ProvidedTrac
 			e.DurationMS = metadataDurationMS(t.Metadata)
 		}
 		if e.Name == "" {
-			e.Name = fallbackQueueLabel(id)
+			e.Name = fallbackQueueLabel()
 		}
 		if e.Artist == "" {
 			e.Artist = "-"
@@ -274,7 +278,7 @@ func normalizeSpotifyID(raw string) string {
 	return raw
 }
 
-func fallbackQueueLabel(_ string) string {
+func fallbackQueueLabel() string {
 	return "Unknown track"
 }
 

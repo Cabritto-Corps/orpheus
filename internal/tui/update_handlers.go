@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -18,12 +19,13 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 	m.imgs.invalidateCovers()
 
-	leftW, _ := m.splitWidths()
-	listInnerW := leftW - 3
-	listInnerH := m.height - chromeH - 4
+	layout := m.bodyLayout()
+	listInnerW := layout.rightW - 1
+	listInnerH := layout.bodyH - 3
 
 	m.playlistList.SetSize(listInnerW, listInnerH)
 	m.albumList.SetSize(listInnerW, listInnerH)
+	m.normalizeLibraryPagination()
 	return m, tea.Batch(
 		m.loadVisiblePlaylistCoversCmd(),
 		m.maybeLoadMorePlaylistsCmd(m.playlistList),
@@ -33,11 +35,45 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	m.interpolatePlaybackProgress(uiTickInterval)
 	inputCmd := m.pumpInputExecutor()
+
+	m.coverRefreshTick++
+	m.playerCoverRefreshTick++
+	m.libraryCoverRefreshTick++
+	m.libraryMetaRefreshTick++
+	var coverCmd tea.Cmd
+	var playerCoverCmd tea.Cmd
+	var libraryCoverCmd tea.Cmd
+	var metadataCmd tea.Cmd
+	if m.activeTab != tabPlayer && m.coverRefreshTick >= coverRefreshEvery {
+		m.coverRefreshTick = 0
+		coverCmd = m.loadVisiblePlaylistCoversCmd()
+	}
+	if m.activeTab == tabPlayer && m.status != nil {
+		url := strings.TrimSpace(m.status.AlbumImageURL)
+		if url != "" && m.imgs.shouldQueuePriorityLoad(url) {
+			playerCoverCmd = m.loadImageCmd(url, true)
+			m.playerCoverRefreshTick = 0
+		} else if m.playerCoverRefreshTick >= playerCoverRefreshEvery {
+			m.playerCoverRefreshTick = 0
+			playerCoverCmd = m.loadImageCmd(url, true)
+		}
+	}
+	if m.libraryCoverRefreshTick >= libraryCoverRefreshEvery {
+		m.libraryCoverRefreshTick = 0
+		libraryCoverCmd = m.loadLibraryCoversCmd(libraryCoverRefreshBatch)
+	}
+	if m.libraryMetaRefreshTick >= libraryMetaRefreshEvery {
+		m.libraryMetaRefreshTick = 0
+		if m.hasMissingLibraryImageURLs() {
+			metadataCmd = m.queueMissingLibraryImageResolvesCmd(libraryCoverRefreshBatch)
+		}
+	}
+
 	if m.tuiCmdCh != nil {
-		return m, tea.Batch(m.tickCmd(), inputCmd)
+		return m, tea.Batch(m.tickCmd(), inputCmd, coverCmd, playerCoverCmd, libraryCoverCmd, metadataCmd)
 	}
 	if m.activeTab != tabPlayer {
-		return m, tea.Batch(m.tickCmd(), inputCmd)
+		return m, tea.Batch(m.tickCmd(), inputCmd, coverCmd, playerCoverCmd, libraryCoverCmd, metadataCmd)
 	}
 	interval := m.pollInterval
 	if interval <= 0 {
@@ -50,12 +86,12 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	}
 	m.pollElapsed += uiTickInterval
 	if m.pollElapsed < interval {
-		return m, tea.Batch(m.tickCmd(), inputCmd)
+		return m, tea.Batch(m.tickCmd(), inputCmd, playerCoverCmd, libraryCoverCmd, metadataCmd)
 	}
 	m.pollElapsed = 0
 	m.pollTick++
 	pollQueue := m.pollTick%queuePollEvery == 0
-	return m, tea.Batch(m.pollCmd(pollQueue), m.tickCmd(), inputCmd)
+	return m, tea.Batch(m.pollCmd(pollQueue), m.tickCmd(), inputCmd, playerCoverCmd, libraryCoverCmd, metadataCmd)
 }
 
 func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
@@ -133,13 +169,42 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 		idx := clampInt(prevAlbumIndex, 0, len(alItems)-1)
 		m.albumList.Select(idx)
 	}
+	playlistPreviewURL := selectedImageURLFromList(m.playlistList)
+	if playlistPreviewURL == "" && len(plItems) > 0 {
+		if first, ok := plItems[0].(playlistItem); ok {
+			playlistPreviewURL = strings.TrimSpace(first.summary.ImageURL)
+		}
+	}
+	albumPreviewURL := selectedImageURLFromList(m.albumList)
+	if albumPreviewURL == "" && len(alItems) > 0 {
+		if first, ok := alItems[0].(playlistItem); ok {
+			albumPreviewURL = strings.TrimSpace(first.summary.ImageURL)
+		}
+	}
 
-	totalItems := len(plItems) + len(alItems)
-	if totalItems >= playlistLoadMax || len(msg.items) == 0 || !msg.hasMore {
+	if len(msg.items) == 0 || !msg.hasMore {
 		m.playlistsExhausted = true
 	}
+	missingImageURLs := 0
+	for _, item := range plItems {
+		pl, ok := item.(playlistItem)
+		if ok && strings.TrimSpace(pl.summary.ImageURL) == "" {
+			missingImageURLs++
+		}
+	}
+	for _, item := range alItems {
+		al, ok := item.(playlistItem)
+		if ok && strings.TrimSpace(al.summary.ImageURL) == "" {
+			missingImageURLs++
+		}
+	}
+	slog.Info("library items loaded", "playlists", len(plItems), "albums", len(alItems), "missing_image_urls", missingImageURLs)
 	return m, tea.Batch(
+		m.loadImageCmd(playlistPreviewURL, true),
+		m.loadImageCmd(albumPreviewURL, true),
+		m.loadLibraryCoversCmd(0),
 		m.loadVisiblePlaylistCoversCmd(),
+		m.queueMissingLibraryImageResolvesCmd(libraryCoverRefreshBatch),
 		m.maybeLoadMorePlaylistsCmd(m.playlistList),
 	)
 }
@@ -228,21 +293,31 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.err == nil {
-		delete(m.imageRetryCount, msg.url)
-		delete(m.imageRetryToken, msg.url)
+		if m.shouldForceKittyRedrawForLoadedURL(msg.url) {
+			m.imgs.forceKittyRedraw()
+		}
+		if m.status != nil && strings.TrimSpace(m.status.AlbumImageURL) == strings.TrimSpace(msg.url) {
+			m.cover.playerCoverFailStreak = 0
+		}
+		m.cover.clearRetry(msg.url)
 		return m, nil
+	}
+	if m.status != nil && strings.TrimSpace(m.status.AlbumImageURL) == strings.TrimSpace(msg.url) {
+		m.cover.playerCoverFailStreak++
+		m.maybeFallbackFromKittyOnPlayerFailures(msg.url)
 	}
 
-	attempt := m.imageRetryCount[msg.url] + 1
+	attempt := m.cover.imageRetryCount[msg.url] + 1
 	if attempt > imageLoadRetryMax {
-		delete(m.imageRetryCount, msg.url)
-		delete(m.imageRetryToken, msg.url)
+		m.cover.clearRetry(msg.url)
+		m.imgs.markFailed(msg.url)
 		slog.Warn("image load retries exhausted", "url", msg.url, "error", msg.err)
+		if m.libraryHasImageURL(msg.url) {
+			return m, m.queueResolvesForImageURLCmd(msg.url, libraryCoverRefreshBatch)
+		}
 		return m, nil
 	}
-	m.imageRetryCount[msg.url] = attempt
-	m.imageRetryToken[msg.url]++
-	token := m.imageRetryToken[msg.url]
+	_, token := m.cover.nextRetry(msg.url)
 	return m, m.imageRetryCmd(msg.url, attempt, token)
 }
 
@@ -250,15 +325,30 @@ func (m model) handleImageRetryMsg(msg imageRetryMsg) (tea.Model, tea.Cmd) {
 	if msg.url == "" {
 		return m, nil
 	}
-	if current := m.imageRetryToken[msg.url]; current != msg.token {
+	if current := m.cover.retryToken(msg.url); current != msg.token {
 		return m, nil
 	}
 	if !m.needsImageURL(msg.url) {
-		delete(m.imageRetryCount, msg.url)
-		delete(m.imageRetryToken, msg.url)
+		m.cover.clearRetry(msg.url)
 		return m, nil
 	}
-	return m, m.loadImageCmd(msg.url)
+	return m, m.loadImageCmd(msg.url, false)
+}
+
+func (m model) handleCoverImageResolvedMsg(msg coverImageResolvedMsg) (tea.Model, tea.Cmd) {
+	key := coverResolveKey(msg.kind, msg.id)
+	delete(m.cover.resolveInFlight, key)
+	if msg.err != nil {
+		slog.Warn("resolve context image URL failed", "kind", msg.kind, "id", msg.id, "error", msg.err)
+		return m, nil
+	}
+	if strings.TrimSpace(msg.url) == "" {
+		return m, nil
+	}
+	if !m.applyResolvedContextImageURL(msg.kind, msg.id, msg.url) {
+		return m, nil
+	}
+	return m, m.loadImageCmd(msg.url, false)
 }
 
 func (m model) handleActionMsg(msg actionMsg) (tea.Model, tea.Cmd) {
@@ -298,17 +388,24 @@ func (m model) handleVolDebounceMsg(msg volDebounceMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	target := m.volDebouncePending
+	if m.tuiCmdCh != nil {
+		select {
+		case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandSetVolume, Volume: target}:
+			m.volDebouncePending = -1
+			m.volSentTarget = target
+			m.volSentAt = time.Now()
+			m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
+		default:
+			m.volDebouncePending = target
+			m.volDebounceToken++
+			return m, m.volDebounceCmd(m.volDebounceToken)
+		}
+		return m, m.pumpInputExecutor()
+	}
 	m.volDebouncePending = -1
 	m.volSentTarget = target
 	m.volSentAt = time.Now()
 	m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
-	if m.tuiCmdCh != nil {
-		select {
-		case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandSetVolume, Volume: target}:
-		default:
-		}
-		return m, nil
-	}
 	rollback := cloneStatus(m.status)
 	if m.status != nil {
 		m.status.Volume = target
@@ -339,7 +436,7 @@ func (m model) handleSeekDebounceMsg(msg seekDebounceMsg) (tea.Model, tea.Cmd) {
 			m.seekDebounceToken++
 			return m, m.seekDebounceCmd(m.seekDebounceToken)
 		}
-		return m, nil
+		return m, m.pumpInputExecutor()
 	}
 	rollback := cloneStatus(m.status)
 	if m.status != nil {

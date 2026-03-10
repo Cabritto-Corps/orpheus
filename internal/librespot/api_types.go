@@ -154,5 +154,8 @@ func getBestImageIdForSize(images []*metadatapb.Image, size string) []byte {
 	if bestImage != nil {
 		return bestImage.FileId
 	}
-	return images[0].FileId
+	if images[0] != nil {
+		return images[0].FileId
+	}
+	return nil
 }

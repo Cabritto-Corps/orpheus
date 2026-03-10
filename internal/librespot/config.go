@@ -40,7 +40,7 @@ func DefaultConfig() *Config {
 		VolumeSteps:      100,
 		InitialVolume:    100,
 		FlacEnabled:      false,
-		ImageSize:        "default",
+		ImageSize:        "large",
 		ZeroconfEnabled:  false,
 		AudioBufferTime:  0,
 		AudioPeriodCount: 0,

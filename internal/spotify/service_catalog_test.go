@@ -92,3 +92,43 @@ func TestListUserPlaylistsPageRequiresItemsHTTPClient(t *testing.T) {
 		t.Fatalf("expected items http client error, got %v", err)
 	}
 }
+
+func TestResolveContextImageURLPlaylist(t *testing.T) {
+	s := &Service{
+		itemsHTTPClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.Path != "/v1/playlists/pl/images" {
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
+				}
+				return httpJSONResponse(http.StatusOK, `[{"url":"https://i.scdn.co/image/p1"}]`), nil
+			}),
+		},
+	}
+	url, err := s.ResolveContextImageURL(context.Background(), ContextKindPlaylist, "pl")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if url != "https://i.scdn.co/image/p1" {
+		t.Fatalf("unexpected URL: %q", url)
+	}
+}
+
+func TestResolveContextImageURLAlbum(t *testing.T) {
+	s := &Service{
+		itemsHTTPClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.Path != "/v1/albums/alb" {
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
+				}
+				return httpJSONResponse(http.StatusOK, `{"images":[{"url":"https://i.scdn.co/image/a1"}]}`), nil
+			}),
+		},
+	}
+	url, err := s.ResolveContextImageURL(context.Background(), ContextKindAlbum, "alb")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if url != "https://i.scdn.co/image/a1" {
+		t.Fatalf("unexpected URL: %q", url)
+	}
+}

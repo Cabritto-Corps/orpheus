@@ -27,6 +27,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleImageLoadedMsg(msg)
 	case imageRetryMsg:
 		return m.handleImageRetryMsg(msg)
+	case coverImageResolvedMsg:
+		return m.handleCoverImageResolvedMsg(msg)
 	case actionReconcileMsg:
 		return m.handleActionReconcileMsg(msg)
 	case actionMsg:
