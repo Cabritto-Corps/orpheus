@@ -18,6 +18,11 @@ const (
 
 const chromeH = headerH + tabBarH + playerBarH + 1
 
+const bodyStartRow1Based = headerH + tabBarH + 1
+
+const minLeftW = 18
+const minRightW = 28
+
 const (
 	iconPlay            = "▶"
 	iconPause           = ""
@@ -182,12 +187,10 @@ func (m model) tabBarView() string {
 }
 
 func (m model) playlistsTabView() string {
-	bodyH := m.height - chromeH - 1
-	leftW, rightW := m.splitWidths()
-
-	left := m.coverPreviewPanel(leftW-1, bodyH)
-	divider := verticalDivider(bodyH)
-	right := m.playlistBrowserPanel(rightW, bodyH)
+	layout := m.bodyLayout()
+	left := m.coverPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
+	divider := verticalDivider(layout.bodyH)
+	right := m.playlistBrowserPanel(layout.rightW, layout.bodyH)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 }
@@ -233,13 +236,11 @@ func (m model) playlistBrowserPanel(w, h int) string {
 	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
 }
 
-func (m model) coverPreviewPanel(w, h int) string {
+func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
 	label := styleSectionLabel.Render("Preview")
 	labelLine := label + "\n" + sectionDivider(w)
-	innerH := h - 2
 	innerW := w - 2
 
-	coverCols, coverRows := squareDims(innerW, innerH-3)
 	var coverStr string
 	if pl, ok := m.selectedPlaylist(); ok && pl.summary.ImageURL != "" {
 		url := pl.summary.ImageURL
@@ -276,23 +277,19 @@ func (m model) coverPreviewPanel(w, h int) string {
 }
 
 func (m model) playbackScreenView() string {
-	bodyH := m.height - chromeH - 1
-	leftW, rightW := m.splitWidths()
-
-	left := m.albumCoverPanel(leftW-1, bodyH)
-	divider := verticalDivider(bodyH)
-	right := m.queuePanel(rightW, bodyH)
+	layout := m.bodyLayout()
+	left := m.albumCoverPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
+	divider := verticalDivider(layout.bodyH)
+	right := m.queuePanel(layout.rightW, layout.bodyH)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 }
 
 func (m model) albumsTabView() string {
-	bodyH := m.height - chromeH - 1
-	leftW, rightW := m.splitWidths()
-
-	left := m.albumPreviewPanel(leftW-1, bodyH)
-	divider := verticalDivider(bodyH)
-	right := m.albumBrowserPanel(rightW, bodyH)
+	layout := m.bodyLayout()
+	left := m.albumPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
+	divider := verticalDivider(layout.bodyH)
+	right := m.albumBrowserPanel(layout.rightW, layout.bodyH)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 }
@@ -321,13 +318,11 @@ func (m model) albumBrowserPanel(w, h int) string {
 	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
 }
 
-func (m model) albumPreviewPanel(w, h int) string {
+func (m model) albumPreviewPanel(w, h, coverCols, coverRows int) string {
 	label := styleSectionLabel.Render("Preview")
 	labelLine := label + "\n" + sectionDivider(w)
-	innerH := h - 2
 	innerW := w - 2
 
-	coverCols, coverRows := squareDims(innerW, innerH-3)
 	var coverStr string
 	if pl, ok := m.selectedAlbum(); ok && pl.summary.ImageURL != "" {
 		url := pl.summary.ImageURL
@@ -359,14 +354,10 @@ func (m model) albumPreviewPanel(w, h int) string {
 	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
 }
 
-func (m model) albumCoverPanel(w, h int) string {
+func (m model) albumCoverPanel(w, h, coverCols, coverRows int) string {
 	label := styleSectionLabel.Render("Now Playing")
 	labelLine := label + "\n" + sectionDivider(w-1)
-	innerH := h - 2
 	innerW := w - 2
-
-	metaLines := 3
-	coverCols, coverRows := squareDims(innerW, innerH-metaLines)
 
 	var coverStr string
 	if m.status != nil && m.status.AlbumImageURL != "" {
@@ -581,41 +572,81 @@ func (m model) helpModalView() string {
 	return placed
 }
 
+type bodyLayout struct {
+	bodyH         int
+	leftW         int
+	rightW        int
+	coverCols     int
+	coverRows     int
+	coverStartRow int
+	coverStartCol int
+}
+
+func (m model) bodyLayout() bodyLayout {
+	bodyH := m.height - chromeH - 1
+	if m.width <= 0 || m.height <= 0 {
+		return bodyLayout{bodyH: bodyH, leftW: minLeftW, rightW: m.width - minLeftW, coverStartRow: bodyStartRow1Based + 3, coverStartCol: 1}
+	}
+	metaLines := 3
+	availH := bodyH - 2 - 2 - metaLines
+	if availH < 1 {
+		availH = 1
+	}
+	maxRows := availH
+	coverRows := maxRows
+	coverCols := 2 * coverRows
+	leftW := coverCols + 2
+	if leftW < minLeftW {
+		leftW = minLeftW
+	}
+	maxLeftW := m.width - minRightW
+	if maxLeftW < minLeftW {
+		maxLeftW = minLeftW
+	}
+	if leftW > maxLeftW {
+		leftW = maxLeftW
+	}
+	innerW := leftW - 2
+	innerH := bodyH - 2 - metaLines
+	if innerH < 1 {
+		innerH = 1
+	}
+	coverCols, coverRows = squareDims(innerW, innerH)
+	if coverCols < 2 {
+		coverCols = 2
+	}
+	if coverRows < 1 {
+		coverRows = 1
+	}
+	rightW := m.width - leftW
+	if rightW < 0 {
+		rightW = 0
+	}
+	return bodyLayout{
+		bodyH:         bodyH,
+		leftW:         leftW,
+		rightW:        rightW,
+		coverCols:     coverCols,
+		coverRows:     coverRows,
+		coverStartRow: bodyStartRow1Based + 3,
+		coverStartCol: 1,
+	}
+}
+
 func (m model) splitWidths() (leftW, rightW int) {
-	leftW = m.width/3 + 2
-	rightW = m.width - leftW
-	return
+	layout := m.bodyLayout()
+	return layout.leftW, layout.rightW
 }
 
 func (m model) currentCoverSizes() [][2]int {
 	if m.width <= 0 || m.height <= 0 {
 		return nil
 	}
-	bodyH := m.height - chromeH - 1
-	leftW, _ := m.splitWidths()
-
-	var sizes [][2]int
-
-	innerW := leftW - 2
-	innerH := bodyH - 2
-	if innerW > 0 && innerH > 3 {
-		if cols, rows := squareDims(innerW, innerH-3); cols > 0 && rows > 0 {
-			sizes = append(sizes, [2]int{cols, rows})
-		}
+	layout := m.bodyLayout()
+	if layout.coverCols <= 0 || layout.coverRows <= 0 {
+		return nil
 	}
-
-	previewInnerW := leftW - 1 - 2
-	previewInnerH := bodyH - 2
-	if previewInnerW > 0 && previewInnerH > 3 {
-		if cols, rows := squareDims(previewInnerW, previewInnerH-3); cols > 0 && rows > 0 {
-			candidate := [2]int{cols, rows}
-			if len(sizes) == 0 || sizes[0] != candidate {
-				sizes = append(sizes, candidate)
-			}
-		}
-	}
-
-	return sizes
+	return [][2]int{{layout.coverCols, layout.coverRows}}
 }
 
 func (m model) icon(unicode, nerd string) string {
@@ -703,15 +734,9 @@ func (m model) kittyOverlay() string {
 		return kittyDeleteAll
 	}
 
-	bodyH := m.height - chromeH - 1
-	leftW, _ := m.splitWidths()
-	panelW := leftW - 1
-	panelH := bodyH
-	innerW := panelW - 2
-	innerH := panelH - 2
-	coverCols, coverRows := squareDims(innerW, innerH-3)
-	if coverCols <= 0 || coverRows <= 0 {
-		_, shouldDelete := m.imgs.beginKittyOverlayState("", "")
+	layout := m.bodyLayout()
+	if layout.coverCols <= 0 || layout.coverRows <= 0 {
+		_, shouldDelete, _ := m.imgs.beginKittyOverlayState("", "")
 		if shouldDelete {
 			return kittyDeleteAll
 		}
@@ -740,7 +765,7 @@ func (m model) kittyOverlay() string {
 		}
 	}
 	if url == "" {
-		_, shouldDelete := m.imgs.beginKittyOverlayState("", "")
+		_, shouldDelete, _ := m.imgs.beginKittyOverlayState("", "")
 		if shouldDelete {
 			return kittyDeleteAll
 		}
@@ -753,7 +778,7 @@ func (m model) kittyOverlay() string {
 		target := strings.TrimSpace(url)
 		shouldClear := displayed != "" && displayed != target
 		if shouldClear {
-			_, shouldDelete := m.imgs.beginKittyOverlayState("", "")
+			_, shouldDelete, _ := m.imgs.beginKittyOverlayState("", "")
 			if shouldDelete {
 				return kittyDeleteAll
 			}
@@ -768,30 +793,28 @@ func (m model) kittyOverlay() string {
 			m.imgs.forceKittyRedraw()
 		}
 	}
-	const imageRow = 8
-	const imageCol = 2
 	playerEpoch := uint64(0)
 	if m.activeTab == tabPlayer {
 		playerEpoch = m.playerCoverEpoch
 	}
-	key := fmt.Sprintf("%d:%d:%d:%d:%s:%s:%s:%d", imageRow, imageCol, coverCols, coverRows, m.activeTab, subjectID, url, playerEpoch)
-	changed, shouldDelete := m.imgs.beginKittyOverlayState(key, url)
+	key := fmt.Sprintf("%d:%d:%d:%d:%s:%s:%s:%d", layout.coverStartRow, layout.coverStartCol, layout.coverCols, layout.coverRows, m.activeTab, subjectID, url, playerEpoch)
+	changed, shouldDelete, placementChanged := m.imgs.beginKittyOverlayState(key, url)
 	if !changed {
 		return ""
 	}
-	payload := m.imgs.buildKittyPayload(url, encoded, coverCols, coverRows, m.imgs.nextKittyImageID())
+	payload := m.imgs.buildKittyPayload(url, encoded, layout.coverCols, layout.coverRows, m.imgs.nextKittyImageID())
 	if payload == "" {
 		return kittyDeleteAll
 	}
-	out := fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", imageRow, imageCol, payload)
-	if shouldDelete {
+	out := fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", layout.coverStartRow, layout.coverStartCol, payload)
+	if shouldDelete && placementChanged {
 		return kittyDeleteAll + out
 	}
 	return out
 }
 
 func (m model) composeCoverSection(coverStr, meta string) string {
-	return " " + strings.ReplaceAll(coverStr+meta, "\n", "\n ")
+	return coverStr + meta
 }
 
 func (m model) blankArt(cols, rows int) string {

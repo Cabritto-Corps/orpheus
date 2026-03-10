@@ -749,7 +749,7 @@ func TestAlbumCoverPanelKittyShowsPlaceholderWhileLoading(t *testing.T) {
 		ArtistName:    "artist",
 	}
 
-	panel := m.albumCoverPanel(40, 20)
+	panel := m.albumCoverPanel(40, 20, 30, 15)
 	if !strings.Contains(panel, "╭") {
 		t.Fatal("expected kitty loading state to show placeholder like ansi")
 	}
@@ -766,7 +766,7 @@ func TestAlbumCoverPanelAnsiShowsPlaceholderWhileLoading(t *testing.T) {
 		ArtistName:    "artist",
 	}
 
-	panel := m.albumCoverPanel(40, 20)
+	panel := m.albumCoverPanel(40, 20, 30, 15)
 	if !strings.Contains(panel, "╭") {
 		t.Fatal("expected ansi loading state to keep placeholder box")
 	}
