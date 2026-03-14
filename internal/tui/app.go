@@ -387,7 +387,7 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	shuffleChanged := msg.status != nil && msg.status.ShuffleState != prevShuffleState
 	newShuffleActive := msg.status != nil && msg.status.ShuffleState
 	if m.shouldApplyIncomingQueue(nextTrackID) {
-		m.applyMergedQueue(msg.queue, msg.queueHasMore, refreshQueue || shuffleChanged, true, newShuffleActive, refreshQueue || shuffleChanged)
+		m.applyMergedQueue(msg.queue, msg.queueHasMore, refreshQueue || shuffleChanged, true, newShuffleActive)
 	}
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, msg.status, m.trackCache)
 	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.status, prevQueueHead, queueHeadTrackID(m.queue))
@@ -450,7 +450,7 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 			incomingTrack = normalizeQueueID(msg.status.TrackID)
 		}
 		if m.shouldApplyIncomingQueue(incomingTrack) {
-			m.applyMergedQueue(msg.queue, false, true, true, m.status != nil && m.status.ShuffleState, false)
+			m.applyMergedQueue(msg.queue, false, true, true, m.status != nil && m.status.ShuffleState)
 		}
 	}
 	if msg.queueErr != nil {
@@ -528,7 +528,7 @@ func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.
 			incomingTrack = normalizeQueueID(msg.status.TrackID)
 		}
 		if m.shouldApplyIncomingQueue(incomingTrack) {
-			m.applyMergedQueue(msg.queue, false, true, true, m.status != nil && m.status.ShuffleState, false)
+			m.applyMergedQueue(msg.queue, false, true, true, m.status != nil && m.status.ShuffleState)
 		}
 	}
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, m.status, m.trackCache)

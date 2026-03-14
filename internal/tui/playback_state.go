@@ -327,8 +327,8 @@ func (m *model) shouldApplyIncomingQueue(incomingTrack string) bool {
 	return true
 }
 
-func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool, shuffleActive bool, replaceEntireQueue bool) {
-	preserveTail := !shuffleActive && !replaceEntireQueue
+func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool, shuffleActive bool) {
+	preserveTail := !shuffleActive
 	m.queue = mergeQueueWithRest(m.queue, incoming, m.trackCache, preserveTail)
 	if updateStable {
 		m.stableQueueLen = len(m.queue)
