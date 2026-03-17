@@ -61,7 +61,7 @@ func TestSetCachedQueueMetaInvalidatesDerivedQueueCache(t *testing.T) {
 
 func TestInvalidateQueueDerivationResetBehavior(t *testing.T) {
 	p := &AppPlayer{}
-	p.markPlayedTrack("spotify:track:abc")
+	p.markPlayedTrack("", "spotify:track:abc")
 	p.setDerivedQueueCache("k", []PlaybackStateQueueEntry{{ID: "a"}}, false)
 
 	p.invalidateQueueDerivation(false)
@@ -87,15 +87,34 @@ func TestSeedPlayedTrackSetFromPlaybackWindow(t *testing.T) {
 		state: &State{
 			player: &connectpb.PlayerState{
 				PrevTracks: []*connectpb.ProvidedTrack{
-					{Uri: "spotify:track:prev1"},
-					{Uri: "spotify:track:prev2"},
+					{Uid: "uid-prev1", Uri: "spotify:track:prev1"},
+					{Uid: "uid-prev2", Uri: "spotify:track:prev2"},
 				},
-				Track: &connectpb.ProvidedTrack{Uri: "spotify:track:curr"},
+				Track: &connectpb.ProvidedTrack{Uid: "uid-curr", Uri: "spotify:track:curr"},
 			},
 		},
 	}
 	p.seedPlayedTrackSetFromPlaybackWindow()
-	if !p.isPlayedTrack("spotify:track:prev1") || !p.isPlayedTrack("spotify:track:prev2") || !p.isPlayedTrack("spotify:track:curr") {
+	if !p.isPlayedTrack("uid-prev1", "spotify:track:prev1") ||
+		!p.isPlayedTrack("uid-prev2", "spotify:track:prev2") ||
+		!p.isPlayedTrack("uid-curr", "spotify:track:curr") {
 		t.Fatal("expected playback window tracks to be seeded as played")
+	}
+}
+
+func TestPlayedTrackTrackingUsesUIDToPreserveDuplicates(t *testing.T) {
+	p := &AppPlayer{}
+
+	p.markPlayedTrack("uid-a", "spotify:track:same")
+	if !p.isPlayedTrack("uid-a", "spotify:track:same") {
+		t.Fatal("expected first UID-marked track to be considered played")
+	}
+	if p.isPlayedTrack("uid-b", "spotify:track:same") {
+		t.Fatal("expected different UID for same track URI to remain unplayed")
+	}
+
+	p.markPlayedTrack("", "spotify:track:fallback")
+	if !p.isPlayedTrack("", "spotify:track:fallback") {
+		t.Fatal("expected URI fallback tracking to work when UID is absent")
 	}
 }

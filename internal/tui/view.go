@@ -420,35 +420,19 @@ func (m model) queuePanel(w, h int) string {
 	lines := []string{label, divLine, colHeader, colDivider}
 
 	displayQueue := m.queue
-	var currentEntry *spotify.QueueItem
-
-	if m.status != nil && len(m.queue) > 0 {
-		if normalizeQueueID(m.queue[0].ID) == normalizeQueueID(m.status.TrackID) {
-			entry := m.queue[0]
-			currentEntry = &entry
-			displayQueue = m.queue[1:]
+	hidCurrentFromQueue := false
+	if m.status != nil && len(displayQueue) > 0 {
+		currentID := normalizeQueueID(m.status.TrackID)
+		if currentID != "" && normalizeQueueID(displayQueue[0].ID) == currentID {
+			displayQueue = displayQueue[1:]
+			hidCurrentFromQueue = true
 		}
 	}
-
-	if currentEntry != nil {
-		playIcon := m.icon(iconPlay, iconPlayNF)
-		idx := styleQueueCurrentTrack.Render(fmt.Sprintf("%-*s", idxW, playIcon))
-		title := styleQueueCurrentTrack.Render(truncate(currentEntry.Name, titleW))
-		artist := styleQueueCurrentArtist.Render(truncate(currentEntry.Artist, artistW))
-		titlePad := titleW - lipgloss.Width(title)
-		artistPad := artistW - lipgloss.Width(artist)
-		if titlePad < 0 {
-			titlePad = 0
-		}
-		if artistPad < 0 {
-			artistPad = 0
-		}
-		lines = append(lines, " "+idx+" "+title+strings.Repeat(" ", titlePad)+"  "+artist+strings.Repeat(" ", artistPad))
-	} else if m.status == nil {
+	if m.status == nil {
 		lines = append(lines, styleDimmed.Render("  nothing playing"))
 	}
 
-	if len(displayQueue) == 0 && currentEntry == nil {
+	if len(displayQueue) == 0 {
 		lines = append(lines, styleDimmed.Render("  queue is empty"))
 	} else {
 		maxRows := contentLines - 2
@@ -469,10 +453,11 @@ func (m model) queuePanel(w, h int) string {
 			lines = append(lines, " "+idx+" "+title+strings.Repeat(" ", titlePad)+"  "+artist+strings.Repeat(" ", artistPad))
 		}
 
-		notVisible := max(0, m.stableQueueLen-n)
-		if currentEntry != nil {
-			notVisible = max(0, notVisible-1)
+		stableVisibleQueueLen := m.stableQueueLen
+		if hidCurrentFromQueue && stableVisibleQueueLen > 0 {
+			stableVisibleQueueLen--
 		}
+		notVisible := max(0, stableVisibleQueueLen-n)
 		if notVisible > 0 {
 			if m.queueHasMore {
 				lines = append(lines, styleDimmed.Render("  + more"))

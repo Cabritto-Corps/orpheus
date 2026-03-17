@@ -70,16 +70,16 @@ func (p *AppPlayer) invalidateQueueDerivation(resetPlayed bool) {
 	p.invalidateDerivedQueueCache()
 }
 
-func (p *AppPlayer) markPlayedTrack(uri string) {
-	id := normalizeSpotifyID(uri)
-	if id == "" {
+func (p *AppPlayer) markPlayedTrack(uid, uri string) {
+	key := trackQueueKey(uid, uri)
+	if key == "" {
 		return
 	}
 	p.playedTrackMu.Lock()
 	if p.playedTrackURIs == nil {
 		p.playedTrackURIs = make(map[string]struct{})
 	}
-	p.playedTrackURIs[id] = struct{}{}
+	p.playedTrackURIs[key] = struct{}{}
 	p.playedTrackMu.Unlock()
 }
 
@@ -91,20 +91,20 @@ func (p *AppPlayer) seedPlayedTrackSetFromPlaybackWindow() {
 		if t == nil {
 			continue
 		}
-		p.markPlayedTrack(t.Uri)
+		p.markPlayedTrack(t.Uid, t.Uri)
 	}
 	if p.state.player.Track != nil {
-		p.markPlayedTrack(p.state.player.Track.Uri)
+		p.markPlayedTrack(p.state.player.Track.Uid, p.state.player.Track.Uri)
 	}
 }
 
-func (p *AppPlayer) isPlayedTrack(uri string) bool {
-	id := normalizeSpotifyID(uri)
-	if id == "" {
+func (p *AppPlayer) isPlayedTrack(uid, uri string) bool {
+	key := trackQueueKey(uid, uri)
+	if key == "" {
 		return false
 	}
 	p.playedTrackMu.RLock()
-	_, ok := p.playedTrackURIs[id]
+	_, ok := p.playedTrackURIs[key]
 	p.playedTrackMu.RUnlock()
 	return ok
 }
@@ -131,7 +131,21 @@ func (p *AppPlayer) invalidateDerivedQueueCache() {
 }
 
 func (p *AppPlayer) currentDerivedQueueKey(shuffle bool) string {
-	return fmt.Sprintf("v:%d|shuffle:%t|played:%d", p.trackStateVersion.Load(), shuffle, p.playedTrackCount())
+	contextURI := ""
+	currentTrackID := ""
+	if p != nil && p.state != nil && p.state.player != nil {
+		contextURI = strings.TrimSpace(p.state.player.ContextUri)
+		if p.state.player.Track != nil {
+			currentTrackID = normalizeSpotifyID(p.state.player.Track.Uri)
+		}
+	}
+	return fmt.Sprintf(
+		"v:%d|shuffle:%t|ctx:%s|cur:%s",
+		p.trackStateVersion.Load(),
+		shuffle,
+		contextURI,
+		currentTrackID,
+	)
 }
 
 func (p *AppPlayer) getDerivedQueueCache(key string) ([]PlaybackStateQueueEntry, bool, bool) {

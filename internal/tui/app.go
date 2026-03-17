@@ -86,7 +86,7 @@ type model struct {
 	pendingContextFrom           string
 	pendingContextFromAt         time.Time
 	transportTransitionPending   bool
-	transportTransitionFromTrack  string
+	transportTransitionFromTrack string
 	transportTransitionStartedAt time.Time
 	transportRecoveryPending     bool
 	transportStuckCount          int
@@ -379,15 +379,19 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 		m.seekDebouncePending = -1
 		m.seekSentTarget = -1
 	}
-	refreshQueue := len(m.queue) == 0 || (nextTrackID != "" && nextTrackID != prevTrackID)
 	prevShuffleState := false
 	if prevStatus != nil {
 		prevShuffleState = prevStatus.ShuffleState
 	}
 	shuffleChanged := msg.status != nil && msg.status.ShuffleState != prevShuffleState
 	newShuffleActive := msg.status != nil && msg.status.ShuffleState
+	if shuffleChanged {
+		m.queue = nil
+		m.queueHasMore = false
+		m.stableQueueLen = 0
+	}
 	if m.shouldApplyIncomingQueue(nextTrackID) {
-		m.applyMergedQueue(msg.queue, msg.queueHasMore, refreshQueue || shuffleChanged, true, newShuffleActive)
+		m.applyMergedQueue(msg.queue, msg.queueHasMore, true, true, newShuffleActive)
 	}
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, msg.status, m.trackCache)
 	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.status, prevQueueHead, queueHeadTrackID(m.queue))

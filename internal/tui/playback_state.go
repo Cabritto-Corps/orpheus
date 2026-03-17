@@ -200,7 +200,7 @@ func (m *model) clearVolumeSettleTarget(observed int) {
 }
 
 const (
-	seekSettleToleranceMS           = 900
+	seekSettleToleranceMS            = 900
 	seekBarEndBufferMS               = 250
 	progressRewindThresholdMS        = 5000
 	transportTransitionProgressMaxMS = 2000
@@ -327,9 +327,8 @@ func (m *model) shouldApplyIncomingQueue(incomingTrack string) bool {
 	return true
 }
 
-func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool, shuffleActive bool) {
-	preserveTail := !shuffleActive
-	m.queue = mergeQueueWithRest(m.queue, incoming, m.trackCache, preserveTail)
+func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool, _ bool) {
+	m.queue = mergeQueueNames(m.queue, incoming, m.trackCache)
 	if updateStable {
 		m.stableQueueLen = len(m.queue)
 	}

@@ -561,9 +561,6 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 		}
 		p.state.player.Options.ShufflingContext = next.Shuffle
 		p.invalidateQueueDerivation(true)
-		if next.Shuffle {
-			p.seedPlayedTrackSetFromPlaybackWindow()
-		}
 		p.resetPlaybackCaches(true)
 		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
 		if next.Shuffle {
@@ -590,8 +587,8 @@ func (p *AppPlayer) addToQueue(ctx context.Context, track *connectpb.ContextTrac
 		track.Uid = fmt.Sprintf("q%d", p.state.queueID)
 	}
 	p.state.tracks.AddToQueue(track)
-	p.state.player.PrevTracks = p.state.tracks.PrevTracks()
-	p.state.player.NextTracks = p.state.tracks.NextTracks(ctx, nil)
+	p.syncPlayerTrackState(ctx, p.state.tracks, nil)
+	p.invalidateQueueDerivation(false)
 	p.updateState(ctx)
 	p.schedulePrefetchNext()
 	p.emitPlaybackState()
@@ -603,8 +600,8 @@ func (p *AppPlayer) setQueue(ctx context.Context, prev []*connectpb.ContextTrack
 		return
 	}
 	p.state.tracks.SetQueue(prev, next)
-	p.state.player.PrevTracks = p.state.tracks.PrevTracks()
-	p.state.player.NextTracks = p.state.tracks.NextTracks(ctx, next)
+	p.syncPlayerTrackState(ctx, p.state.tracks, next)
+	p.invalidateQueueDerivation(false)
 	p.updateState(ctx)
 	p.schedulePrefetchNext()
 	p.emitPlaybackState()
@@ -749,7 +746,7 @@ func (p *AppPlayer) selectAdvanceNextTarget(ctx context.Context, forceNext bool)
 		return selection
 	}
 	if p.state.player.Track != nil && p.state.player.Track.Uri != "" {
-		p.markPlayedTrack(p.state.player.Track.Uri)
+		p.markPlayedTrack(p.state.player.Track.Uid, p.state.player.Track.Uri)
 	}
 	selection.hasNextTrack = p.state.tracks.GoNext(ctx)
 	selection.trackChanged = true

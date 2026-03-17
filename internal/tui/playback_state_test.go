@@ -242,14 +242,14 @@ func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 	}
 }
 
-func TestApplyMergedQueueShuffleActiveDiscardsTail(t *testing.T) {
+func TestApplyMergedQueueReplacesQueueWithoutTailPreservation(t *testing.T) {
 	prev := make([]spotify.QueueItem, 40)
 	for i := range prev {
 		prev[i] = spotify.QueueItem{ID: fmt.Sprintf("track-%d", i), Name: fmt.Sprintf("Track %d", i)}
 	}
 	next := []spotify.QueueItem{
-		{ID: "shuffled-a"},
-		{ID: "shuffled-b"},
+		{ID: "next-a"},
+		{ID: "next-b"},
 	}
 	m := model{
 		status:           &spotify.PlaybackStatus{ShuffleState: false},
@@ -257,13 +257,13 @@ func TestApplyMergedQueueShuffleActiveDiscardsTail(t *testing.T) {
 		preloadedItemIDs: make(map[string]struct{}),
 		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 	}
-	m.applyMergedQueue(next, false, true, true, true)
-	if len(m.queue) != 2 {
-		t.Fatalf("expected shuffle-active apply to discard old tail, got %d queue entries", len(m.queue))
+	m.applyMergedQueue(next, false, true, true, false)
+	if len(m.queue) != len(next) {
+		t.Fatalf("expected queue to be replaced by incoming entries, got %d queue entries", len(m.queue))
 	}
 }
 
-func TestApplyMergedQueueShuffleInactivePreservesTail(t *testing.T) {
+func TestApplyMergedQueueDoesNotPreserveTailWhenShuffleTurnsOff(t *testing.T) {
 	prev := make([]spotify.QueueItem, 40)
 	for i := range prev {
 		prev[i] = spotify.QueueItem{ID: fmt.Sprintf("track-%d", i), Name: fmt.Sprintf("Track %d", i)}
@@ -276,12 +276,12 @@ func TestApplyMergedQueueShuffleInactivePreservesTail(t *testing.T) {
 		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 	}
 	m.applyMergedQueue(next, false, true, true, false)
-	if len(m.queue) <= 3 {
-		t.Fatalf("expected shuffle-inactive apply to preserve old tail, got %d queue entries", len(m.queue))
+	if len(m.queue) != len(next) {
+		t.Fatalf("expected queue to match incoming length after shuffle toggle, got %d queue entries", len(m.queue))
 	}
 }
 
-func TestMergeQueueWithRestPreservesTailWithoutDuplicates(t *testing.T) {
+func TestMergeQueueNamesDoesNotAppendTailEntries(t *testing.T) {
 	prev := make([]spotify.QueueItem, 34)
 	for i := range prev {
 		prev[i] = spotify.QueueItem{ID: fmt.Sprintf("track-%d", i)}
@@ -292,12 +292,9 @@ func TestMergeQueueWithRestPreservesTailWithoutDuplicates(t *testing.T) {
 		{ID: prev[33].ID},
 	}
 
-	merged := mergeQueueWithRest(prev, next, nil, true)
-	if len(merged) != 4 {
-		t.Fatalf("expected merged queue to append only unseen tail tracks, got %d entries", len(merged))
-	}
-	if merged[3].ID != prev[32].ID {
-		t.Fatalf("expected unseen tail track %q to be appended, got %q", prev[32].ID, merged[3].ID)
+	merged := mergeQueueNames(prev, next, nil)
+	if len(merged) != len(next) {
+		t.Fatalf("expected merged queue length to match incoming queue, got %d entries", len(merged))
 	}
 }
 

@@ -284,10 +284,9 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		}
 		ctxTracks.SetPlayingQueue(transferState.Queue.IsPlayingQueue)
 		p.state.tracks = ctxTracks
-		p.state.player.Track = ctxTracks.CurrentTrack()
-		p.state.player.PrevTracks = ctxTracks.PrevTracks()
-		p.state.player.NextTracks = ctxTracks.NextTracks(ctx, nil)
-		p.state.player.Index = ctxTracks.Index()
+		p.syncPlayerTrackState(ctx, ctxTracks, nil)
+		p.invalidateQueueDerivation(true)
+		p.resetQueueMetaForContext(strings.TrimSpace(p.state.player.ContextUri))
 		if err := p.loadCurrentTrack(ctx, pause, true); err != nil {
 			return fmt.Errorf("failed loading current track (transfer): %w", err)
 		}
