@@ -6,18 +6,6 @@ import (
 	connectpb "github.com/devgianlu/go-librespot/proto/spotify/connectstate"
 )
 
-func TestShouldSkipPlayedShuffledTrack(t *testing.T) {
-	if shouldSkipPlayedShuffledTrack(false, true) {
-		t.Fatal("expected played tracks to remain visible for full-context queue")
-	}
-	if shouldSkipPlayedShuffledTrack(true, true) {
-		t.Fatal("expected played tracks to remain visible when repeat-context is on")
-	}
-	if shouldSkipPlayedShuffledTrack(false, false) {
-		t.Fatal("expected unplayed tracks to remain visible")
-	}
-}
-
 func TestOrderedQueueFromCurrentWrapsContextWhenEnabled(t *testing.T) {
 	all := []*connectpb.ProvidedTrack{
 		{Uri: "spotify:track:a"},

@@ -92,7 +92,7 @@ func (p *AppPlayer) derivedQueueFromTrackList() ([]PlaybackStateQueueEntry, bool
 		return nil, false, false
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(p.ownerContext(), 8*time.Second)
 	defer cancel()
 
 	all := p.state.tracks.AllTracks(ctx)
@@ -205,7 +205,7 @@ func (p *AppPlayer) derivedQueueFromShuffledTrackList() ([]PlaybackStateQueueEnt
 		return providedTracksToQueueEntries(p, outTracks), false, true
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(p.ownerContext(), 8*time.Second)
 	defer cancel()
 	all := p.state.tracks.AllTracks(ctx)
 	if len(all) == 0 {
@@ -230,10 +230,6 @@ func (p *AppPlayer) derivedQueueFromShuffledTrackList() ([]PlaybackStateQueueEnt
 		outTracks = append(outTracks, t)
 	}
 	return providedTracksToQueueEntries(p, outTracks), hasMore, true
-}
-
-func shouldSkipPlayedShuffledTrack(_ bool, alreadyPlayed bool) bool {
-	return false
 }
 
 func providedTracksToQueueEntries(p *AppPlayer, tracks []*connectpb.ProvidedTrack) []PlaybackStateQueueEntry {

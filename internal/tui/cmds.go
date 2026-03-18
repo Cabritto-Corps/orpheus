@@ -23,7 +23,7 @@ const (
 	statusQueueCacheTTL        = 120 * time.Millisecond
 )
 
-var statusQueueCache struct {
+type statusQueueSnapshotCache struct {
 	mu     sync.RWMutex
 	at     time.Time
 	status *spotify.PlaybackStatus
@@ -31,7 +31,12 @@ var statusQueueCache struct {
 	valid  bool
 }
 
+func newStatusQueueSnapshotCache() *statusQueueSnapshotCache {
+	return &statusQueueSnapshotCache{}
+}
+
 type pollMsg struct {
+	token        uint64
 	status       *spotify.PlaybackStatus
 	queue        []spotify.QueueItem
 	queueFetched bool
@@ -40,6 +45,7 @@ type pollMsg struct {
 }
 
 type actionMsg struct {
+	token     uint64
 	action    string
 	err       error
 	rollback  *spotify.PlaybackStatus
@@ -47,6 +53,7 @@ type actionMsg struct {
 }
 
 type actionReconcileMsg struct {
+	token        uint64
 	err          error
 	rollback     *spotify.PlaybackStatus
 	status       *spotify.PlaybackStatus
@@ -97,6 +104,7 @@ type navDebounceMsg struct {
 }
 
 type playbackStateMsg struct {
+	seq          uint64
 	status       *spotify.PlaybackStatus
 	queue        []spotify.QueueItem
 	queueHasMore bool
@@ -104,14 +112,16 @@ type playbackStateMsg struct {
 
 func StartPlaybackStateListener(playbackStateCh <-chan *librespot.PlaybackStateUpdate, send func(tea.Msg), ctx context.Context) {
 	go func() {
+		var seq uint64
 		for {
 			select {
 			case u := <-playbackStateCh:
 				if u == nil {
 					continue
 				}
+				seq++
 				status, queue, queueHasMore := PlaybackStateFromLibrespot(u)
-				send(playbackStateMsg{status: status, queue: queue, queueHasMore: queueHasMore})
+				send(playbackStateMsg{seq: seq, status: status, queue: queue, queueHasMore: queueHasMore})
 			case <-ctx.Done():
 				return
 			}
@@ -168,19 +178,19 @@ func cloneQueueSnapshot(queue []spotify.QueueItem) []spotify.QueueItem {
 	return cp
 }
 
-func fetchStatusAndQueue(ctx context.Context, svc *spotify.Service, allowCached bool) (*spotify.PlaybackStatus, []spotify.QueueItem, error, error) {
+func fetchStatusAndQueue(ctx context.Context, svc *spotify.Service, allowCached bool, cache *statusQueueSnapshotCache) (*spotify.PlaybackStatus, []spotify.QueueItem, error, error) {
 	if svc == nil {
 		return nil, nil, nil, nil
 	}
-	if allowCached {
-		statusQueueCache.mu.RLock()
-		if statusQueueCache.valid && time.Since(statusQueueCache.at) <= statusQueueCacheTTL {
-			status := cloneStatus(statusQueueCache.status)
-			queue := cloneQueueSnapshot(statusQueueCache.queue)
-			statusQueueCache.mu.RUnlock()
+	if allowCached && cache != nil {
+		cache.mu.RLock()
+		if cache.valid && time.Since(cache.at) <= statusQueueCacheTTL {
+			status := cloneStatus(cache.status)
+			queue := cloneQueueSnapshot(cache.queue)
+			cache.mu.RUnlock()
 			return status, queue, nil, nil
 		}
-		statusQueueCache.mu.RUnlock()
+		cache.mu.RUnlock()
 	}
 	var status *spotify.PlaybackStatus
 	var statusErr error
@@ -197,21 +207,27 @@ func fetchStatusAndQueue(ctx context.Context, svc *spotify.Service, allowCached 
 		queue, queueErr = svc.GetQueue(ctx)
 	}()
 	wg.Wait()
-	if statusErr == nil && queueErr == nil {
-		statusQueueCache.mu.Lock()
-		statusQueueCache.status = cloneStatus(status)
-		statusQueueCache.queue = cloneQueueSnapshot(queue)
-		statusQueueCache.at = time.Now()
-		statusQueueCache.valid = true
-		statusQueueCache.mu.Unlock()
+	if statusErr == nil && queueErr == nil && cache != nil {
+		cache.mu.Lock()
+		cache.status = cloneStatus(status)
+		cache.queue = cloneQueueSnapshot(queue)
+		cache.at = time.Now()
+		cache.valid = true
+		cache.mu.Unlock()
 	}
 	return status, queue, statusErr, queueErr
 }
 
-func (m model) pollCmd(fetchQueue bool) tea.Cmd {
+func (m *model) nextStateFetchToken() uint64 {
+	m.stateFetchToken++
+	return m.stateFetchToken
+}
+
+func (m *model) pollCmd(fetchQueue bool) tea.Cmd {
 	if m.tuiCmdCh != nil {
 		return nil
 	}
+	token := m.nextStateFetchToken()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, pollRequestTimeout)
 		defer cancel()
@@ -219,39 +235,41 @@ func (m model) pollCmd(fetchQueue bool) tea.Cmd {
 		if !fetchQueue {
 			status, err := m.service.Status(ctx)
 			if err != nil {
-				return pollMsg{err: err}
+				return pollMsg{token: token, err: err}
 			}
-			return pollMsg{status: status}
+			return pollMsg{token: token, status: status}
 		}
-		status, queue, statusErr, queueErr := fetchStatusAndQueue(ctx, m.service, true)
+		status, queue, statusErr, queueErr := fetchStatusAndQueue(ctx, m.service, true, m.statusQueueCache)
 
 		if statusErr != nil {
-			return pollMsg{err: statusErr}
+			return pollMsg{token: token, err: statusErr}
 		}
 		if queueErr != nil {
-			return pollMsg{status: status, queueErr: queueErr}
+			return pollMsg{token: token, status: status, queueErr: queueErr}
 		}
-		return pollMsg{status: status, queue: queue, queueFetched: true}
+		return pollMsg{token: token, status: status, queue: queue, queueFetched: true}
 	}
 }
 
-func (m model) actionCmd(fn func(context.Context) error, action string) tea.Cmd {
+func (m *model) actionCmd(fn func(context.Context) error, action string) tea.Cmd {
+	token := m.nextStateFetchToken()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, actionRequestTimeout)
 		defer cancel()
-		return actionMsg{action: action, err: fn(ctx)}
+		return actionMsg{token: token, action: action, err: fn(ctx)}
 	}
 }
 
-func (m model) actionWithReconcileCmd(fn func(context.Context) error, rollback *spotify.PlaybackStatus) tea.Cmd {
+func (m *model) actionWithReconcileCmd(fn func(context.Context) error, rollback *spotify.PlaybackStatus) tea.Cmd {
+	token := m.nextStateFetchToken()
 	if m.service == nil {
 		return func() tea.Msg {
 			ctx, cancel := context.WithTimeout(m.ctx, actionRequestTimeout)
 			defer cancel()
 			if err := fn(ctx); err != nil {
-				return actionReconcileMsg{err: err, rollback: rollback}
+				return actionReconcileMsg{token: token, err: err, rollback: rollback}
 			}
-			return actionReconcileMsg{}
+			return actionReconcileMsg{token: token}
 		}
 	}
 	svc := m.service
@@ -260,35 +278,36 @@ func (m model) actionWithReconcileCmd(fn func(context.Context) error, rollback *
 		defer cancel()
 
 		if err := fn(ctx); err != nil {
-			return actionReconcileMsg{err: err, rollback: rollback}
+			return actionReconcileMsg{token: token, err: err, rollback: rollback}
 		}
 
-		status, queue, statusErr, queueErr := fetchStatusAndQueue(ctx, svc, false)
+		status, queue, statusErr, queueErr := fetchStatusAndQueue(ctx, svc, false, m.statusQueueCache)
 		if statusErr != nil {
-			return actionReconcileMsg{}
+			return actionReconcileMsg{token: token}
 		}
 		if queueErr != nil {
-			return actionReconcileMsg{status: status, queueFetched: false}
+			return actionReconcileMsg{token: token, status: status, queueFetched: false}
 		}
-		return actionReconcileMsg{status: status, queue: queue, queueFetched: true}
+		return actionReconcileMsg{token: token, status: status, queue: queue, queueFetched: true}
 	}
 }
 
-func (m model) reconcileCmd() tea.Cmd {
+func (m *model) reconcileCmd() tea.Cmd {
 	if m.service == nil {
 		return nil
 	}
+	token := m.nextStateFetchToken()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, actionRequestTimeout)
 		defer cancel()
-		status, queue, statusErr, queueErr := fetchStatusAndQueue(ctx, m.service, true)
+		status, queue, statusErr, queueErr := fetchStatusAndQueue(ctx, m.service, true, m.statusQueueCache)
 		if statusErr != nil {
-			return actionReconcileMsg{err: statusErr}
+			return actionReconcileMsg{token: token, err: statusErr}
 		}
 		if queueErr != nil {
-			return actionReconcileMsg{status: status, queue: nil, queueFetched: false}
+			return actionReconcileMsg{token: token, status: status, queue: nil, queueFetched: false}
 		}
-		return actionReconcileMsg{status: status, queue: queue, queueFetched: true}
+		return actionReconcileMsg{token: token, status: status, queue: queue, queueFetched: true}
 	}
 }
 

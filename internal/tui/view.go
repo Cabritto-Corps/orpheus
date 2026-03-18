@@ -618,11 +618,6 @@ func (m model) bodyLayout() bodyLayout {
 	}
 }
 
-func (m model) splitWidths() (leftW, rightW int) {
-	layout := m.bodyLayout()
-	return layout.leftW, layout.rightW
-}
-
 func (m model) currentCoverSizes() [][2]int {
 	if m.width <= 0 || m.height <= 0 {
 		return nil

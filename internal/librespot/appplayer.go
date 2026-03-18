@@ -31,6 +31,7 @@ const volumeUpdateDebounce = 100 * time.Millisecond
 type AppPlayer struct {
 	runtime *Runtime
 	sess    *session.Session
+	baseCtx context.Context
 
 	stop   chan struct{}
 	logout chan *AppPlayer
@@ -64,9 +65,6 @@ type AppPlayer struct {
 	queueMetaCache *cache.LRU[string, PlaybackStateQueueEntry]
 	queueMetaMu    sync.RWMutex
 
-	playedTrackURIs map[string]struct{}
-	playedTrackMu   sync.RWMutex
-
 	queueResolveMu       sync.Mutex
 	queueResolveInFlight bool
 	namePreloadContext   string
@@ -80,6 +78,21 @@ type AppPlayer struct {
 	derivedQueueEntries []PlaybackStateQueueEntry
 	derivedQueueHasMore bool
 	derivedQueueValid   bool
+	advanceInFlight     bool
+}
+
+func (p *AppPlayer) setRunContext(ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	p.baseCtx = ctx
+}
+
+func (p *AppPlayer) ownerContext() context.Context {
+	if p == nil || p.baseCtx == nil {
+		return context.Background()
+	}
+	return p.baseCtx
 }
 
 type prefetchJob struct {
@@ -441,6 +454,7 @@ func (p *AppPlayer) Close() {
 }
 
 func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
+	p.setRunContext(ctx)
 	go p.runPrefetchWorker(ctx)
 	err := p.sess.Dealer().Connect(ctx)
 	if err != nil {
@@ -454,6 +468,8 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 	playerRecv := p.player.Receive()
 	volumeTimer := time.NewTimer(time.Minute)
 	volumeTimer.Stop()
+	endTransitionGuardTicker := time.NewTicker(endTransitionGuardInterval)
+	defer endTransitionGuardTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -508,6 +524,8 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			volumeTimer.Reset(volumeUpdateDebounce)
 		case <-volumeTimer.C:
 			p.volumeUpdated(ctx)
+		case <-endTransitionGuardTicker.C:
+			p.maybeAdvanceOnTrackEndGuard()
 		}
 	}
 }

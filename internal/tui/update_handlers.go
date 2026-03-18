@@ -35,6 +35,11 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	m.interpolatePlaybackProgress(uiTickInterval)
 	inputCmd := m.pumpInputExecutor()
+	var startupCoverCmd tea.Cmd
+	if m.startupCoverBoostTicks > 0 {
+		m.startupCoverBoostTicks--
+		startupCoverCmd = m.drainCoverQueueCmd(coverQueueDrainBatch * 3)
+	}
 
 	m.coverRefreshTick++
 	m.playerCoverRefreshTick++
@@ -70,10 +75,10 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	}
 
 	if m.tuiCmdCh != nil {
-		return m, tea.Batch(m.tickCmd(), inputCmd, coverCmd, playerCoverCmd, libraryCoverCmd, metadataCmd)
+		return m, tea.Batch(m.tickCmd(), inputCmd, startupCoverCmd, coverCmd, playerCoverCmd, libraryCoverCmd, metadataCmd)
 	}
 	if m.activeTab != tabPlayer {
-		return m, tea.Batch(m.tickCmd(), inputCmd, coverCmd, playerCoverCmd, libraryCoverCmd, metadataCmd)
+		return m, tea.Batch(m.tickCmd(), inputCmd, startupCoverCmd, coverCmd, playerCoverCmd, libraryCoverCmd, metadataCmd)
 	}
 	interval := m.pollInterval
 	if interval <= 0 {
@@ -86,12 +91,12 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	}
 	m.pollElapsed += uiTickInterval
 	if m.pollElapsed < interval {
-		return m, tea.Batch(m.tickCmd(), inputCmd, playerCoverCmd, libraryCoverCmd, metadataCmd)
+		return m, tea.Batch(m.tickCmd(), inputCmd, startupCoverCmd, playerCoverCmd, libraryCoverCmd, metadataCmd)
 	}
 	m.pollElapsed = 0
 	m.pollTick++
 	pollQueue := m.pollTick%queuePollEvery == 0
-	return m, tea.Batch(m.pollCmd(pollQueue), m.tickCmd(), inputCmd, playerCoverCmd, libraryCoverCmd, metadataCmd)
+	return m, tea.Batch(m.pollCmd(pollQueue), m.tickCmd(), inputCmd, startupCoverCmd, playerCoverCmd, libraryCoverCmd, metadataCmd)
 }
 
 func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
@@ -202,8 +207,8 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(
 		m.loadImageCmd(playlistPreviewURL, true),
 		m.loadImageCmd(albumPreviewURL, true),
-		m.loadLibraryCoversCmd(0),
 		m.loadVisiblePlaylistCoversCmd(),
+		m.loadLibraryCoversCmd(libraryCoverRefreshBatch*4),
 		m.queueMissingLibraryImageResolvesCmd(libraryCoverRefreshBatch),
 		m.maybeLoadMorePlaylistsCmd(m.playlistList),
 	)
@@ -352,6 +357,9 @@ func (m model) handleCoverImageResolvedMsg(msg coverImageResolvedMsg) (tea.Model
 }
 
 func (m model) handleActionMsg(msg actionMsg) (tea.Model, tea.Cmd) {
+	if m.isStaleStateFetchToken(msg.token) {
+		return m, nil
+	}
 	m.actionInFlight = false
 	m.syncExecutorState()
 	if msg.err != nil {

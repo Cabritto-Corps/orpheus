@@ -456,30 +456,6 @@ func mergeQueueNames(prev, next []spotify.QueueItem, cache *cache.TTL[string, sp
 	return out
 }
 
-const librespotQueueWindow = 32
-
-func mergeQueueWithRest(prev, next []spotify.QueueItem, cache *cache.TTL[string, spotify.QueueItem], preserveTail bool) []spotify.QueueItem {
-	merged := mergeQueueNames(prev, next, cache)
-	if !preserveTail || len(next) > librespotQueueWindow || len(prev) <= librespotQueueWindow {
-		return merged
-	}
-	seen := make(map[string]struct{}, len(merged))
-	for _, q := range merged {
-		if q.ID != "" {
-			seen[normalizeQueueID(q.ID)] = struct{}{}
-		}
-	}
-	for i := librespotQueueWindow; i < len(prev); i++ {
-		if prev[i].ID != "" {
-			if _, dup := seen[normalizeQueueID(prev[i].ID)]; dup {
-				continue
-			}
-		}
-		merged = append(merged, prev[i])
-	}
-	return merged
-}
-
 func (m *model) rebuildPreloadedFromQueue() {
 	if m.preloadedItemIDs == nil {
 		m.preloadedItemIDs = make(map[string]struct{}, len(m.queue))

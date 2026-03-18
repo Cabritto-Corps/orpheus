@@ -19,6 +19,7 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 	p := &AppPlayer{
 		runtime:         runtime,
 		sess:            sess,
+		baseCtx:         ctx,
 		stop:            make(chan struct{}, 1),
 		logout:          make(chan *AppPlayer, 1),
 		countryCode:     countryCode,
@@ -26,7 +27,6 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 		prefetchJobs:    make(chan prefetchJob, 8),
 		prefetchDone:    make(chan prefetchResult, 8),
 		queueMetaCache:  cache.NewLRU[string, PlaybackStateQueueEntry](8192),
-		playedTrackURIs: make(map[string]struct{}),
 	}
 	p.prefetchTimer = time.NewTimer(math.MaxInt64)
 	p.prefetchTimer.Stop()

@@ -61,7 +61,11 @@ func (p *AppPlayer) clearSecondaryStream() {
 	p.secondaryStream = nil
 	if p.player != nil {
 		func() {
-			defer func() { _ = recover() }()
+			defer func() {
+				if r := recover(); r != nil && p.runtime != nil && p.runtime.Log != nil {
+					p.runtime.Log.WithField("panic", r).Warn("recovered while clearing secondary stream")
+				}
+			}()
 			p.player.SetSecondaryStream(nil)
 		}()
 	}
@@ -78,8 +82,24 @@ func (p *AppPlayer) resetPlaybackCaches(stopShuffleRefresh bool) {
 }
 
 func (p *AppPlayer) resetTrackTransitionPosition() {
+	p.setPlayerPositionAtNow(0)
+}
+
+func (p *AppPlayer) setPlayerPositionAtNow(position int64) {
+	if p == nil || p.state == nil || p.state.player == nil {
+		return
+	}
 	p.state.player.Timestamp = time.Now().UnixMilli()
-	p.state.player.PositionAsOfTimestamp = 0
+	p.state.player.PositionAsOfTimestamp = position
+}
+
+func (p *AppPlayer) setPlayerTransportState(playing, buffering, paused bool) {
+	if p == nil || p.state == nil || p.state.player == nil {
+		return
+	}
+	p.state.player.IsPlaying = playing
+	p.state.player.IsBuffering = buffering
+	p.state.setPaused(paused)
 }
 
 func (p *AppPlayer) currentPositionMs() int64 {
@@ -105,6 +125,8 @@ const (
 	shuffleCacheRefreshDelay   = 2 * time.Second
 	prefetchLeadTime           = 30 * time.Second
 	prefetchImmediateThreshold = 10 * time.Second
+	endTransitionGuardInterval = 500 * time.Millisecond
+	endTransitionGuardLeewayMs = int64(250)
 )
 
 func stopAndResetTimer(t *time.Timer, d time.Duration) {
@@ -214,7 +236,7 @@ func (p *AppPlayer) runPrefetchWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case job := <-p.prefetchJobs:
-			jobCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			jobCtx, cancel := context.WithTimeout(p.ownerContext(), 30*time.Second)
 			stream, err := p.player.NewStream(jobCtx, p.runtime.Client, job.target, p.runtime.Cfg.Bitrate, 0)
 			cancel()
 			p.prefetchDone <- prefetchResult{gen: job.gen, nextURI: job.nextURI, target: job.target, stream: stream, err: err}
@@ -258,7 +280,11 @@ func (p *AppPlayer) handlePrefetchResult(res prefetchResult) {
 	if res.nextURI == res.target.Uri() && p.secondaryStream == nil {
 		p.secondaryStream = res.stream
 		func() {
-			defer func() { _ = recover() }()
+			defer func() {
+				if r := recover(); r != nil && p.runtime != nil && p.runtime.Log != nil {
+					p.runtime.Log.WithField("panic", r).Warn("recovered while setting secondary stream")
+				}
+			}()
 			p.player.SetSecondaryStream(res.stream.Source)
 		}()
 	} else {
@@ -312,6 +338,47 @@ func (p *AppPlayer) logEndOfTrackInvariant() {
 	}
 }
 
+func (p *AppPlayer) runAdvanceNextTransition(source string, forceNext, dropTransition bool) {
+	if p.advanceInFlight {
+		p.runtime.Log.WithField("source", source).Debug("ignoring transition while another transition is in flight")
+		return
+	}
+	p.advanceInFlight = true
+	defer func() { p.advanceInFlight = false }()
+	transitionCtx, transitionCancel := context.WithTimeout(p.ownerContext(), 30*time.Second)
+	hasNextTrack, err := p.advanceNext(transitionCtx, forceNext, dropTransition)
+	transitionCancel()
+	if err != nil {
+		p.runtime.Log.WithError(err).WithField("source", source).Error("failed advancing to next track")
+	}
+	if !hasNextTrack {
+		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeStopped, Data: ApiEventDataStopped{PlayOrigin: p.state.playOrigin()}})
+	}
+	p.emitPlaybackState()
+}
+
+func (p *AppPlayer) maybeAdvanceOnTrackEndGuard() {
+	if p == nil || p.state == nil || p.state.player == nil || p.primaryStream == nil {
+		return
+	}
+	if p.state.player.IsPaused || !p.state.player.IsPlaying {
+		return
+	}
+	duration := int64(p.primaryStream.Media.Duration())
+	if duration <= 0 {
+		return
+	}
+	position := p.currentPositionMs()
+	if position+endTransitionGuardLeewayMs < duration {
+		return
+	}
+	dropTransition := p.state.player.Options != nil && p.state.player.Options.RepeatingTrack
+	p.runtime.Log.WithField("position_ms", position).
+		WithField("duration_ms", duration).
+		Debug("end-of-track guard triggered transition")
+	p.runAdvanceNextTransition("end_guard", false, dropTransition)
+}
+
 func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -348,16 +415,7 @@ func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
 			p.state.player != nil &&
 			p.state.player.Options != nil &&
 			p.state.player.Options.RepeatingTrack
-		transitionCtx, transitionCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		hasNextTrack, err := p.advanceNext(transitionCtx, false, dropTransition)
-		transitionCancel()
-		if err != nil {
-			p.runtime.Log.WithError(err).Error("failed advancing to next track")
-		}
-		if !hasNextTrack {
-			p.runtime.Emit(&ApiEvent{Type: ApiEventTypeStopped, Data: ApiEventDataStopped{PlayOrigin: p.state.playOrigin()}})
-		}
-		p.emitPlaybackState()
+		p.runAdvanceNextTransition("player_not_playing", false, dropTransition)
 	case player.EventTypeStop:
 		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeStopped, Data: ApiEventDataStopped{PlayOrigin: p.state.playOrigin()}})
 		p.emitPlaybackState()
@@ -440,20 +498,17 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	if spotId.Type() != golibrespot.SpotifyIdTypeTrack && spotId.Type() != golibrespot.SpotifyIdTypeEpisode {
 		return fmt.Errorf("unsupported spotify type: %s", spotId.Type())
 	}
-	trackPosition := p.state.trackPosition()
 	p.state.updateTimestamp()
 	if p.state.player.Duration > 0 && p.state.player.PositionAsOfTimestamp > p.state.player.Duration {
 		p.state.player.PositionAsOfTimestamp = p.state.player.Duration
 	}
-	trackPosition = p.state.trackPosition()
+	trackPosition := p.state.trackPosition()
 	if p.state.player.Duration > 0 && trackPosition >= p.state.player.Duration {
 		trackPosition = 0
 		p.state.player.PositionAsOfTimestamp = 0
 		p.state.player.Timestamp = time.Now().UnixMilli()
 	}
-	p.state.player.IsPlaying = true
-	p.state.player.IsBuffering = true
-	p.state.player.IsPaused = paused
+	p.setPlayerTransportState(true, true, paused)
 	p.state.player.PlaybackSpeed = 0
 	p.updateState(ctx)
 	p.runtime.Emit(&ApiEvent{Type: ApiEventTypeWillPlay, Data: ApiEventDataWillPlay{ContextUri: p.state.player.ContextUri, Uri: spotId.Uri(), PlayOrigin: p.state.playOrigin()}})
@@ -483,6 +538,9 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 				p.primaryStream, err = p.player.NewStream(ctx, p.runtime.Client, *spotId, p.runtime.Cfg.Bitrate, trackPosition)
 			}()
 			if panicked != nil {
+				if p.runtime != nil && p.runtime.Log != nil {
+					p.runtime.Log.WithField("panic", panicked).WithField("uri", spotId.Uri()).Error("recovered while creating primary stream")
+				}
 				return fmt.Errorf("player unavailable (create stream): %v", panicked)
 			}
 			if err != nil {
@@ -494,6 +552,9 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
+				if p.runtime != nil && p.runtime.Log != nil {
+					p.runtime.Log.WithField("panic", r).WithField("uri", spotId.Uri()).Error("recovered while setting primary stream")
+				}
 				setPrimaryErr = fmt.Errorf("player unavailable: %v", r)
 			}
 		}()
@@ -514,9 +575,7 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	if p.state.player.Duration > 0 && p.state.player.PositionAsOfTimestamp > p.state.player.Duration {
 		p.state.player.PositionAsOfTimestamp = p.state.player.Duration
 	}
-	p.state.player.IsPlaying = true
-	p.state.player.IsBuffering = false
-	p.state.setPaused(paused)
+	p.setPlayerTransportState(true, false, paused)
 	p.updateState(ctx)
 	p.schedulePrefetchNext()
 	p.runtime.Emit(&ApiEvent{Type: ApiEventTypeMetadata, Data: ApiEventDataMetadata(*p.newApiResponseStatusTrack(p.primaryStream.Media, trackPosition))})
@@ -621,9 +680,8 @@ func (p *AppPlayer) play(ctx context.Context) error {
 	}
 	streamPos := p.currentPositionMs()
 	p.runtime.Log.Debugf("resume track at %dms", streamPos)
-	p.state.player.Timestamp = time.Now().UnixMilli()
-	p.state.player.PositionAsOfTimestamp = streamPos
-	p.state.setPaused(false)
+	p.setPlayerPositionAtNow(streamPos)
+	p.setPlayerTransportState(true, false, false)
 	p.updateState(ctx)
 	p.schedulePrefetchNext()
 	p.emitPlaybackState()
@@ -639,9 +697,8 @@ func (p *AppPlayer) pause(ctx context.Context) error {
 	if err := p.player.Pause(); err != nil {
 		return fmt.Errorf("failed pausing playback: %w", err)
 	}
-	p.state.player.Timestamp = time.Now().UnixMilli()
-	p.state.player.PositionAsOfTimestamp = streamPos
-	p.state.setPaused(true)
+	p.setPlayerPositionAtNow(streamPos)
+	p.setPlayerTransportState(true, false, true)
 	p.updateState(ctx)
 	p.schedulePrefetchNext()
 	p.emitPlaybackState()
@@ -672,8 +729,7 @@ func (p *AppPlayer) seek(ctx context.Context, position int64) error {
 	if err := p.player.SeekMs(position); err != nil {
 		return err
 	}
-	p.state.player.Timestamp = time.Now().UnixMilli()
-	p.state.player.PositionAsOfTimestamp = position
+	p.setPlayerPositionAtNow(position)
 	p.updateState(ctx)
 	p.schedulePrefetchNext()
 	p.sess.Events().OnPlayerSeek(p.primaryStream, oldPosition, position)
@@ -744,9 +800,6 @@ func (p *AppPlayer) selectAdvanceNextTarget(ctx context.Context, forceNext bool)
 	if !forceNext && repeatingTrack {
 		selection.hasNextTrack = true
 		return selection
-	}
-	if p.state.player.Track != nil && p.state.player.Track.Uri != "" {
-		p.markPlayedTrack(p.state.player.Track.Uid, p.state.player.Track.Uri)
 	}
 	selection.hasNextTrack = p.state.tracks.GoNext(ctx)
 	selection.trackChanged = true
@@ -878,8 +931,6 @@ func (p *AppPlayer) apiVolume() uint32 {
 func (p *AppPlayer) updateVolume(newVal uint32) {
 	if newVal > player.MaxStateVolume {
 		newVal = player.MaxStateVolume
-	} else if newVal < 0 {
-		newVal = 0
 	}
 	p.runtime.Log.Debugf("update volume requested to %d/%d", newVal, player.MaxStateVolume)
 	p.player.SetVolume(newVal)

@@ -94,13 +94,6 @@ var (
 	styleQueueHeader = lipgloss.NewStyle().
 				Foreground(colorMutedBlue)
 
-	styleQueueCurrentTrack = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(colorBlue)
-
-	styleQueueCurrentArtist = lipgloss.NewStyle().
-				Foreground(colorBlueLight)
-
 	styleQueueIndex = lipgloss.NewStyle().
 			Foreground(colorMutedBlue)
 
