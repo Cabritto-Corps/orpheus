@@ -200,7 +200,7 @@ func (m *model) clearVolumeSettleTarget(observed int) {
 }
 
 const (
-	seekSettleToleranceMS           = 900
+	seekSettleToleranceMS            = 900
 	seekBarEndBufferMS               = 250
 	progressRewindThresholdMS        = 5000
 	transportTransitionProgressMaxMS = 2000
@@ -327,9 +327,8 @@ func (m *model) shouldApplyIncomingQueue(incomingTrack string) bool {
 	return true
 }
 
-func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool, shuffleActive bool) {
-	preserveTail := !shuffleActive
-	m.queue = mergeQueueWithRest(m.queue, incoming, m.trackCache, preserveTail)
+func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool, _ bool) {
+	m.queue = mergeQueueNames(m.queue, incoming, m.trackCache)
 	if updateStable {
 		m.stableQueueLen = len(m.queue)
 	}
@@ -455,30 +454,6 @@ func mergeQueueNames(prev, next []spotify.QueueItem, cache *cache.TTL[string, sp
 		}
 	}
 	return out
-}
-
-const librespotQueueWindow = 32
-
-func mergeQueueWithRest(prev, next []spotify.QueueItem, cache *cache.TTL[string, spotify.QueueItem], preserveTail bool) []spotify.QueueItem {
-	merged := mergeQueueNames(prev, next, cache)
-	if !preserveTail || len(next) > librespotQueueWindow || len(prev) <= librespotQueueWindow {
-		return merged
-	}
-	seen := make(map[string]struct{}, len(merged))
-	for _, q := range merged {
-		if q.ID != "" {
-			seen[normalizeQueueID(q.ID)] = struct{}{}
-		}
-	}
-	for i := librespotQueueWindow; i < len(prev); i++ {
-		if prev[i].ID != "" {
-			if _, dup := seen[normalizeQueueID(prev[i].ID)]; dup {
-				continue
-			}
-		}
-		merged = append(merged, prev[i])
-	}
-	return merged
 }
 
 func (m *model) rebuildPreloadedFromQueue() {

@@ -92,7 +92,7 @@ func (p *AppPlayer) derivedQueueFromTrackList() ([]PlaybackStateQueueEntry, bool
 		return nil, false, false
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(p.ownerContext(), 8*time.Second)
 	defer cancel()
 
 	all := p.state.tracks.AllTracks(ctx)
@@ -103,6 +103,11 @@ func (p *AppPlayer) derivedQueueFromTrackList() ([]PlaybackStateQueueEntry, bool
 	currentUID := strings.TrimSpace(p.state.player.Track.Uid)
 	currentID := normalizeSpotifyID(p.state.player.Track.Uri)
 	currentIdx := -1
+	if p.state.player.Index != nil {
+		if idx := int(p.state.player.Index.GetTrack()); idx >= 0 && idx < len(all) {
+			currentIdx = idx
+		}
+	}
 	if currentUID != "" {
 		for i, t := range all {
 			if strings.TrimSpace(t.Uid) == currentUID {
@@ -123,13 +128,26 @@ func (p *AppPlayer) derivedQueueFromTrackList() ([]PlaybackStateQueueEntry, bool
 		return nil, false, false
 	}
 
-	next := all[currentIdx+1:]
+	repeatContext := p.state.player.Options != nil && p.state.player.Options.RepeatingContext
+	ordered, hasMore := orderedQueueFromCurrent(all, currentIdx, queueOverrideMaxTracks, repeatContext)
+	return providedTracksToQueueEntries(p, ordered), hasMore, true
+}
+
+func orderedQueueFromCurrent(all []*connectpb.ProvidedTrack, currentIdx int, maxTracks int, wrap bool) ([]*connectpb.ProvidedTrack, bool) {
+	if len(all) == 0 || currentIdx < 0 || currentIdx >= len(all) {
+		return nil, false
+	}
+	ordered := make([]*connectpb.ProvidedTrack, 0, len(all))
+	ordered = append(ordered, all[currentIdx:]...)
+	if wrap && currentIdx > 0 {
+		ordered = append(ordered, all[:currentIdx]...)
+	}
 	hasMore := false
-	if len(next) > queueOverrideMaxTracks {
-		next = next[:queueOverrideMaxTracks]
+	if maxTracks > 0 && len(ordered) > maxTracks {
+		ordered = ordered[:maxTracks]
 		hasMore = true
 	}
-	return providedTracksToQueueEntries(p, next), hasMore, true
+	return ordered, hasMore
 }
 
 func trackQueueKey(uid, uri string) string {
@@ -156,8 +174,6 @@ func (p *AppPlayer) derivedQueueFromShuffledTrackList() ([]PlaybackStateQueueEnt
 			seen[key] = struct{}{}
 		}
 	}
-	isPlayed := func(uri string) bool { return p.isPlayedTrack(uri) }
-	repeatContext := p.state.player.Options != nil && p.state.player.Options.RepeatingContext
 
 	for _, t := range p.state.player.PrevTracks {
 		if t == nil {
@@ -171,9 +187,6 @@ func (p *AppPlayer) derivedQueueFromShuffledTrackList() ([]PlaybackStateQueueEnt
 
 	for _, t := range p.state.player.NextTracks {
 		if t == nil {
-			continue
-		}
-		if shouldSkipPlayedShuffledTrack(repeatContext, isPlayed(t.Uri)) {
 			continue
 		}
 		if key := trackQueueKey(t.Uid, t.Uri); key != "" {
@@ -192,7 +205,7 @@ func (p *AppPlayer) derivedQueueFromShuffledTrackList() ([]PlaybackStateQueueEnt
 		return providedTracksToQueueEntries(p, outTracks), false, true
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(p.ownerContext(), 8*time.Second)
 	defer cancel()
 	all := p.state.tracks.AllTracks(ctx)
 	if len(all) == 0 {
@@ -202,9 +215,6 @@ func (p *AppPlayer) derivedQueueFromShuffledTrackList() ([]PlaybackStateQueueEnt
 	hasMore := false
 	for _, t := range all {
 		if t == nil {
-			continue
-		}
-		if shouldSkipPlayedShuffledTrack(repeatContext, isPlayed(t.Uri)) {
 			continue
 		}
 		if key := trackQueueKey(t.Uid, t.Uri); key != "" {
@@ -220,10 +230,6 @@ func (p *AppPlayer) derivedQueueFromShuffledTrackList() ([]PlaybackStateQueueEnt
 		outTracks = append(outTracks, t)
 	}
 	return providedTracksToQueueEntries(p, outTracks), hasMore, true
-}
-
-func shouldSkipPlayedShuffledTrack(_ bool, alreadyPlayed bool) bool {
-	return alreadyPlayed
 }
 
 func providedTracksToQueueEntries(p *AppPlayer, tracks []*connectpb.ProvidedTrack) []PlaybackStateQueueEntry {

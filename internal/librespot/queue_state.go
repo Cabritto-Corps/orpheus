@@ -57,63 +57,8 @@ func (p *AppPlayer) resetQueueMetaForContext(contextKey string) {
 	p.bumpTrackStateVersion()
 }
 
-func (p *AppPlayer) resetPlayedTrackSet() {
-	p.playedTrackMu.Lock()
-	p.playedTrackURIs = make(map[string]struct{})
-	p.playedTrackMu.Unlock()
-}
-
-func (p *AppPlayer) invalidateQueueDerivation(resetPlayed bool) {
-	if resetPlayed {
-		p.resetPlayedTrackSet()
-	}
+func (p *AppPlayer) invalidateQueueDerivation(_ bool) {
 	p.invalidateDerivedQueueCache()
-}
-
-func (p *AppPlayer) markPlayedTrack(uri string) {
-	id := normalizeSpotifyID(uri)
-	if id == "" {
-		return
-	}
-	p.playedTrackMu.Lock()
-	if p.playedTrackURIs == nil {
-		p.playedTrackURIs = make(map[string]struct{})
-	}
-	p.playedTrackURIs[id] = struct{}{}
-	p.playedTrackMu.Unlock()
-}
-
-func (p *AppPlayer) seedPlayedTrackSetFromPlaybackWindow() {
-	if p == nil || p.state == nil || p.state.player == nil {
-		return
-	}
-	for _, t := range p.state.player.PrevTracks {
-		if t == nil {
-			continue
-		}
-		p.markPlayedTrack(t.Uri)
-	}
-	if p.state.player.Track != nil {
-		p.markPlayedTrack(p.state.player.Track.Uri)
-	}
-}
-
-func (p *AppPlayer) isPlayedTrack(uri string) bool {
-	id := normalizeSpotifyID(uri)
-	if id == "" {
-		return false
-	}
-	p.playedTrackMu.RLock()
-	_, ok := p.playedTrackURIs[id]
-	p.playedTrackMu.RUnlock()
-	return ok
-}
-
-func (p *AppPlayer) playedTrackCount() int {
-	p.playedTrackMu.RLock()
-	n := len(p.playedTrackURIs)
-	p.playedTrackMu.RUnlock()
-	return n
 }
 
 func (p *AppPlayer) bumpTrackStateVersion() {
@@ -131,7 +76,21 @@ func (p *AppPlayer) invalidateDerivedQueueCache() {
 }
 
 func (p *AppPlayer) currentDerivedQueueKey(shuffle bool) string {
-	return fmt.Sprintf("v:%d|shuffle:%t|played:%d", p.trackStateVersion.Load(), shuffle, p.playedTrackCount())
+	contextURI := ""
+	currentTrackID := ""
+	if p != nil && p.state != nil && p.state.player != nil {
+		contextURI = strings.TrimSpace(p.state.player.ContextUri)
+		if p.state.player.Track != nil {
+			currentTrackID = normalizeSpotifyID(p.state.player.Track.Uri)
+		}
+	}
+	return fmt.Sprintf(
+		"v:%d|shuffle:%t|ctx:%s|cur:%s",
+		p.trackStateVersion.Load(),
+		shuffle,
+		contextURI,
+		currentTrackID,
+	)
 }
 
 func (p *AppPlayer) getDerivedQueueCache(key string) ([]PlaybackStateQueueEntry, bool, bool) {
@@ -151,17 +110,6 @@ func (p *AppPlayer) setDerivedQueueCache(key string, entries []PlaybackStateQueu
 	p.derivedQueueHasMore = hasMore
 	p.derivedQueueValid = true
 	p.derivedQueueMu.Unlock()
-}
-
-func (p *AppPlayer) startQueueMetadataResolve() {
-	p.queueResolveMu.Lock()
-	if p.queueResolveInFlight {
-		p.queueResolveMu.Unlock()
-		return
-	}
-	p.queueResolveInFlight = true
-	p.queueResolveMu.Unlock()
-	go p.resolveQueueMetadataBatchAndEmit()
 }
 
 func (p *AppPlayer) shouldPreloadContextNames(contextKey string) (token uint64, ok bool) {
@@ -218,7 +166,7 @@ func (p *AppPlayer) preloadContextQueueMetadata(trackList *tracks.List, contextK
 	go func(token uint64, contextKey string, list *tracks.List) {
 		defer p.finishContextNamePreload(contextKey, token)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(p.ownerContext(), 20*time.Second)
 		defer cancel()
 
 		all := list.AllTracks(ctx)
@@ -290,8 +238,6 @@ func (p *AppPlayer) preloadContextQueueMetadata(trackList *tracks.List, contextK
 	}(token, strings.TrimSpace(contextKey), trackList)
 }
 
-const queueResolveBatchLimit = 32
-
 func (p *AppPlayer) resolveQueueEntry(ctx context.Context, uri string) (e PlaybackStateQueueEntry, ok bool) {
 	id := normalizeSpotifyID(uri)
 	if id == "" {
@@ -341,63 +287,3 @@ func (p *AppPlayer) resolveQueueEntry(ctx context.Context, uri string) (e Playba
 }
 
 const queueResolveConcurrency = 10
-
-func (p *AppPlayer) resolveQueueMetadataBatchAndEmit() {
-	defer func() {
-		p.queueResolveMu.Lock()
-		p.queueResolveInFlight = false
-		p.queueResolveMu.Unlock()
-	}()
-	if p.state == nil || p.state.player == nil {
-		return
-	}
-	var toResolve []string
-	seen := make(map[string]struct{}, queueResolveBatchLimit)
-	for _, t := range p.state.player.NextTracks {
-		id := normalizeSpotifyID(t.Uri)
-		if id == "" {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		if p.getCachedQueueMeta(id) != nil {
-			continue
-		}
-		toResolve = append(toResolve, t.Uri)
-		if len(toResolve) >= queueResolveBatchLimit {
-			break
-		}
-	}
-	if len(toResolve) == 0 {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	sem := make(chan struct{}, queueResolveConcurrency)
-	var wg sync.WaitGroup
-	var resolved atomic.Int32
-	for _, uri := range toResolve {
-		uri := uri
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				return
-			}
-			e, ok := p.resolveQueueEntry(ctx, uri)
-			if ok {
-				p.setCachedQueueMeta(e.ID, e)
-				resolved.Add(1)
-			}
-		}()
-	}
-	wg.Wait()
-	if resolved.Load() > 0 {
-		p.runtime.EmitPlaybackState(p.BuildPlaybackStateUpdate())
-	}
-}

@@ -64,6 +64,9 @@ type model struct {
 	libraryCoverRefreshTick int
 	libraryMetaRefreshTick  int
 	actionFastPollUntil     time.Time
+	stateFetchToken         uint64
+	lastPlaybackStateSeq    uint64
+	startupCoverBoostTicks  int
 
 	activeTab      tab
 	helpOpen       bool
@@ -86,7 +89,7 @@ type model struct {
 	pendingContextFrom           string
 	pendingContextFromAt         time.Time
 	transportTransitionPending   bool
-	transportTransitionFromTrack  string
+	transportTransitionFromTrack string
 	transportTransitionStartedAt time.Time
 	transportRecoveryPending     bool
 	transportStuckCount          int
@@ -118,6 +121,8 @@ type model struct {
 	albumList    list.Model
 
 	imgs *imgCache
+
+	statusQueueCache *statusQueueSnapshotCache
 
 	width     int
 	height    int
@@ -169,27 +174,29 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 	h := newHelp()
 
 	return model{
-		ctx:                 ctx,
-		catalog:             catalog,
-		service:             service,
-		deviceName:          cfg.DeviceName,
-		tuiCmdCh:            tuiCmdCh,
-		pollInterval:        cfg.PollInterval,
-		activeTab:           tabPlaylists,
-		playlistList:        browser,
-		albumList:           albums,
-		imgs:                newImgCache(),
-		preloadedItemIDs:    make(map[string]struct{}),
-		trackCache:          cache.NewTTL[string, spotify.QueueItem](4096, trackMetadataTTL),
-		cover:               newCoverManager(),
-		playlistsLoading:    true,
-		nerdFonts:           cfg.NerdFonts,
-		volDebouncePending:  -1,
-		seekDebouncePending: -1,
-		volSentTarget:       -1,
-		seekSentTarget:      -1,
-		help:                h,
-		keys:                newKeys(),
+		ctx:                    ctx,
+		catalog:                catalog,
+		service:                service,
+		deviceName:             cfg.DeviceName,
+		tuiCmdCh:               tuiCmdCh,
+		pollInterval:           cfg.PollInterval,
+		activeTab:              tabPlaylists,
+		playlistList:           browser,
+		albumList:              albums,
+		imgs:                   newImgCache(),
+		statusQueueCache:       newStatusQueueSnapshotCache(),
+		startupCoverBoostTicks: 20,
+		preloadedItemIDs:       make(map[string]struct{}),
+		trackCache:             cache.NewTTL[string, spotify.QueueItem](4096, trackMetadataTTL),
+		cover:                  newCoverManager(),
+		playlistsLoading:       true,
+		nerdFonts:              cfg.NerdFonts,
+		volDebouncePending:     -1,
+		seekDebouncePending:    -1,
+		volSentTarget:          -1,
+		seekSentTarget:         -1,
+		help:                   h,
+		keys:                   newKeys(),
 	}
 }
 
@@ -258,10 +265,7 @@ func (m model) needsImageURL(url string) bool {
 			return true
 		}
 	}
-	if m.libraryHasImageURL(url) {
-		return true
-	}
-	return false
+	return m.libraryHasImageURL(url)
 }
 
 func (m model) shouldForceKittyRedrawForLoadedURL(url string) bool {
@@ -341,11 +345,60 @@ func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		m.getCurrentUserIDCmd(),
+		m.pollCmd(true),
 		m.tickCmd(),
 	)
 }
 
+func (m model) isStaleStateFetchToken(token uint64) bool {
+	return token > 0 && token != m.stateFetchToken
+}
+
+func (m *model) acceptPlaybackStateSeq(seq uint64) bool {
+	if seq == 0 {
+		return true
+	}
+	if seq <= m.lastPlaybackStateSeq {
+		return false
+	}
+	m.lastPlaybackStateSeq = seq
+	return true
+}
+
+func (m *model) clearQueueOnTrackBoundary(prevTrackID, incomingTrackID string, queueFetched bool) {
+	if queueFetched {
+		return
+	}
+	if prevTrackID == "" || incomingTrackID == "" || incomingTrackID == prevTrackID {
+		return
+	}
+	m.queue = nil
+	m.queueHasMore = false
+	m.stableQueueLen = 0
+}
+
+func (m *model) applyFetchedStatusAndQueue(prevTrackID string, status *spotify.PlaybackStatus, queue []spotify.QueueItem, queueFetched bool, queueHasMore bool, observedVol int) {
+	m.applyStatusSettleOverrides(status, observedVol)
+	incomingTrack := ""
+	if status != nil {
+		incomingTrack = normalizeQueueID(status.TrackID)
+		if prevTrackID != "" && incomingTrack != "" && incomingTrack != prevTrackID {
+			m.seekDebouncePending = -1
+			m.seekSentTarget = -1
+		}
+	}
+	m.status = status
+	m.maybeClearTransportTransition(m.status)
+	m.clearQueueOnTrackBoundary(prevTrackID, incomingTrack, queueFetched)
+	if queueFetched && m.shouldApplyIncomingQueue(incomingTrack) {
+		m.applyMergedQueue(queue, queueHasMore, true, true, m.status != nil && m.status.ShuffleState)
+	}
+}
+
 func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd) {
+	if !m.acceptPlaybackStateSeq(msg.seq) {
+		return m, nil
+	}
 	prevStatus := m.status
 	prevQueueHead := queueHeadTrackID(m.queue)
 	inVolSettle := m.volDebouncePending >= 0 ||
@@ -379,15 +432,19 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 		m.seekDebouncePending = -1
 		m.seekSentTarget = -1
 	}
-	refreshQueue := len(m.queue) == 0 || (nextTrackID != "" && nextTrackID != prevTrackID)
 	prevShuffleState := false
 	if prevStatus != nil {
 		prevShuffleState = prevStatus.ShuffleState
 	}
 	shuffleChanged := msg.status != nil && msg.status.ShuffleState != prevShuffleState
 	newShuffleActive := msg.status != nil && msg.status.ShuffleState
+	if shuffleChanged {
+		m.queue = nil
+		m.queueHasMore = false
+		m.stableQueueLen = 0
+	}
 	if m.shouldApplyIncomingQueue(nextTrackID) {
-		m.applyMergedQueue(msg.queue, msg.queueHasMore, refreshQueue || shuffleChanged, true, newShuffleActive)
+		m.applyMergedQueue(msg.queue, msg.queueHasMore, true, true, newShuffleActive)
 	}
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, msg.status, m.trackCache)
 	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.status, prevQueueHead, queueHeadTrackID(m.queue))
@@ -407,6 +464,9 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 }
 
 func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
+	if m.isStaleStateFetchToken(msg.token) {
+		return m, nil
+	}
 	if msg.err != nil {
 		if errors.Is(msg.err, spotify.ErrNoActiveTrack) {
 			m.status = nil
@@ -433,26 +493,8 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 	if msg.status != nil {
 		incomingVol = msg.status.Volume
 	}
-	m.applyStatusSettleOverrides(msg.status, incomingVol)
-	if msg.status != nil {
-		nextTrackID := normalizeQueueID(msg.status.TrackID)
-		if prevTrackID != "" && nextTrackID != "" && nextTrackID != prevTrackID {
-			m.seekDebouncePending = -1
-			m.seekSentTarget = -1
-		}
-	}
-	m.status = msg.status
-	m.maybeClearTransportTransition(m.status)
+	m.applyFetchedStatusAndQueue(prevTrackID, msg.status, msg.queue, msg.queueFetched, false, incomingVol)
 	m.playbackErr = nil
-	if msg.queueFetched {
-		incomingTrack := ""
-		if msg.status != nil {
-			incomingTrack = normalizeQueueID(msg.status.TrackID)
-		}
-		if m.shouldApplyIncomingQueue(incomingTrack) {
-			m.applyMergedQueue(msg.queue, false, true, true, m.status != nil && m.status.ShuffleState)
-		}
-	}
 	if msg.queueErr != nil {
 		m.playbackErr = msg.queueErr
 		slog.Error("fetch queue failed", "error", msg.queueErr)
@@ -479,6 +521,9 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.Cmd) {
+	if m.isStaleStateFetchToken(msg.token) {
+		return m, nil
+	}
 	m.actionInFlight = false
 	m.syncExecutorState()
 	if msg.err != nil {
@@ -512,25 +557,7 @@ func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.
 	if msg.status != nil {
 		reconciledVol = msg.status.Volume
 	}
-	m.applyStatusSettleOverrides(msg.status, reconciledVol)
-	if msg.status != nil {
-		nextTrackID := normalizeQueueID(msg.status.TrackID)
-		if prevTrackID != "" && nextTrackID != "" && nextTrackID != prevTrackID {
-			m.seekDebouncePending = -1
-			m.seekSentTarget = -1
-		}
-	}
-	m.status = msg.status
-	m.maybeClearTransportTransition(m.status)
-	if msg.queueFetched {
-		incomingTrack := ""
-		if msg.status != nil {
-			incomingTrack = normalizeQueueID(msg.status.TrackID)
-		}
-		if m.shouldApplyIncomingQueue(incomingTrack) {
-			m.applyMergedQueue(msg.queue, false, true, true, m.status != nil && m.status.ShuffleState)
-		}
-	}
+	m.applyFetchedStatusAndQueue(prevTrackID, msg.status, msg.queue, msg.queueFetched, false, reconciledVol)
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, m.status, m.trackCache)
 	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.status, prevQueueHead, queueHeadTrackID(m.queue))
 	cmds := make([]tea.Cmd, 0, 3)
@@ -672,6 +699,22 @@ func (m model) handleAlbumKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.shouldBlockTransportInput(msg) {
+		k := m.keys
+		switch {
+		case keyMatches(msg, k.PlayPause):
+			m.enqueuePlaybackInput(playbackInputPlayPause)
+		case keyMatches(msg, k.Next):
+			m.enqueuePlaybackInput(playbackInputNext)
+		case keyMatches(msg, k.Prev):
+			m.enqueuePlaybackInput(playbackInputPrev)
+		case keyMatches(msg, k.Shuffle):
+			m.enqueuePlaybackInput(playbackInputShuffle)
+		case keyMatches(msg, k.Loop):
+			m.enqueuePlaybackInput(playbackInputLoop)
+		}
+		return m, nil
+	}
 	k := m.keys
 	var action playbackInputKind
 	switch {

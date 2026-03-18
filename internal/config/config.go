@@ -50,7 +50,7 @@ func (c Config) ValidateForAuth() error {
 	if c.SpotifyClientID == "" {
 		return errors.New("spotify_client_id / SPOTIFY_CLIENT_ID is not set\n" +
 			"Register a free Spotify app at https://developer.spotify.com/dashboard,\n" +
-			"add http://127.0.0.1:8989/callback as a redirect URI, then set the env var.")
+			"add http://127.0.0.1:8989/callback as a redirect URI, then set the env var")
 	}
 	return nil
 }
@@ -103,18 +103,6 @@ func envBool(key string, fallback bool) bool {
 		return fallback
 	}
 	v, err := strconv.ParseBool(raw)
-	if err != nil {
-		return fallback
-	}
-	return v
-}
-
-func envInt(key string, fallback int) int {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
-	}
-	v, err := strconv.Atoi(raw)
 	if err != nil {
 		return fallback
 	}
