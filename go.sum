@@ -74,8 +74,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/devgianlu/shannon v0.0.0-20230613115856-82ec90b7fa7e h1:OoETp+L//8ZDtd5BWKaogHQjgA104yF4a2yqjfaG3mE=
 github.com/devgianlu/shannon v0.0.0-20230613115856-82ec90b7fa7e/go.mod h1:m5DMFz6BcaKJwxxPaSh9MxwPzK2GPSt1KRFC8Imf0ik=
-github.com/elxgy/go-librespot v0.0.0-20260322154431-f15e4eb5fa18 h1:KPDK/YdTpexe7K1y9w3enfiwRhPcA/cvG7XOjG7LIx8=
-github.com/elxgy/go-librespot v0.0.0-20260322154431-f15e4eb5fa18/go.mod h1:LlSELKBN3gfkoSbVMjse7wsEvnfD//kQywKuICMjTzY=
+github.com/elxgy/go-librespot v0.0.0-20260322170613-9e564bb2ef0e h1:k7enGHG694N1W9wLo7N6h1vKUJXV25ewau4BSkRuRBs=
+github.com/elxgy/go-librespot v0.0.0-20260322170613-9e564bb2ef0e/go.mod h1:LlSELKBN3gfkoSbVMjse7wsEvnfD//kQywKuICMjTzY=
 github.com/envoyproxy/go-control-plane v0.9.0/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
 github.com/envoyproxy/go-control-plane v0.9.1-0.20191026205805-5f8ba28d4473/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
 github.com/envoyproxy/go-control-plane v0.9.4/go.mod h1:6rpuAdCZL397s3pYoYcLgu1mIlRU8Am5FuJP05cCM98=
