@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	golibrespot "github.com/devgianlu/go-librespot"
+	golibrespot "github.com/elxgy/go-librespot"
 )
 
 type Config struct {

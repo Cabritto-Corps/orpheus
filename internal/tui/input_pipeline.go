@@ -210,11 +210,10 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 		if m.status == nil {
 			return nil
 		}
-		rollback := cloneStatus(m.status)
-		m.status.RepeatContext, m.status.RepeatTrack = nextRepeatMode(m.status.RepeatContext, m.status.RepeatTrack)
 		if m.tuiCmdCh != nil {
 			select {
 			case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandCycleRepeat}:
+				m.status.RepeatContext, m.status.RepeatTrack = nextRepeatMode(m.status.RepeatContext, m.status.RepeatTrack)
 			default:
 				m.requeueFront(action)
 			}
@@ -223,6 +222,8 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 		if m.service == nil {
 			return nil
 		}
+		rollback := cloneStatus(m.status)
+		m.status.RepeatContext, m.status.RepeatTrack = nextRepeatMode(m.status.RepeatContext, m.status.RepeatTrack)
 		m.beginReconcileAction(reconcileActionWindow)
 		state := repeatModeString(m.status.RepeatContext, m.status.RepeatTrack)
 		return m.actionWithReconcileCmd(func(ctx context.Context) error {

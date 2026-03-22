@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"sync/atomic"
 
-	golibrespot "github.com/devgianlu/go-librespot"
-	devicespb "github.com/devgianlu/go-librespot/proto/spotify/connectstate/devices"
+	golibrespot "github.com/elxgy/go-librespot"
+	devicespb "github.com/elxgy/go-librespot/proto/spotify/connectstate/devices"
 )
 
 type Runtime struct {

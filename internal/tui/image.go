@@ -56,13 +56,13 @@ type imgCache struct {
 
 func newImgCache() *imgCache {
 	return &imgCache{
-		imgs:      cache.NewLRU[string, image.Image](maxCachedImages),
-		covers:    cache.NewLRU[coverKey, string](maxCachedCoverRenders),
-		encoded:   make(map[string]string),
-		inflight:  make(map[string]struct{}),
-		failedAt:  make(map[string]time.Time),
+		imgs:        cache.NewLRU[string, image.Image](maxCachedImages),
+		covers:      cache.NewLRU[coverKey, string](maxCachedCoverRenders),
+		encoded:     make(map[string]string),
+		inflight:    make(map[string]struct{}),
+		failedAt:    make(map[string]time.Time),
 		rendering:   make(map[coverKey]chan struct{}),
-		protocol:   detectImageProtocol(os.Getenv),
+		protocol:    detectImageProtocol(os.Getenv),
 		kittyChunks: make(map[string][]string),
 	}
 }
@@ -419,10 +419,10 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 }
 
 const (
-	imageFetchTimeout              = 6 * time.Second
-	imageFetchFailCooldown         = 30 * time.Second
-	maxCachedImages                = 256
-	maxCachedCoverRenders          = 512
+	imageFetchTimeout         = 6 * time.Second
+	imageFetchFailCooldown    = 30 * time.Second
+	maxCachedImages           = 256
+	maxCachedCoverRenders     = 512
 	maxKittyChunkCacheEntries = 64
 	kittyEncodeMaxSize        = 1024
 )
@@ -513,17 +513,6 @@ func detectImageProtocol(getenv func(string) string) imageProtocol {
 }
 
 const kittyDeleteAll = "\x1b_Ga=d,d=A\x1b\\"
-
-func kittyImageOverlay(row, col int, encoded string, cols, rows int, imageID uint64) string {
-	if encoded == "" || cols <= 0 || rows <= 0 || row <= 0 || col <= 0 {
-		return kittyDeleteAll
-	}
-	payload := renderKittyImageRawWithID(encoded, cols, rows, imageID)
-	if payload == "" {
-		return kittyDeleteAll
-	}
-	return fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", row, col, payload)
-}
 
 func renderKittyImageRaw(encoded string, cols, rows int) string {
 	return renderKittyImageRawWithID(encoded, cols, rows, 0)

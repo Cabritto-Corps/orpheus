@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	golibrespot "github.com/elxgy/go-librespot"
 
 	"orpheus/internal/cache"
 	"orpheus/internal/config"
@@ -381,7 +382,7 @@ func (m *model) applyFetchedStatusAndQueue(prevTrackID string, status *spotify.P
 	m.applyStatusSettleOverrides(status, observedVol)
 	incomingTrack := ""
 	if status != nil {
-		incomingTrack = normalizeQueueID(status.TrackID)
+		incomingTrack = golibrespot.NormalizeSpotifyId(status.TrackID)
 		if prevTrackID != "" && incomingTrack != "" && incomingTrack != prevTrackID {
 			m.seekDebouncePending = -1
 			m.seekSentTarget = -1
@@ -422,11 +423,11 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	m.clearSeekSettleTarget(incomingProgress)
 	prevTrackID := ""
 	if prevStatus != nil {
-		prevTrackID = normalizeQueueID(prevStatus.TrackID)
+		prevTrackID = golibrespot.NormalizeSpotifyId(prevStatus.TrackID)
 	}
 	nextTrackID := ""
 	if msg.status != nil {
-		nextTrackID = normalizeQueueID(msg.status.TrackID)
+		nextTrackID = golibrespot.NormalizeSpotifyId(msg.status.TrackID)
 	}
 	if prevTrackID != "" && nextTrackID != "" && nextTrackID != prevTrackID {
 		m.seekDebouncePending = -1
@@ -487,7 +488,7 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 	prevQueueHead := queueHeadTrackID(m.queue)
 	prevTrackID := ""
 	if m.status != nil {
-		prevTrackID = normalizeQueueID(m.status.TrackID)
+		prevTrackID = golibrespot.NormalizeSpotifyId(m.status.TrackID)
 	}
 	incomingVol := -1
 	if msg.status != nil {
@@ -551,7 +552,7 @@ func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.
 	prevQueueHead := queueHeadTrackID(m.queue)
 	prevTrackID := ""
 	if m.status != nil {
-		prevTrackID = normalizeQueueID(m.status.TrackID)
+		prevTrackID = golibrespot.NormalizeSpotifyId(m.status.TrackID)
 	}
 	reconciledVol := -1
 	if msg.status != nil {
@@ -760,7 +761,7 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 	}
 	m.setActivePlaylist(activeID, canReadTracks, ownerID, collaborative)
 	if m.status != nil {
-		m.pendingContextFrom = normalizeQueueID(m.status.TrackID)
+		m.pendingContextFrom = golibrespot.NormalizeSpotifyId(m.status.TrackID)
 		m.pendingContextFromAt = time.Now()
 	}
 	m.queue = nil
@@ -1052,10 +1053,10 @@ func (m *model) maybeLoadMorePlaylistItemsCmd(limit int) tea.Cmd {
 	if !m.shouldLoadPlaylistItems() || limit <= 0 || m.activePlaylistID == "" || !m.activePlaylistItemHasMore || m.activePlaylistItemLoading || m.status == nil || m.status.TrackID == "" {
 		return nil
 	}
-	currentNorm := normalizeQueueID(m.status.TrackID)
+	currentNorm := golibrespot.NormalizeSpotifyId(m.status.TrackID)
 	currentIndex := -1
 	for i, trackID := range m.activePlaylistItemIDs {
-		if normalizeQueueID(trackID) == currentNorm {
+		if golibrespot.NormalizeSpotifyId(trackID) == currentNorm {
 			currentIndex = i
 			break
 		}

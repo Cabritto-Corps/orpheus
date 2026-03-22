@@ -1,8 +1,8 @@
 package librespot
 
 import (
-	golibrespot "github.com/devgianlu/go-librespot"
-	"github.com/devgianlu/go-librespot/player"
+	golibrespot "github.com/elxgy/go-librespot"
+	"github.com/elxgy/go-librespot/player"
 )
 
 const transitionStreamCacheMax = 4

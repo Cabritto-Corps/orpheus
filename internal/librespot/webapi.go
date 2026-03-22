@@ -9,17 +9,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
-	"github.com/devgianlu/go-librespot/session"
+	"github.com/elxgy/go-librespot/session"
 
 	"orpheus/internal/spotify"
-)
-
-const (
-	webApi429MaxRetries   = 2
-	webApi429DefaultWait  = 5 * time.Second
-	webApi429MinRemaining = 2 * time.Second
 )
 
 type playlistCatalog struct {
@@ -31,47 +24,7 @@ func NewPlaylistCatalog(sess *session.Session) spotify.PlaylistCatalog {
 }
 
 func (c *playlistCatalog) doWith429Retry(ctx context.Context, method, path string, q url.Values, body []byte) (*http.Response, error) {
-	var lastResp *http.Response
-	for attempt := 0; attempt <= webApi429MaxRetries; attempt++ {
-		if lastResp != nil {
-			lastResp.Body.Close()
-		}
-		resp, err := c.sess.WebApi(ctx, method, path, q, nil, body)
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode != 429 {
-			return resp, nil
-		}
-		lastResp = resp
-		wait := webApi429DefaultWait
-		if s := resp.Header.Get("Retry-After"); s != "" {
-			if sec, err := strconv.Atoi(s); err == nil && sec > 0 && sec <= 60 {
-				wait = time.Duration(sec) * time.Second
-			}
-		}
-		if deadline, ok := ctx.Deadline(); ok {
-			remaining := time.Until(deadline)
-			if remaining <= webApi429MinRemaining {
-				if lastResp != nil {
-					lastResp.Body.Close()
-				}
-				return nil, fmt.Errorf("rate limited (429); not enough time to wait (Retry-After %v)", wait)
-			}
-			if wait > remaining-webApi429MinRemaining {
-				wait = remaining - webApi429MinRemaining
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(wait):
-		}
-	}
-	if lastResp != nil {
-		lastResp.Body.Close()
-	}
-	return nil, fmt.Errorf("webapi rate limit (429) after %d retries", webApi429MaxRetries+1)
+	return c.sess.WebApiWith429Retry(ctx, method, path, q, nil, body)
 }
 
 func (c *playlistCatalog) CurrentUserID(ctx context.Context) (string, error) {

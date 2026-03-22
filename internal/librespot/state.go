@@ -4,31 +4,24 @@ import (
 	"context"
 	"time"
 
-	golibrespot "github.com/devgianlu/go-librespot"
-	"github.com/devgianlu/go-librespot/dealer"
-	"github.com/devgianlu/go-librespot/player"
-	connectpb "github.com/devgianlu/go-librespot/proto/spotify/connectstate"
-	"github.com/devgianlu/go-librespot/tracks"
+	golibrespot "github.com/elxgy/go-librespot"
+	"github.com/elxgy/go-librespot/dealer"
+	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
+	"github.com/elxgy/go-librespot/tracks"
 )
 
 type State struct {
-	active                bool
-	activeSince           time.Time
-	device                *connectpb.DeviceInfo
-	player                *connectpb.PlayerState
-	tracks                *tracks.List
-	queueID               uint64
+	active      bool
+	activeSince time.Time
+
+	device *connectpb.DeviceInfo
+	player *connectpb.PlayerState
+
+	tracks  *tracks.List
+	queueID uint64
+
 	lastCommand           *dealer.RequestPayload
 	lastTransferTimestamp int64
-}
-
-func (s *State) setPaused(val bool) {
-	s.player.IsPaused = val
-	if val {
-		s.player.PlaybackSpeed = 0
-	} else {
-		s.player.PlaybackSpeed = 1
-	}
 }
 
 func (s *State) setActive(val bool) {
@@ -47,90 +40,21 @@ func (s *State) setActive(val bool) {
 func (s *State) reset() {
 	s.active = false
 	s.activeSince = time.Time{}
-	s.player = &connectpb.PlayerState{
-		IsSystemInitiated: true,
-		PlaybackSpeed:     1,
-		PlayOrigin:        &connectpb.PlayOrigin{},
-		Suppressions:      &connectpb.Suppressions{},
-		Options:           &connectpb.ContextPlayerOptions{},
-	}
-}
-
-func (s *State) trackPosition() int64 {
-	if s.player.IsPaused || !s.player.IsPlaying {
-		return s.player.PositionAsOfTimestamp
-	}
-	now := time.Now().UnixMilli()
-	elapsed := now - s.player.Timestamp
-	const maxReasonableElapsed = 10 * 60 * 1000
-	if elapsed > maxReasonableElapsed || elapsed < 0 {
-		return s.player.PositionAsOfTimestamp
-	}
-	calculated := s.player.PositionAsOfTimestamp + elapsed
-	if calculated < 0 {
-		return s.player.PositionAsOfTimestamp
-	}
-	if s.player.Duration > 0 && calculated > s.player.Duration {
-		return s.player.Duration
-	}
-	return calculated
-}
-
-func (s *State) updateTimestamp() {
-	now := time.Now()
-	advancedTimeMillis := now.UnixMilli() - s.player.Timestamp
-	advancedPositionMillis := int64(float64(advancedTimeMillis) * s.player.PlaybackSpeed)
-	s.player.PositionAsOfTimestamp += advancedPositionMillis
-	s.player.Timestamp = now.UnixMilli()
-	if s.player.Duration > 0 && s.player.PositionAsOfTimestamp > s.player.Duration {
-		s.player.PositionAsOfTimestamp = s.player.Duration
-	}
-}
-
-func (s *State) playOrigin() string {
-	return s.player.PlayOrigin.FeatureIdentifier
+	s.player = golibrespot.NewPlayerState()
 }
 
 func (p *AppPlayer) initState() {
 	cfg := p.runtime.Cfg
 	p.state = &State{
 		lastCommand: nil,
-		device: &connectpb.DeviceInfo{
-			CanPlay:               true,
-			Volume:                player.MaxStateVolume,
-			Name:                  cfg.DeviceName,
-			DeviceId:              p.runtime.DeviceId,
-			DeviceType:            p.runtime.DeviceType,
-			DeviceSoftwareVersion: golibrespot.VersionString(),
-			ClientId:              golibrespot.ClientIdHex,
-			SpircVersion:          "3.2.6",
-			Capabilities: &connectpb.Capabilities{
-				CanBePlayer:                true,
-				RestrictToLocal:            false,
-				GaiaEqConnectId:            true,
-				SupportsLogout:             cfg.ZeroconfEnabled,
-				IsObservable:               true,
-				VolumeSteps:                int32(cfg.VolumeSteps),
-				SupportedTypes:             []string{"audio/track", "audio/episode"},
-				CommandAcks:                true,
-				SupportsRename:             false,
-				Hidden:                     false,
-				DisableVolume:              false,
-				ConnectDisabled:            false,
-				SupportsPlaylistV2:         true,
-				IsControllable:             true,
-				SupportsExternalEpisodes:   false,
-				SupportsSetBackendMetadata: true,
-				SupportsTransferCommand:    true,
-				SupportsCommandRequest:     true,
-				IsVoiceEnabled:             false,
-				NeedsFullPlayerState:       false,
-				SupportsGzipPushes:         true,
-				SupportsSetOptionsCommand:  true,
-				SupportsHifi:               nil,
-				ConnectCapabilities:        "",
-			},
-		},
+		device: golibrespot.DefaultDeviceInfo(golibrespot.DeviceInfoOpts{
+			DeviceName:      cfg.DeviceName,
+			DeviceId:        p.runtime.DeviceId,
+			DeviceType:      p.runtime.DeviceType,
+			ClientId:        golibrespot.ClientIdHex,
+			VolumeSteps:     cfg.VolumeSteps,
+			ZeroconfEnabled: cfg.ZeroconfEnabled,
+		}),
 	}
 	p.state.reset()
 }
@@ -145,27 +69,30 @@ func (p *AppPlayer) putConnectState(ctx context.Context, reason connectpb.PutSta
 	if reason == connectpb.PutStateReason_BECAME_INACTIVE {
 		return p.sess.Spclient().PutConnectStateInactive(ctx, p.spotConnId, false)
 	}
-	putStateReq := &connectpb.PutStateRequest{
-		ClientSideTimestamp: uint64(time.Now().UnixMilli()),
-		MemberType:          connectpb.MemberType_CONNECT_STATE,
-		PutStateReason:      reason,
-	}
-	if t := p.state.activeSince; !t.IsZero() {
-		putStateReq.StartedPlayingAt = uint64(t.UnixMilli())
-	}
+
+	var hasBeenPlayingForMs uint64
 	if p.state.active && !p.state.activeSince.IsZero() {
 		if t := time.Since(p.state.activeSince); t > 0 {
-			putStateReq.HasBeenPlayingForMs = uint64(t.Milliseconds())
+			hasBeenPlayingForMs = uint64(t.Milliseconds())
 		}
 	}
-	putStateReq.IsActive = p.state.active
-	putStateReq.Device = &connectpb.Device{
-		DeviceInfo:  p.state.device,
-		PlayerState: p.state.player,
-	}
+
+	var lastCmdMsgId uint32
+	var lastCmdSentBy string
 	if p.state.lastCommand != nil {
-		putStateReq.LastCommandMessageId = p.state.lastCommand.MessageId
-		putStateReq.LastCommandSentByDeviceId = p.state.lastCommand.SentByDeviceId
+		lastCmdMsgId = p.state.lastCommand.MessageId
+		lastCmdSentBy = p.state.lastCommand.SentByDeviceId
 	}
+
+	putStateReq := golibrespot.BuildPutStateRequest(golibrespot.PutStateOpts{
+		Device:                    p.state.device,
+		PlayerState:               p.state.player,
+		Active:                    p.state.active,
+		ActiveSince:               p.state.activeSince,
+		LastCommandMsgId:          lastCmdMsgId,
+		LastCommandSentByDeviceId: lastCmdSentBy,
+		HasBeenPlayingForMs:       hasBeenPlayingForMs,
+	}, reason)
+
 	return p.sess.Spclient().PutConnectState(ctx, p.spotConnId, putStateReq)
 }

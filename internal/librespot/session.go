@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	golibrespot "github.com/devgianlu/go-librespot"
-	"github.com/devgianlu/go-librespot/apresolve"
-	devicespb "github.com/devgianlu/go-librespot/proto/spotify/connectstate/devices"
-	"github.com/devgianlu/go-librespot/session"
+	golibrespot "github.com/elxgy/go-librespot"
+	"github.com/elxgy/go-librespot/apresolve"
+	devicespb "github.com/elxgy/go-librespot/proto/spotify/connectstate/devices"
+	"github.com/elxgy/go-librespot/session"
 )
 
 const defaultCallbackPort = 8080

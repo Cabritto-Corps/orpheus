@@ -4,10 +4,10 @@ import (
 	"testing"
 	"time"
 
-	golibrespot "github.com/devgianlu/go-librespot"
-	"github.com/devgianlu/go-librespot/player"
-	connectpb "github.com/devgianlu/go-librespot/proto/spotify/connectstate"
-	metadatapb "github.com/devgianlu/go-librespot/proto/spotify/metadata"
+	golibrespot "github.com/elxgy/go-librespot"
+	"github.com/elxgy/go-librespot/player"
+	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
+	metadatapb "github.com/elxgy/go-librespot/proto/spotify/metadata"
 )
 
 type noopLogger struct{}

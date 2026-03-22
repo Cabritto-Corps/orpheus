@@ -2,16 +2,13 @@ package librespot
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	golibrespot "github.com/devgianlu/go-librespot"
-	extmetadatapb "github.com/devgianlu/go-librespot/proto/spotify/extendedmetadata"
-	metadatapb "github.com/devgianlu/go-librespot/proto/spotify/metadata"
-	"github.com/devgianlu/go-librespot/tracks"
+	golibrespot "github.com/elxgy/go-librespot"
+	"github.com/elxgy/go-librespot/tracks"
 
 	"orpheus/internal/cache"
 )
@@ -35,7 +32,6 @@ func (p *AppPlayer) setCachedQueueMeta(id string, e PlaybackStateQueueEntry) {
 		p.queueMetaCache = cache.NewLRU[string, PlaybackStateQueueEntry](8192)
 	}
 	p.queueMetaCache.Set(id, e)
-	p.invalidateDerivedQueueCache()
 }
 
 func (p *AppPlayer) resetQueueMetaForContext(contextKey string) {
@@ -53,66 +49,9 @@ func (p *AppPlayer) resetQueueMetaForContext(contextKey string) {
 	p.namePreloadDone = false
 	p.queueResolveInFlight = false
 	p.queueResolveMu.Unlock()
-
-	p.bumpTrackStateVersion()
 }
 
-func (p *AppPlayer) invalidateQueueDerivation(_ bool) {
-	p.invalidateDerivedQueueCache()
-}
-
-func (p *AppPlayer) bumpTrackStateVersion() {
-	p.trackStateVersion.Add(1)
-	p.invalidateDerivedQueueCache()
-}
-
-func (p *AppPlayer) invalidateDerivedQueueCache() {
-	p.derivedQueueMu.Lock()
-	p.derivedQueueValid = false
-	p.derivedQueueEntries = nil
-	p.derivedQueueKey = ""
-	p.derivedQueueHasMore = false
-	p.derivedQueueMu.Unlock()
-}
-
-func (p *AppPlayer) currentDerivedQueueKey(shuffle bool) string {
-	contextURI := ""
-	currentTrackID := ""
-	if p != nil && p.state != nil && p.state.player != nil {
-		contextURI = strings.TrimSpace(p.state.player.ContextUri)
-		if p.state.player.Track != nil {
-			currentTrackID = normalizeSpotifyID(p.state.player.Track.Uri)
-		}
-	}
-	return fmt.Sprintf(
-		"v:%d|shuffle:%t|ctx:%s|cur:%s",
-		p.trackStateVersion.Load(),
-		shuffle,
-		contextURI,
-		currentTrackID,
-	)
-}
-
-func (p *AppPlayer) getDerivedQueueCache(key string) ([]PlaybackStateQueueEntry, bool, bool) {
-	p.derivedQueueMu.RLock()
-	defer p.derivedQueueMu.RUnlock()
-	if !p.derivedQueueValid || p.derivedQueueKey != key {
-		return nil, false, false
-	}
-	out := append([]PlaybackStateQueueEntry(nil), p.derivedQueueEntries...)
-	return out, p.derivedQueueHasMore, true
-}
-
-func (p *AppPlayer) setDerivedQueueCache(key string, entries []PlaybackStateQueueEntry, hasMore bool) {
-	p.derivedQueueMu.Lock()
-	p.derivedQueueKey = key
-	p.derivedQueueEntries = append([]PlaybackStateQueueEntry(nil), entries...)
-	p.derivedQueueHasMore = hasMore
-	p.derivedQueueValid = true
-	p.derivedQueueMu.Unlock()
-}
-
-func (p *AppPlayer) shouldPreloadContextNames(contextKey string) (token uint64, ok bool) {
+func (p *AppPlayer) claimContextNamePreload(contextKey string) (token uint64, ok bool) {
 	contextKey = strings.TrimSpace(contextKey)
 	if contextKey == "" {
 		return 0, false
@@ -141,7 +80,7 @@ func (p *AppPlayer) finishContextNamePreload(contextKey string, token uint64) {
 	p.queueResolveInFlight = false
 }
 
-func (p *AppPlayer) isContextNamePreloadDone(contextKey string) bool {
+func (p *AppPlayer) checkNamePreloadStatus(contextKey string) bool {
 	p.queueResolveMu.Lock()
 	defer p.queueResolveMu.Unlock()
 	contextKey = strings.TrimSpace(contextKey)
@@ -159,7 +98,7 @@ func (p *AppPlayer) isContextNamePreloadDone(contextKey string) bool {
 }
 
 func (p *AppPlayer) preloadContextQueueMetadata(trackList *tracks.List, contextKey string) {
-	token, ok := p.shouldPreloadContextNames(contextKey)
+	token, ok := p.claimContextNamePreload(contextKey)
 	if !ok || trackList == nil {
 		return
 	}
@@ -179,7 +118,7 @@ func (p *AppPlayer) preloadContextQueueMetadata(trackList *tracks.List, contextK
 			if t == nil {
 				continue
 			}
-			id := normalizeSpotifyID(t.Uri)
+			id := golibrespot.NormalizeSpotifyId(t.Uri)
 			if id == "" {
 				continue
 			}
@@ -239,51 +178,21 @@ func (p *AppPlayer) preloadContextQueueMetadata(trackList *tracks.List, contextK
 }
 
 func (p *AppPlayer) resolveQueueEntry(ctx context.Context, uri string) (e PlaybackStateQueueEntry, ok bool) {
-	id := normalizeSpotifyID(uri)
+	id := golibrespot.NormalizeSpotifyId(uri)
 	if id == "" {
 		return PlaybackStateQueueEntry{ID: id}, false
 	}
-	e = PlaybackStateQueueEntry{ID: id}
-	spotID, err := golibrespot.SpotifyIdFromUri(uri)
+	name, artist, durationMS, err := p.sess.Spclient().ResolveTrackOrEpisodeMetadata(ctx, uri)
 	if err != nil {
-		return e, false
+		return PlaybackStateQueueEntry{ID: id}, false
 	}
-	if spotID.Type() == golibrespot.SpotifyIdTypeTrack {
-		var trackMeta metadatapb.Track
-		if err := p.sess.Spclient().ExtendedMetadataSimple(ctx, *spotID, extmetadatapb.ExtensionKind_TRACK_V4, &trackMeta); err != nil {
-			return e, false
-		}
-		if trackMeta.Name != nil {
-			e.Name = *trackMeta.Name
-		}
-		if len(trackMeta.Artist) > 0 && trackMeta.Artist[0].Name != nil {
-			e.Artist = *trackMeta.Artist[0].Name
-		}
-		if trackMeta.Duration != nil {
-			e.DurationMS = int(*trackMeta.Duration)
-		}
-	} else if spotID.Type() == golibrespot.SpotifyIdTypeEpisode {
-		var epMeta metadatapb.Episode
-		if err := p.sess.Spclient().ExtendedMetadataSimple(ctx, *spotID, extmetadatapb.ExtensionKind_EPISODE_V4, &epMeta); err != nil {
-			return e, false
-		}
-		if epMeta.Name != nil {
-			e.Name = *epMeta.Name
-		}
-		if epMeta.Show != nil && epMeta.Show.Name != nil {
-			e.Artist = *epMeta.Show.Name
-		}
-		if epMeta.Duration != nil {
-			e.DurationMS = int(*epMeta.Duration)
-		}
+	if name == "" {
+		name = "Unknown track"
 	}
-	if e.Name == "" {
-		e.Name = "Unknown track"
+	if artist == "" {
+		artist = "-"
 	}
-	if e.Artist == "" {
-		e.Artist = "-"
-	}
-	return e, true
+	return PlaybackStateQueueEntry{ID: id, Name: name, Artist: artist, DurationMS: durationMS}, true
 }
 
 const queueResolveConcurrency = 10

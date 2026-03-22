@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	golibrespot "github.com/devgianlu/go-librespot"
-	"github.com/devgianlu/go-librespot/player"
-	connectpb "github.com/devgianlu/go-librespot/proto/spotify/connectstate"
+	golibrespot "github.com/elxgy/go-librespot"
+	"github.com/elxgy/go-librespot/player"
+	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
 
 	"orpheus/internal/playbackdomain"
 )
@@ -19,7 +19,7 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 			return true, fmt.Errorf("failed resolving context: %w", err)
 		}
 		p.state.setActive(true)
-		p.state.setPaused(false)
+		golibrespot.SetPaused(p.state.player, false)
 		p.state.player.Suppressions = &connectpb.Suppressions{}
 		p.state.player.PlayOrigin = &connectpb.PlayOrigin{
 			FeatureIdentifier: "go-librespot",
@@ -34,20 +34,15 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 func (p *AppPlayer) handleTUIPlaybackCommand(ctx context.Context, cmd TUICommand) (bool, error) {
 	switch cmd.Kind {
 	case TUICommandPause:
-		_ = p.pause(ctx)
-		return true, nil
+		return true, p.pause(ctx)
 	case TUICommandResume:
-		_ = p.play(ctx)
-		return true, nil
+		return true, p.play(ctx)
 	case TUICommandSeek:
-		_ = p.seek(ctx, cmd.Position)
-		return true, nil
+		return true, p.seek(ctx, cmd.Position)
 	case TUICommandSkipNext:
-		_ = p.skipNext(ctx, nil)
-		return true, nil
+		return true, p.skipNext(ctx, nil)
 	case TUICommandSkipPrev:
-		_ = p.skipPrev(ctx, true)
-		return true, nil
+		return true, p.skipPrev(ctx, true)
 	case TUICommandSetVolume:
 		vol := uint32(cmd.Volume) * player.MaxStateVolume / p.runtime.Cfg.VolumeSteps
 		if vol > player.MaxStateVolume {

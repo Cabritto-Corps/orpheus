@@ -13,14 +13,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	golibrespot "github.com/devgianlu/go-librespot"
-	"github.com/devgianlu/go-librespot/ap"
-	"github.com/devgianlu/go-librespot/dealer"
-	"github.com/devgianlu/go-librespot/player"
-	connectpb "github.com/devgianlu/go-librespot/proto/spotify/connectstate"
-	metadatapb "github.com/devgianlu/go-librespot/proto/spotify/metadata"
-	"github.com/devgianlu/go-librespot/session"
-	"github.com/devgianlu/go-librespot/tracks"
+	golibrespot "github.com/elxgy/go-librespot"
+	"github.com/elxgy/go-librespot/ap"
+	"github.com/elxgy/go-librespot/dealer"
+	"github.com/elxgy/go-librespot/player"
+	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
+	metadatapb "github.com/elxgy/go-librespot/proto/spotify/metadata"
+	"github.com/elxgy/go-librespot/session"
+	"github.com/elxgy/go-librespot/tracks"
 	"google.golang.org/protobuf/proto"
 
 	"orpheus/internal/cache"
@@ -42,7 +42,7 @@ type AppPlayer struct {
 
 	spotConnId string
 
-	prodInfo    *ProductInfo
+	prodInfo    *ap.ProductInfo
 	countryCode *string
 
 	state           *State
@@ -71,14 +71,7 @@ type AppPlayer struct {
 	namePreloadToken     uint64
 	namePreloadDone      bool
 
-	trackStateVersion atomic.Uint64
-
-	derivedQueueMu      sync.RWMutex
-	derivedQueueKey     string
-	derivedQueueEntries []PlaybackStateQueueEntry
-	derivedQueueHasMore bool
-	derivedQueueValid   bool
-	advanceInFlight     bool
+	advanceInFlight bool
 }
 
 func (p *AppPlayer) setRunContext(ctx context.Context) {
@@ -120,9 +113,9 @@ func (p *AppPlayer) newApiResponseStatusTrack(media *golibrespot.Media, position
 		for _, a := range track.Artist {
 			artists = append(artists, *a.Name)
 		}
-		albumCoverId := getBestImageIdForSize(track.Album.Cover, imageSize)
+		albumCoverId := golibrespot.GetBestImageIdForSize(track.Album.Cover, imageSize)
 		if albumCoverId == nil && track.Album.CoverGroup != nil {
-			albumCoverId = getBestImageIdForSize(track.Album.CoverGroup.Image, imageSize)
+			albumCoverId = golibrespot.GetBestImageIdForSize(track.Album.CoverGroup.Image, imageSize)
 		}
 		return &ApiResponseStatusTrack{
 			Uri:           golibrespot.SpotifyIdFromGid(golibrespot.SpotifyIdTypeTrack, track.Gid).Uri(),
@@ -142,7 +135,7 @@ func (p *AppPlayer) newApiResponseStatusTrack(media *golibrespot.Media, position
 	if episode.CoverImage != nil {
 		episodeImages = episode.CoverImage.Image
 	}
-	albumCoverId := getBestImageIdForSize(episodeImages, imageSize)
+	albumCoverId := golibrespot.GetBestImageIdForSize(episodeImages, imageSize)
 	return &ApiResponseStatusTrack{
 		Uri:           golibrespot.SpotifyIdFromGid(golibrespot.SpotifyIdTypeEpisode, episode.Gid).Uri(),
 		Name:          *episode.Name,
@@ -160,7 +153,7 @@ func (p *AppPlayer) newApiResponseStatusTrack(media *golibrespot.Media, position
 func (p *AppPlayer) handleAccesspointPacket(pktType ap.PacketType, payload []byte) error {
 	switch pktType {
 	case ap.PacketTypeProductInfo:
-		var prod ProductInfo
+		var prod ap.ProductInfo
 		if err := xml.Unmarshal(payload, &prod); err != nil {
 			return fmt.Errorf("failed unmarshalling ProductInfo: %w", err)
 		}
@@ -183,9 +176,7 @@ func (p *AppPlayer) handleDealerMessage(ctx context.Context, msg dealer.Message)
 	if strings.HasPrefix(msg.Uri, "hm://pusher/v1/connections/") {
 		p.spotConnId = msg.Headers["Spotify-Connection-Id"]
 		if len(p.spotConnId) >= 16 {
-			p.runtime.Log.Debugf("received connection id: %s...%s", p.spotConnId[:16], p.spotConnId[len(p.spotConnId)-16:])
 		} else {
-			p.runtime.Log.Debugf("received connection id: %s", p.spotConnId)
 		}
 		if err := p.putConnectState(ctx, connectpb.PutStateReason_NEW_DEVICE); err != nil {
 			return fmt.Errorf("failed initial state put: %w", err)
@@ -229,7 +220,6 @@ func (p *AppPlayer) handleDealerMessage(ctx context.Context, msg dealer.Message)
 
 func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestPayload) error {
 	p.state.lastCommand = &req
-	p.runtime.Log.Debugf("handling %s player command from %s", req.Command.Endpoint, req.SentByDeviceId)
 	switch req.Command.Endpoint {
 	case "transfer":
 		if len(req.Command.Data) == 0 {
@@ -241,7 +231,7 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 			return fmt.Errorf("failed unmarshalling TransferState: %w", err)
 		}
 		p.state.lastTransferTimestamp = transferState.Playback.Timestamp
-		ctxTracks, err := tracks.NewTrackListFromContext(ctx, p.runtime.Log, p.sess.Spclient(), transferState.CurrentSession.Context)
+		ctxTracks, err := tracks.NewTrackListFromContext(ctx, p.runtime.Log, p.sess.Spclient(), transferState.CurrentSession.Context, 0)
 		if err != nil {
 			return fmt.Errorf("failed creating track list: %w", err)
 		}
@@ -259,7 +249,7 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		pause := transferState.Playback.IsPaused && req.Command.Options.RestorePaused != "resume"
 		p.state.player.Timestamp = transferState.Playback.Timestamp
 		p.state.player.PositionAsOfTimestamp = int64(transferState.Playback.PositionAsOfTimestamp)
-		p.state.setPaused(pause)
+		golibrespot.SetPaused(p.state.player, pause)
 		p.state.player.PlayOrigin = transferState.CurrentSession.PlayOrigin
 		p.state.player.PlayOrigin.DeviceIdentifier = req.SentByDeviceId
 		p.state.player.ContextUri = transferState.CurrentSession.Context.Uri
@@ -298,7 +288,6 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		ctxTracks.SetPlayingQueue(transferState.Queue.IsPlayingQueue)
 		p.state.tracks = ctxTracks
 		p.syncPlayerTrackState(ctx, ctxTracks, nil)
-		p.invalidateQueueDerivation(true)
 		p.resetQueueMetaForContext(strings.TrimSpace(p.state.player.ContextUri))
 		if err := p.loadCurrentTrack(ctx, pause, true); err != nil {
 			return fmt.Errorf("failed loading current track (transfer): %w", err)
@@ -437,7 +426,7 @@ func (p *AppPlayer) emitPlaybackState() {
 			if p.state != nil && p.state.player != nil {
 				contextKey = p.state.player.ContextUri
 			}
-			if !p.isContextNamePreloadDone(contextKey) && p.state != nil {
+			if !p.checkNamePreloadStatus(contextKey) && p.state != nil {
 				p.preloadContextQueueMetadata(p.state.tracks, contextKey)
 			}
 		}
@@ -498,7 +487,6 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 				p.runtime.Log.WithError(err).Warn("failed handling dealer request")
 				req.Reply(false)
 			} else {
-				p.runtime.Log.Debugf("sending successful reply for dealer request")
 				req.Reply(true)
 			}
 		case cmd, ok := <-tuiCmdCh:
