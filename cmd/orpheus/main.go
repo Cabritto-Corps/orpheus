@@ -286,8 +286,7 @@ func runLibrespotTUI() error {
 	if err != nil {
 		return fmt.Errorf("open log file: %w", err)
 	}
-	defer logFile.Sync()
-	defer logFile.Close()
+	defer func() { logFile.Sync(); logFile.Close() }()
 	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	log := logrus.New()
 	log.SetLevel(logrus.InfoLevel)
@@ -334,20 +333,22 @@ func runLibrespotTUI() error {
 	}
 
 	var catalog spotify.PlaylistCatalog
-	if cfg, cfgErr := config.LoadFromEnv(); cfgErr == nil {
-		if authMgr, authErr := auth.NewPKCEManager(cfg, auth.NewFileTokenStore(cfg.TokenPath)); authErr == nil {
-			if token, tokenErr := authMgr.LoadToken(); tokenErr == nil && token != nil {
-				oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, oauthHTTPClient())
-				baseTS := authMgr.TokenSource(oauthCtx, token)
-				ts := auth.NewNotifyingTokenSourceWithInitial(baseTS, func(t *oauth2.Token) {
-					_ = authMgr.SaveToken(t)
-				}, token.AccessToken)
-				spotifyClient := spotify.NewClient(oauthCtx, ts)
-				catalog = spotify.NewService(spotifyClient, spotify.Options{
-					ItemsHTTPClient: spotify.NewItemsHTTPClient(ts),
-				})
-			}
-		}
+	if cfg, cfgErr := config.LoadFromEnv(); cfgErr != nil {
+		slog.Warn("spotify config not available, using librespot catalog", "error", cfgErr)
+	} else if authMgr, authErr := auth.NewPKCEManager(cfg, auth.NewFileTokenStore(cfg.TokenPath)); authErr != nil {
+		slog.Warn("spotify auth init failed, using librespot catalog", "error", authErr)
+	} else if token, tokenErr := authMgr.LoadToken(); tokenErr != nil || token == nil {
+		slog.Info("no spotify token found, using librespot catalog")
+	} else {
+		oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, oauthHTTPClient())
+		baseTS := authMgr.TokenSource(oauthCtx, token)
+		ts := auth.NewNotifyingTokenSourceWithInitial(baseTS, func(t *oauth2.Token) {
+			_ = authMgr.SaveToken(t)
+		}, token.AccessToken)
+		spotifyClient := spotify.NewClient(oauthCtx, ts)
+		catalog = spotify.NewService(spotifyClient, spotify.Options{
+			ItemsHTTPClient: spotify.NewItemsHTTPClient(ts),
+		})
 	}
 	if catalog == nil {
 		catalog = librespot.NewPlaylistCatalog(sess)

@@ -2,9 +2,6 @@ package librespot
 
 import (
 	"errors"
-	"strings"
-
-	metadatapb "github.com/devgianlu/go-librespot/proto/spotify/metadata"
 )
 
 var (
@@ -125,37 +122,4 @@ type ApiResponseStatus struct {
 type ApiResponseVolume struct {
 	Value uint32 `json:"value"`
 	Max   uint32 `json:"max"`
-}
-
-func getBestImageIdForSize(images []*metadatapb.Image, size string) []byte {
-	if len(images) == 0 {
-		return nil
-	}
-	imageSize := metadatapb.Image_Size(metadatapb.Image_Size_value[strings.ToUpper(size)])
-	dist := func(a metadatapb.Image_Size) int {
-		diff := int(a) - int(imageSize)
-		if diff < 0 {
-			return -diff
-		}
-		return diff
-	}
-	var bestImage *metadatapb.Image
-	for _, img := range images {
-		if img.Size == nil {
-			continue
-		}
-		if *img.Size == imageSize {
-			return img.FileId
-		}
-		if bestImage == nil || dist(*img.Size) < dist(*bestImage.Size) {
-			bestImage = img
-		}
-	}
-	if bestImage != nil {
-		return bestImage.FileId
-	}
-	if images[0] != nil {
-		return images[0].FileId
-	}
-	return nil
 }

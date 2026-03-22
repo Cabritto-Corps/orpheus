@@ -111,8 +111,10 @@ func (m *Manager) EnsureUsableToken(ctx context.Context) (*oauth2.Token, error) 
 	if refreshed == nil {
 		return nil, errors.New("token source returned nil token")
 	}
-	if err := m.store.Save(refreshed); err != nil {
-		return nil, fmt.Errorf("persist refreshed token: %w", err)
+	if refreshed.AccessToken != token.AccessToken {
+		if err := m.store.Save(refreshed); err != nil {
+			return nil, fmt.Errorf("persist refreshed token: %w", err)
+		}
 	}
 	return refreshed, nil
 }

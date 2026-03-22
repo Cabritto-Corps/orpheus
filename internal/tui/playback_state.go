@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	golibrespot "github.com/elxgy/go-librespot"
 
 	"orpheus/internal/cache"
 	"orpheus/internal/librespot"
@@ -16,7 +17,7 @@ func playbackCoverSubject(status *spotify.PlaybackStatus) string {
 	if status == nil {
 		return ""
 	}
-	if id := normalizeQueueID(status.TrackID); id != "" {
+	if id := golibrespot.NormalizeSpotifyId(status.TrackID); id != "" {
 		return "id:" + id
 	}
 	name := strings.TrimSpace(status.TrackName)
@@ -40,7 +41,7 @@ func queueHeadTrackID(queue []spotify.QueueItem) string {
 	if len(queue) == 0 {
 		return ""
 	}
-	return normalizeQueueID(queue[0].ID)
+	return golibrespot.NormalizeSpotifyId(queue[0].ID)
 }
 
 func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.PlaybackStatus, prevQueueHead, nextQueueHead string) {
@@ -51,12 +52,12 @@ func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.
 	prevProgress := -1
 	nextProgress := -1
 	if prevStatus != nil {
-		prevTrack = normalizeQueueID(prevStatus.TrackID)
+		prevTrack = golibrespot.NormalizeSpotifyId(prevStatus.TrackID)
 		prevURL = strings.TrimSpace(prevStatus.AlbumImageURL)
 		prevProgress = prevStatus.ProgressMS
 	}
 	if nextStatus != nil {
-		nextTrack = normalizeQueueID(nextStatus.TrackID)
+		nextTrack = golibrespot.NormalizeSpotifyId(nextStatus.TrackID)
 		nextURL = strings.TrimSpace(nextStatus.AlbumImageURL)
 		nextProgress = nextStatus.ProgressMS
 	}
@@ -100,7 +101,7 @@ func (m *model) beginTransportTransition() {
 	m.transportTransitionStartedAt = time.Now()
 	m.transportTransitionFromTrack = ""
 	if m.status != nil {
-		m.transportTransitionFromTrack = normalizeQueueID(m.status.TrackID)
+		m.transportTransitionFromTrack = golibrespot.NormalizeSpotifyId(m.status.TrackID)
 	}
 	if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
 		m.imgs.forceKittyRedraw()
@@ -112,7 +113,7 @@ func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
 	if !m.transportTransitionPending || next == nil {
 		return
 	}
-	nextTrack := normalizeQueueID(next.TrackID)
+	nextTrack := golibrespot.NormalizeSpotifyId(next.TrackID)
 	if nextTrack != "" && nextTrack != m.transportTransitionFromTrack {
 		m.transportTransitionPending = false
 		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
@@ -244,14 +245,18 @@ func (m *model) shouldApplySeekSettle(incoming *spotify.PlaybackStatus) bool {
 	if incoming == nil {
 		return false
 	}
+	// Don't settle when paused — incoming state has correct static position
+	if incoming != nil && !incoming.Playing {
+		return false
+	}
 	if m.seekDebouncePending < 0 && (m.seekSentTarget < 0 || time.Since(m.seekSentAt) >= seekSettleWindow) {
 		return false
 	}
 	if m.status == nil {
 		return true
 	}
-	prevTrack := normalizeQueueID(m.status.TrackID)
-	nextTrack := normalizeQueueID(incoming.TrackID)
+	prevTrack := golibrespot.NormalizeSpotifyId(m.status.TrackID)
+	nextTrack := golibrespot.NormalizeSpotifyId(incoming.TrackID)
 	if prevTrack == "" || nextTrack == "" {
 		return true
 	}
@@ -349,8 +354,10 @@ func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.Queue
 	if out.TrackName != "" && out.ArtistName != "" && out.DurationMS > 0 {
 		return &out
 	}
-	nextID := normalizeQueueID(next.TrackID)
-	sameTrack := func(id string) bool { return normalizeQueueID(id) != "" && normalizeQueueID(id) == nextID }
+	nextID := golibrespot.NormalizeSpotifyId(next.TrackID)
+	sameTrack := func(id string) bool {
+		return golibrespot.NormalizeSpotifyId(id) != "" && golibrespot.NormalizeSpotifyId(id) == nextID
+	}
 	if prev != nil && sameTrack(prev.TrackID) {
 		if out.TrackName == "" && prev.TrackName != "" {
 			out.TrackName = prev.TrackName
@@ -399,27 +406,13 @@ func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.Queue
 	return &out
 }
 
-func normalizeQueueID(id string) string {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return id
-	}
-	if strings.HasPrefix(id, "spotify:") {
-		parts := strings.Split(id, ":")
-		if len(parts) >= 3 {
-			return parts[len(parts)-1]
-		}
-	}
-	return id
-}
-
 func mergeQueueNames(prev, next []spotify.QueueItem, cache *cache.TTL[string, spotify.QueueItem]) []spotify.QueueItem {
 	if len(next) == 0 {
 		return next
 	}
 	byID := make(map[string]spotify.QueueItem, len(prev))
 	for _, q := range prev {
-		byID[normalizeQueueID(q.ID)] = q
+		byID[golibrespot.NormalizeSpotifyId(q.ID)] = q
 	}
 	out := make([]spotify.QueueItem, len(next))
 	for i, q := range next {
@@ -427,7 +420,7 @@ func mergeQueueNames(prev, next []spotify.QueueItem, cache *cache.TTL[string, sp
 		if q.Name != "" && q.Artist != "" {
 			continue
 		}
-		key := normalizeQueueID(q.ID)
+		key := golibrespot.NormalizeSpotifyId(q.ID)
 		if p, ok := byID[key]; ok {
 			if out[i].Name == "" && p.Name != "" {
 				out[i].Name = p.Name
@@ -466,7 +459,7 @@ func (m *model) rebuildPreloadedFromQueue() {
 	}
 	for _, q := range m.queue {
 		if q.ID != "" {
-			m.preloadedItemIDs[normalizeQueueID(q.ID)] = struct{}{}
+			m.preloadedItemIDs[golibrespot.NormalizeSpotifyId(q.ID)] = struct{}{}
 		}
 	}
 }

@@ -12,32 +12,6 @@ import (
 	spotifyapi "github.com/zmb3/spotify/v2"
 )
 
-func (s *Service) ListUserPlaylists(ctx context.Context, max int) ([]PlaylistSummary, error) {
-	if max <= 0 {
-		max = 100
-	}
-
-	const pageSize = 50
-	offset := 0
-	out := make([]PlaylistSummary, 0, min(max, pageSize))
-	for len(out) < max {
-		limit := min(pageSize, max-len(out))
-		page, err := s.ListUserPlaylistsPage(ctx, offset, limit)
-		if err != nil {
-			return nil, err
-		}
-		if len(page.Items) == 0 {
-			break
-		}
-		out = append(out, page.Items...)
-		if !page.HasMore || page.NextOffset <= offset {
-			break
-		}
-		offset = page.NextOffset
-	}
-	return out, nil
-}
-
 func (s *Service) ListUserPlaylistsPage(ctx context.Context, offset, limit int) (*PlaylistPage, error) {
 	if offset < 0 {
 		return nil, errors.New("playlist offset must be >= 0")
@@ -207,35 +181,6 @@ func (s *Service) ResolveContextImageURL(ctx context.Context, kind, id string) (
 	default:
 		return "", fmt.Errorf("unsupported context kind %q", kind)
 	}
-}
-
-func (s *Service) ListPlaylistItemIDs(ctx context.Context, playlistID string, max int) ([]string, error) {
-	playlistID = strings.TrimSpace(playlistID)
-	if playlistID == "" {
-		return nil, errors.New("playlist ID must not be empty")
-	}
-	if max <= 0 {
-		max = 500
-	}
-
-	const pageSize = 100
-	offset := 0
-	out := make([]string, 0, min(max, pageSize))
-	for len(out) < max {
-		limit := min(pageSize, max-len(out))
-		page, err := s.ListPlaylistItemsPage(ctx, playlistID, offset, limit)
-		if err != nil {
-			return nil, err
-		}
-		if len(page.ItemIDs) > 0 {
-			out = append(out, page.ItemIDs...)
-		}
-		if !page.HasMore || page.NextOffset <= offset {
-			break
-		}
-		offset = page.NextOffset
-	}
-	return out, nil
 }
 
 func (s *Service) ListPlaylistItemsPage(ctx context.Context, playlistID string, offset, limit int) (*PlaylistItemsPage, error) {

@@ -6,8 +6,8 @@ import (
 	"math"
 	"time"
 
-	"github.com/devgianlu/go-librespot/player"
-	"github.com/devgianlu/go-librespot/session"
+	"github.com/elxgy/go-librespot/player"
+	"github.com/elxgy/go-librespot/session"
 
 	"orpheus/internal/cache"
 )

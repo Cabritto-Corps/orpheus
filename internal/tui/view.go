@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	golibrespot "github.com/elxgy/go-librespot"
+	"github.com/mattn/go-runewidth"
 
 	"orpheus/internal/spotify"
 )
@@ -422,8 +424,8 @@ func (m model) queuePanel(w, h int) string {
 	displayQueue := m.queue
 	hidCurrentFromQueue := false
 	if m.status != nil && len(displayQueue) > 0 {
-		currentID := normalizeQueueID(m.status.TrackID)
-		if currentID != "" && normalizeQueueID(displayQueue[0].ID) == currentID {
+		currentID := golibrespot.NormalizeSpotifyId(m.status.TrackID)
+		if currentID != "" && golibrespot.NormalizeSpotifyId(displayQueue[0].ID) == currentID {
 			displayQueue = displayQueue[1:]
 			hidCurrentFromQueue = true
 		}
@@ -678,7 +680,7 @@ func truncate(s string, max int) string {
 	var b strings.Builder
 	w := 0
 	for _, r := range s {
-		rw := lipgloss.Width(string(r))
+		rw := runewidth.RuneWidth(r)
 		if w+rw > limit {
 			break
 		}
@@ -738,7 +740,7 @@ func (m model) kittyOverlay() string {
 	case tabPlayer:
 		if m.status != nil {
 			url = m.status.AlbumImageURL
-			subjectID = normalizeQueueID(m.status.TrackID)
+			subjectID = golibrespot.NormalizeSpotifyId(m.status.TrackID)
 			if subjectID == "" {
 				subjectID = strings.TrimSpace(m.status.TrackName) + "|" + strings.TrimSpace(m.status.ArtistName) + "|" + fmt.Sprintf("%d", m.status.DurationMS)
 			}

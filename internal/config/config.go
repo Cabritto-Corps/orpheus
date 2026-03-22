@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -25,7 +26,11 @@ type Config struct {
 }
 
 func LoadFromEnv() (Config, error) {
-	_ = godotenv.Load()
+	if err := godotenv.Load(); err != nil {
+		if _, statErr := os.Stat(".env"); statErr == nil {
+			slog.Warn("failed to parse .env file", "error", err)
+		}
+	}
 
 	cfg := Config{
 		SpotifyClientID:      envAny("spotify_client_id", "SPOTIFY_CLIENT_ID"),

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	golibrespot "github.com/elxgy/go-librespot"
 
 	"orpheus/internal/cache"
 	"orpheus/internal/config"
@@ -15,11 +16,13 @@ import (
 	"orpheus/internal/spotify"
 )
 
-func TestNormalizeQueueID(t *testing.T) {
-	if got := normalizeQueueID("spotify:track:abc123"); got != "abc123" {
-		t.Fatalf("expected spotify URI to normalize to id, got %q", got)
+func TestNormalizeSpotifyId(t *testing.T) {
+	// Valid Spotify URI: 22-char base62 ID
+	if got := golibrespot.NormalizeSpotifyId("spotify:track:7GhIk7Il098yCjg4BQjzvb"); got != "7GhIk7Il098yCjg4BQjzvb" {
+		t.Fatalf("expected spotify URI to normalize to base62 id, got %q", got)
 	}
-	if got := normalizeQueueID("plain-id"); got != "plain-id" {
+	// Non-URI strings pass through unchanged
+	if got := golibrespot.NormalizeSpotifyId("plain-id"); got != "plain-id" {
 		t.Fatalf("expected plain id unchanged, got %q", got)
 	}
 }
@@ -108,7 +111,7 @@ func TestShouldApplySeekSettleRequiresSameTrack(t *testing.T) {
 	if m.shouldApplySeekSettle(&spotify.PlaybackStatus{TrackID: "track-b"}) {
 		t.Fatalf("expected seek settle to be skipped across track switch")
 	}
-	if !m.shouldApplySeekSettle(&spotify.PlaybackStatus{TrackID: "track-a"}) {
+	if !m.shouldApplySeekSettle(&spotify.PlaybackStatus{TrackID: "track-a", Playing: true}) {
 		t.Fatalf("expected seek settle to apply on same track")
 	}
 }
@@ -214,13 +217,13 @@ func TestShouldApplyIncomingQueueTimeoutAllowsApply(t *testing.T) {
 func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 	m := model{
 		status:           &spotify.PlaybackStatus{},
-		queue:            []spotify.QueueItem{{ID: "spotify:track:stale"}},
-		preloadedItemIDs: map[string]struct{}{"stale": {}, "ghost": {}},
+		queue:            []spotify.QueueItem{{ID: "spotify:track:7GhIk7Il098yCjg4BQjzvb"}},
+		preloadedItemIDs: map[string]struct{}{"7GhIk7Il098yCjg4BQjzvb": {}, "ghost": {}},
 		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 	}
 	m.applyMergedQueue(
 		[]spotify.QueueItem{
-			{ID: "spotify:track:new-1", Name: "Track 1", Artist: "Artist 1"},
+			{ID: "spotify:track:2WfaOiMkCvy7F5fcp2zZ8L", Name: "Track 1", Artist: "Artist 1"},
 			{ID: "plain-2", Name: "Track 2", Artist: "Artist 2"},
 		},
 		false,
@@ -229,13 +232,13 @@ func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 		false,
 	)
 
-	if _, ok := m.preloadedItemIDs["new-1"]; !ok {
+	if _, ok := m.preloadedItemIDs["2WfaOiMkCvy7F5fcp2zZ8L"]; !ok {
 		t.Fatal("expected normalized spotify id to be preloaded")
 	}
 	if _, ok := m.preloadedItemIDs["plain-2"]; !ok {
 		t.Fatal("expected plain id to be preloaded")
 	}
-	if _, ok := m.preloadedItemIDs["stale"]; ok {
+	if _, ok := m.preloadedItemIDs["7GhIk7Il098yCjg4BQjzvb"]; ok {
 		t.Fatal("expected stale preloaded ids to be removed")
 	}
 	if len(m.preloadedItemIDs) != 2 {
@@ -533,8 +536,8 @@ func TestHandlePollMsgClearsQueueOnTrackChangeWithoutQueueFetch(t *testing.T) {
 	m.queueHasMore = true
 
 	msg := pollMsg{
-		token:       1,
-		status:      &spotify.PlaybackStatus{TrackID: "track-c"},
+		token:        1,
+		status:       &spotify.PlaybackStatus{TrackID: "track-c"},
 		queueFetched: false,
 	}
 	next, _ := m.handlePollMsg(msg)
