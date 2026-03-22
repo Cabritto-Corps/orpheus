@@ -119,7 +119,7 @@ const (
 	prefetchLeadTime           = 30 * time.Second
 	prefetchImmediateThreshold = 10 * time.Second
 	endTransitionGuardInterval = 500 * time.Millisecond
-	endTransitionGuardLeewayMs = int64(250)
+	endTransitionGuardLeewayMs = int64(50)
 )
 
 func stopAndResetTimer(t *time.Timer, d time.Duration) {

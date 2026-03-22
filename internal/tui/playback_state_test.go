@@ -111,7 +111,7 @@ func TestShouldApplySeekSettleRequiresSameTrack(t *testing.T) {
 	if m.shouldApplySeekSettle(&spotify.PlaybackStatus{TrackID: "track-b"}) {
 		t.Fatalf("expected seek settle to be skipped across track switch")
 	}
-	if !m.shouldApplySeekSettle(&spotify.PlaybackStatus{TrackID: "track-a"}) {
+	if !m.shouldApplySeekSettle(&spotify.PlaybackStatus{TrackID: "track-a", Playing: true}) {
 		t.Fatalf("expected seek settle to apply on same track")
 	}
 }

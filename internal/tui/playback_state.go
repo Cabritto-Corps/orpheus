@@ -245,6 +245,10 @@ func (m *model) shouldApplySeekSettle(incoming *spotify.PlaybackStatus) bool {
 	if incoming == nil {
 		return false
 	}
+	// Don't settle when paused — incoming state has correct static position
+	if incoming != nil && !incoming.Playing {
+		return false
+	}
 	if m.seekDebouncePending < 0 && (m.seekSentTarget < 0 || time.Since(m.seekSentAt) >= seekSettleWindow) {
 		return false
 	}
