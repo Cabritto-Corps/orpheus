@@ -3,8 +3,6 @@ package librespot
 import (
 	"context"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	golibrespot "github.com/elxgy/go-librespot"
@@ -38,8 +36,6 @@ func (p *AppPlayer) resetQueueMetaForContext(contextKey string) {
 	p.queueMetaMu.Lock()
 	if p.queueMetaCache == nil {
 		p.queueMetaCache = cache.NewLRU[string, PlaybackStateQueueEntry](8192)
-	} else {
-		p.queueMetaCache.Clear()
 	}
 	p.queueMetaMu.Unlock()
 
@@ -148,30 +144,25 @@ func (p *AppPlayer) preloadContextQueueMetadata(trackList *tracks.List, contextK
 			p.runtime.EmitPlaybackState(p.BuildPlaybackStateUpdate())
 			return
 		}
-		sem := make(chan struct{}, queueResolveConcurrency)
-		var wg sync.WaitGroup
-		var resolved atomic.Int32
-		for _, uri := range toResolve {
-			uri := uri
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				select {
-				case sem <- struct{}{}:
-					defer func() { <-sem }()
-				case <-ctx.Done():
-					return
-				}
-				e, ok := p.resolveQueueEntry(ctx, uri)
-				if !ok {
-					return
-				}
-				p.setCachedQueueMeta(e.ID, e)
-				resolved.Add(1)
-			}()
+
+		// Batch resolve all tracks in a single HTTP request
+		batch, err := p.sess.Spclient().ResolveTrackOrEpisodeMetadataBatch(ctx, toResolve)
+		if err != nil {
+			p.runtime.Log.WithError(err).Warn("batch metadata resolution failed")
+			return
 		}
-		wg.Wait()
-		if resolved.Load() > 0 {
+		for uri, entry := range batch {
+			id := golibrespot.NormalizeSpotifyId(uri)
+			if id == "" {
+				continue
+			}
+			e := PlaybackStateQueueEntry{ID: id, Name: entry.Name, Artist: entry.Artist, DurationMS: entry.DurationMS}
+			if e.Artist == "" {
+				e.Artist = "-"
+			}
+			p.setCachedQueueMeta(id, e)
+		}
+		if len(batch) > 0 {
 			p.runtime.EmitPlaybackState(p.BuildPlaybackStateUpdate())
 		}
 	}(token, strings.TrimSpace(contextKey), trackList)
@@ -194,5 +185,3 @@ func (p *AppPlayer) resolveQueueEntry(ctx context.Context, uri string) (e Playba
 	}
 	return PlaybackStateQueueEntry{ID: id, Name: name, Artist: artist, DurationMS: durationMS}, true
 }
-
-const queueResolveConcurrency = 10

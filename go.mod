@@ -6,14 +6,14 @@ require (
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/elxgy/go-librespot v0.0.0-20260322053152-8df5054591f6
+	github.com/elxgy/go-librespot v0.0.0-20260322154431-f15e4eb5fa18
 	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-runewidth v0.0.21
 	github.com/sirupsen/logrus v1.9.4
 	github.com/zmb3/spotify/v2 v2.4.3
 	golang.org/x/image v0.37.0
 	golang.org/x/oauth2 v0.36.0
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.10
 )
 
 require (

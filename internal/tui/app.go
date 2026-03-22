@@ -26,7 +26,7 @@ const (
 	tabAlbums                     tab = "albums"
 	tabPlayer                     tab = "player"
 	playlistItemPageSize              = 100
-	queuePollEvery                    = 4
+	queuePollEvery                    = 2
 	playlistLoadBatchSize             = 25
 	playlistLoadMax                   = 500
 	playlistItemPreloadMax            = 500
@@ -41,7 +41,7 @@ const (
 	kittyProtocolFallbackFailures     = 8
 	trackMetadataTTL                  = 2 * time.Hour
 	uiTickInterval                    = 200 * time.Millisecond
-	navDebounceInterval               = 120 * time.Millisecond
+	navDebounceInterval               = 60 * time.Millisecond
 	volSeekDebounceInterval           = 50 * time.Millisecond
 	volSettleWindow                   = 3 * time.Second
 	seekSettleWindow                  = 1200 * time.Millisecond
@@ -615,6 +615,12 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Global playback keys: work on all tabs, not just player
+	if action := m.matchGlobalPlaybackKey(msg); action != "" {
+		m.enqueuePlaybackInput(action)
+		return m, m.pumpInputExecutor()
+	}
+
 	switch m.activeTab {
 	case tabPlaylists:
 		return m.handlePlaylistKey(msg)
@@ -697,6 +703,33 @@ func (m model) handleAlbumKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.loadImageCmd(nextURL, false))
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// matchGlobalPlaybackKey returns a playback input for keys that should work on all tabs.
+func (m model) matchGlobalPlaybackKey(msg tea.KeyMsg) playbackInputKind {
+	k := m.keys
+	switch {
+	case keyMatches(msg, k.VolUp):
+		return playbackInputVolUp
+	case keyMatches(msg, k.VolDown):
+		return playbackInputVolDown
+	case keyMatches(msg, k.Shuffle):
+		return playbackInputShuffle
+	case keyMatches(msg, k.Loop):
+		return playbackInputLoop
+	case keyMatches(msg, k.PlayPause):
+		return playbackInputPlayPause
+	case keyMatches(msg, k.Next):
+		return playbackInputNext
+	case keyMatches(msg, k.Prev):
+		return playbackInputPrev
+	case keyMatches(msg, k.SeekBack):
+		return playbackInputSeekBack
+	case keyMatches(msg, k.SeekFwd):
+		return playbackInputSeekFwd
+	default:
+		return ""
+	}
 }
 
 func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
