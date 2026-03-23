@@ -286,7 +286,7 @@ func runLibrespotTUI() error {
 	if err != nil {
 		return fmt.Errorf("open log file: %w", err)
 	}
-	defer func() { logFile.Sync(); logFile.Close() }()
+	defer func() { _ = logFile.Sync(); _ = logFile.Close() }()
 	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	log := logrus.New()
 	log.SetLevel(logrus.InfoLevel)

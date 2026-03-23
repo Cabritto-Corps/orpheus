@@ -143,7 +143,7 @@ func (s *Service) ResolveContextImageURL(ctx context.Context, kind, id string) (
 		if err != nil {
 			return "", err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		var images []PlaylistImage
 		if err := DecodeWebAPIJSON(resp, http.StatusOK, &images, func(status int, body string) error {
 			return &httpStatusError{status: status, err: fmt.Errorf("playlist images: %s", body)}
@@ -165,7 +165,7 @@ func (s *Service) ResolveContextImageURL(ctx context.Context, kind, id string) (
 		if err != nil {
 			return "", err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		var album struct {
 			Images []PlaylistImage `json:"images"`
 		}
@@ -252,7 +252,7 @@ func (s *Service) fetchPlaylistItemsViaItemsEndpoint(ctx context.Context, playli
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var page playlistItemsResponse
 	if err := DecodeWebAPIJSON(resp, http.StatusOK, &page, func(status int, body string) error {
 		return &httpStatusError{status: status, err: fmt.Errorf("playlist items: %s", body)}
@@ -290,7 +290,7 @@ func (s *Service) fetchPlaylistsViaHTTP(ctx context.Context, offset, limit int) 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var page playlistPageResponse
 	if err := DecodeWebAPIJSON(resp, http.StatusOK, &page, func(status int, body string) error {
 		return &httpStatusError{status: status, err: fmt.Errorf("playlists: %s", body)}
