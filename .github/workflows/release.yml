@@ -39,7 +39,7 @@ jobs:
         include:
           - os: ubuntu-24.04
             suffix: linux-amd64
-            deps: sudo apt-get update && sudo apt-get install -y libasound2-dev
+            deps: sudo apt-get update && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
           - os: macos-15
             suffix: darwin-arm64
             deps: brew install libogg libvorbis flac
