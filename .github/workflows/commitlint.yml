@@ -1,0 +1,42 @@
+name: Commit Lint
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  commitlint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit messages
+        run: |
+          BASE=${{ github.event.pull_request.base.sha }}
+          HEAD=${{ github.event.pull_request.head.sha }}
+          ALLOWED="feat|fix|hotfix|release|refactor|perf|chore|docs|test"
+          FAILED=0
+
+          for SHA in $(git rev-list $BASE..$HEAD); do
+            MSG=$(git log --format=%s -n1 $SHA)
+            if ! echo "$MSG" | grep -qE "^($ALLOWED)(\(.*\))?: "; then
+              echo "FAIL: $SHA: $MSG"
+              echo "  Expected format: <type>: <description>"
+              echo "  Allowed types: feat, fix, hotfix, release, refactor, perf, chore, docs, test"
+              FAILED=1
+            else
+              echo "OK:   $SHA: $MSG"
+            fi
+          done
+
+          if [ "$FAILED" = "1" ]; then
+            echo ""
+            echo "Examples:"
+            echo "  feat: add shuffle toggle to all tabs"
+            echo "  fix(queue): prevent duplicate tracks after skip"
+            echo "  hotfix: close stream on track change to prevent fd leak"
+            echo "  release: bump version to 1.2.0"
+            exit 1
+          fi

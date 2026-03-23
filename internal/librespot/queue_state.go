@@ -145,7 +145,6 @@ func (p *AppPlayer) preloadContextQueueMetadata(trackList *tracks.List, contextK
 			return
 		}
 
-		// Batch resolve all tracks in a single HTTP request
 		batch, err := p.sess.Spclient().ResolveTrackOrEpisodeMetadataBatch(ctx, toResolve)
 		if err != nil {
 			p.runtime.Log.WithError(err).Warn("batch metadata resolution failed")

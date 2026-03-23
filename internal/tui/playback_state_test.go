@@ -17,11 +17,9 @@ import (
 )
 
 func TestNormalizeSpotifyId(t *testing.T) {
-	// Valid Spotify URI: 22-char base62 ID
 	if got := golibrespot.NormalizeSpotifyId("spotify:track:7GhIk7Il098yCjg4BQjzvb"); got != "7GhIk7Il098yCjg4BQjzvb" {
 		t.Fatalf("expected spotify URI to normalize to base62 id, got %q", got)
 	}
-	// Non-URI strings pass through unchanged
 	if got := golibrespot.NormalizeSpotifyId("plain-id"); got != "plain-id" {
 		t.Fatalf("expected plain id unchanged, got %q", got)
 	}
