@@ -705,7 +705,6 @@ func (m model) handleAlbumKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// matchGlobalPlaybackKey returns a playback input for keys that should work on all tabs.
 func (m model) matchGlobalPlaybackKey(msg tea.KeyMsg) playbackInputKind {
 	k := m.keys
 	switch {
@@ -723,10 +722,6 @@ func (m model) matchGlobalPlaybackKey(msg tea.KeyMsg) playbackInputKind {
 		return playbackInputNext
 	case keyMatches(msg, k.Prev):
 		return playbackInputPrev
-	case keyMatches(msg, k.SeekBack):
-		return playbackInputSeekBack
-	case keyMatches(msg, k.SeekFwd):
-		return playbackInputSeekFwd
 	default:
 		return ""
 	}
