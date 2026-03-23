@@ -164,15 +164,19 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	m.playlistList.SetItems(plItems)
-	m.albumList.SetItems(alItems)
-	if len(plItems) > 0 {
-		idx := clampInt(prevPlaylistIndex, 0, len(plItems)-1)
-		m.playlistList.Select(idx)
+	if m.playlistList.FilterState() == list.Unfiltered {
+		m.playlistList.SetItems(plItems)
+		if len(plItems) > 0 {
+			idx := clampInt(prevPlaylistIndex, 0, len(plItems)-1)
+			m.playlistList.Select(idx)
+		}
 	}
-	if len(alItems) > 0 {
-		idx := clampInt(prevAlbumIndex, 0, len(alItems)-1)
-		m.albumList.Select(idx)
+	if m.albumList.FilterState() == list.Unfiltered {
+		m.albumList.SetItems(alItems)
+		if len(alItems) > 0 {
+			idx := clampInt(prevAlbumIndex, 0, len(alItems)-1)
+			m.albumList.Select(idx)
+		}
 	}
 	playlistPreviewURL := selectedImageURLFromList(m.playlistList)
 	if playlistPreviewURL == "" && len(plItems) > 0 {
@@ -458,15 +462,12 @@ func (m model) handleSeekDebounceMsg(msg seekDebounceMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleFilterMatchesMsg(msg list.FilterMatchesMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch m.activeTab {
 	case tabPlaylists:
-		var cmd tea.Cmd
 		m.playlistList, cmd = m.playlistList.Update(msg)
-		return m, cmd
 	case tabAlbums:
-		var cmd tea.Cmd
 		m.albumList, cmd = m.albumList.Update(msg)
-		return m, cmd
 	}
-	return m, nil
+	return m, cmd
 }

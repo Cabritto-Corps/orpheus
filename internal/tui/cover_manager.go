@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"orpheus/internal/spotify"
@@ -256,9 +257,11 @@ func (m *model) applyResolvedContextImageURL(kind, id, imageURL string) bool {
 			break
 		}
 		if updated {
-			m.playlistList.SetItems(items)
-			if len(items) > 0 {
-				m.playlistList.Select(clampInt(prevIndex, 0, len(items)-1))
+			if m.playlistList.FilterState() == list.Unfiltered {
+				m.playlistList.SetItems(items)
+				if len(items) > 0 {
+					m.playlistList.Select(clampInt(prevIndex, 0, len(items)-1))
+				}
 			}
 		}
 	case spotify.ContextKindAlbum:
@@ -278,9 +281,11 @@ func (m *model) applyResolvedContextImageURL(kind, id, imageURL string) bool {
 			break
 		}
 		if updated {
-			m.albumList.SetItems(items)
-			if len(items) > 0 {
-				m.albumList.Select(clampInt(prevIndex, 0, len(items)-1))
+			if m.albumList.FilterState() == list.Unfiltered {
+				m.albumList.SetItems(items)
+				if len(items) > 0 {
+					m.albumList.Select(clampInt(prevIndex, 0, len(items)-1))
+				}
 			}
 		}
 	}

@@ -139,7 +139,7 @@ type playlistItem struct {
 
 func (p playlistItem) Title() string { return p.summary.Name }
 func (p playlistItem) FilterValue() string {
-	return p.summary.Name + " " + p.summary.Owner + " " + p.summary.Kind
+	return p.summary.Name
 }
 
 func (p playlistItem) Description() string {
@@ -226,7 +226,9 @@ func (m model) shouldEnsureAlbumImageLoad(prev, next *spotify.PlaybackStatus) bo
 func normalizeListPagination(l *list.Model) {
 	visible := l.VisibleItems()
 	if len(visible) == 0 {
-		l.Paginator.Page = 0
+		if l.FilterState() == list.Unfiltered {
+			l.Paginator.Page = 0
+		}
 		return
 	}
 	perPage := l.Paginator.PerPage
@@ -235,7 +237,13 @@ func normalizeListPagination(l *list.Model) {
 	}
 	maxPage := (len(visible) - 1) / perPage
 	l.Paginator.Page = clampInt(l.Paginator.Page, 0, maxPage)
-	l.Select(clampInt(l.GlobalIndex(), 0, len(visible)-1))
+	if l.FilterState() == list.Unfiltered {
+		idx := l.GlobalIndex()
+		if idx >= len(visible) {
+			idx = 0
+		}
+		l.Select(idx)
+	}
 }
 
 func (m *model) normalizeLibraryPagination() {
@@ -712,16 +720,8 @@ func (m model) matchGlobalPlaybackKey(msg tea.KeyMsg) playbackInputKind {
 		return playbackInputVolUp
 	case keyMatches(msg, k.VolDown):
 		return playbackInputVolDown
-	case keyMatches(msg, k.Shuffle):
-		return playbackInputShuffle
-	case keyMatches(msg, k.Loop):
-		return playbackInputLoop
 	case keyMatches(msg, k.PlayPause):
 		return playbackInputPlayPause
-	case keyMatches(msg, k.Next):
-		return playbackInputNext
-	case keyMatches(msg, k.Prev):
-		return playbackInputPrev
 	default:
 		return ""
 	}
