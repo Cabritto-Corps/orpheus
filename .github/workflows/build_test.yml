@@ -26,7 +26,7 @@ jobs:
           restore-keys: go-${{ runner.os }}-
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
 
       - name: Download dependencies
         run: go mod download
@@ -71,8 +71,11 @@ jobs:
           key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
           restore-keys: go-${{ runner.os }}-
 
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
-          args: --timeout=5m --skip-dirs=cmd
+          version: v2.0.2
+          args: --timeout=5m
