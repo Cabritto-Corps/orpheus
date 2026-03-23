@@ -59,12 +59,12 @@ const (
 	deviceActivationWaitTimeout             = 2 * time.Second
 	transferInitialRetryDelay               = 150 * time.Millisecond
 	transferMaxAttempts                     = 3
-	apiRetryInitialDelay = 250 * time.Millisecond
-	apiRetryMaxDelay     = 8 * time.Second
-	apiRetryMaxAttempts  = 4
-	apiRetryExponentCap  = 5
-	rateLimitRetryDelay  = 5 * time.Second
-	pollStatusBackoffMax = 10 * time.Second
+	apiRetryInitialDelay                    = 250 * time.Millisecond
+	apiRetryMaxDelay                        = 8 * time.Second
+	apiRetryMaxAttempts                     = 4
+	apiRetryExponentCap                     = 5
+	rateLimitRetryDelay                     = 5 * time.Second
+	pollStatusBackoffMax                    = 10 * time.Second
 )
 
 type Options struct {
@@ -335,7 +335,7 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 	if req.Body != nil {
 		var err error
 		bodyBytes, err = io.ReadAll(req.Body)
-		req.Body.Close()
+		_ = req.Body.Close()
 		if err != nil {
 			return nil, err
 		}
@@ -375,7 +375,7 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 		}
 
 		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		t.mu.Lock()
 		if next := time.Now().Add(delay); next.After(t.waitUntil) {
@@ -392,7 +392,7 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 }
 
 func NewClient(_ context.Context, tokenSource oauth2.TokenSource) *spotifyapi.Client {
-	var base http.RoundTripper = http.DefaultTransport
+	base := http.DefaultTransport
 	if t, ok := http.DefaultTransport.(*http.Transport); ok {
 		clone := t.Clone()
 		clone.ResponseHeaderTimeout = 0
@@ -410,7 +410,7 @@ func NewClient(_ context.Context, tokenSource oauth2.TokenSource) *spotifyapi.Cl
 const spotifyAPIBase = "https://api.spotify.com/v1/"
 
 func NewItemsHTTPClient(tokenSource oauth2.TokenSource) *http.Client {
-	var base http.RoundTripper = http.DefaultTransport
+	base := http.DefaultTransport
 	if t, ok := http.DefaultTransport.(*http.Transport); ok {
 		clone := t.Clone()
 		clone.ResponseHeaderTimeout = 0

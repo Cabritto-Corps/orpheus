@@ -19,10 +19,7 @@ func (p *AppPlayer) BuildPlaybackStateUpdate() *PlaybackStateUpdate {
 	pos := golibrespot.TrackPosition(p.state.player, 0)
 	vol := p.apiVolume()
 	playing := p.state.player.IsPlaying && !p.state.player.IsPaused
-	shuffle := false
-	if p.state.player.Options != nil && p.state.player.Options.ShufflingContext {
-		shuffle = true
-	}
+	shuffle := p.state.player.Options != nil && p.state.player.Options.ShufflingContext
 	out := &PlaybackStateUpdate{
 		DeviceName:    p.runtime.Cfg.DeviceName,
 		DeviceID:      p.runtime.DeviceId,

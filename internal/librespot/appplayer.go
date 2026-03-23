@@ -175,9 +175,6 @@ func (p *AppPlayer) handleDealerMessage(ctx context.Context, msg dealer.Message)
 	defer cancel()
 	if strings.HasPrefix(msg.Uri, "hm://pusher/v1/connections/") {
 		p.spotConnId = msg.Headers["Spotify-Connection-Id"]
-		if len(p.spotConnId) >= 16 {
-		} else {
-		}
 		if err := p.putConnectState(ctx, connectpb.PutStateReason_NEW_DEVICE); err != nil {
 			return fmt.Errorf("failed initial state put: %w", err)
 		}
@@ -328,18 +325,19 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		return p.play(ctx)
 	case "seek_to":
 		var position int64
-		if req.Command.Relative == "current" {
+		switch req.Command.Relative {
+		case "current":
 			position = p.currentPositionMs() + req.Command.Position
-		} else if req.Command.Relative == "beginning" {
+		case "beginning":
 			position = req.Command.Position
-		} else if req.Command.Relative == "" {
+		case "":
 			if pos, ok := req.Command.Value.(float64); ok {
 				position = int64(pos)
 			} else {
 				p.runtime.Log.Warnf("unsupported seek_to position type: %T", req.Command.Value)
 				return nil
 			}
-		} else {
+		default:
 			p.runtime.Log.Warnf("unsupported seek_to relative position: %s", req.Command.Relative)
 			return nil
 		}

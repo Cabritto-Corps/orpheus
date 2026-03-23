@@ -166,21 +166,3 @@ func (p *AppPlayer) preloadContextQueueMetadata(trackList *tracks.List, contextK
 		}
 	}(token, strings.TrimSpace(contextKey), trackList)
 }
-
-func (p *AppPlayer) resolveQueueEntry(ctx context.Context, uri string) (e PlaybackStateQueueEntry, ok bool) {
-	id := golibrespot.NormalizeSpotifyId(uri)
-	if id == "" {
-		return PlaybackStateQueueEntry{ID: id}, false
-	}
-	name, artist, durationMS, err := p.sess.Spclient().ResolveTrackOrEpisodeMetadata(ctx, uri)
-	if err != nil {
-		return PlaybackStateQueueEntry{ID: id}, false
-	}
-	if name == "" {
-		name = "Unknown track"
-	}
-	if artist == "" {
-		artist = "-"
-	}
-	return PlaybackStateQueueEntry{ID: id, Name: name, Artist: artist, DurationMS: durationMS}, true
-}

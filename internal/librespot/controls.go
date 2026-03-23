@@ -782,8 +782,6 @@ func (p *AppPlayer) applyAdvanceNextSelection(ctx context.Context, selection adv
 		p.clearSecondaryStream()
 	}
 	p.state.player.IsPaused = !selection.hasNextTrack
-	if selection.wrappedContext && p.state.player.Options != nil && p.state.player.Options.RepeatingContext {
-	}
 }
 
 func (p *AppPlayer) currentTrackID() string {

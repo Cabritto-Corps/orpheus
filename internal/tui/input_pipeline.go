@@ -233,7 +233,7 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 		if m.status == nil {
 			return nil
 		}
-		target := 50
+		var target int
 		if m.volDebouncePending >= 0 {
 			target = clampInt(m.volDebouncePending+5, 0, 100)
 		} else {
@@ -247,7 +247,7 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 		if m.status == nil {
 			return nil
 		}
-		target := 50
+		var target int
 		if m.volDebouncePending >= 0 {
 			target = clampInt(m.volDebouncePending-5, 0, 100)
 		} else {

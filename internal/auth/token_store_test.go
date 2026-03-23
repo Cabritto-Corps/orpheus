@@ -46,7 +46,7 @@ func TestLoadMissingFile(t *testing.T) {
 func TestLoadCorruptedFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.json")
-	os.WriteFile(path, []byte("not json"), 0o600)
+	_ = os.WriteFile(path, []byte("not json"), 0o600)
 
 	store := NewFileTokenStore(path)
 	_, err := store.Load()
@@ -84,7 +84,7 @@ func TestSaveUsesAtomicRename(t *testing.T) {
 	path := filepath.Join(dir, "token.json")
 	store := NewFileTokenStore(path)
 
-	store.Save(&oauth2.Token{AccessToken: "v1"})
+	_ = store.Save(&oauth2.Token{AccessToken: "v1"})
 
 	tmpPath := path + ".tmp"
 	if _, err := os.Stat(tmpPath); err == nil {
@@ -97,7 +97,7 @@ func TestSaveFilePermissions(t *testing.T) {
 	path := filepath.Join(dir, "token.json")
 	store := NewFileTokenStore(path)
 
-	store.Save(&oauth2.Token{AccessToken: "secret"})
+	_ = store.Save(&oauth2.Token{AccessToken: "secret"})
 	info, _ := os.Stat(path)
 	perm := info.Mode().Perm()
 	if perm != 0o600 {
