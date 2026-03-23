@@ -58,9 +58,21 @@ func (p *AppPlayer) prefetchCandidateIDs(ctx context.Context) []golibrespot.Spot
 }
 
 func (p *AppPlayer) clearSecondaryStream() {
+	if p.secondaryStream != nil {
+		closeStream(p.secondaryStream)
+	}
 	p.secondaryStream = nil
 	if p.player != nil {
 		p.player.SetSecondaryStream(nil)
+	}
+}
+
+func closeStream(s *player.Stream) {
+	if s == nil {
+		return
+	}
+	if closer, ok := s.Source.(interface{ Close() error }); ok {
+		_ = closer.Close()
 	}
 }
 
@@ -230,7 +242,16 @@ func (p *AppPlayer) runPrefetchWorker(ctx context.Context) {
 			jobCtx, cancel := context.WithTimeout(p.ownerContext(), 30*time.Second)
 			stream, err := p.player.NewStream(jobCtx, p.runtime.Client, job.target, p.runtime.Cfg.Bitrate, 0)
 			cancel()
-			p.prefetchDone <- prefetchResult{gen: job.gen, nextURI: job.nextURI, target: job.target, stream: stream, err: err}
+			if ctx.Err() != nil {
+				closeStream(stream)
+				return
+			}
+			select {
+			case <-ctx.Done():
+				closeStream(stream)
+				return
+			case p.prefetchDone <- prefetchResult{gen: job.gen, nextURI: job.nextURI, target: job.target, stream: stream, err: err}:
+			}
 		}
 	}
 }
@@ -246,12 +267,15 @@ func (p *AppPlayer) handlePrefetchResult(res prefetchResult) {
 		return
 	}
 	if p.primaryStream != nil && p.primaryStream.Is(res.target) {
+		closeStream(res.stream)
 		return
 	}
 	if p.secondaryStream != nil && p.secondaryStream.Is(res.target) {
+		closeStream(res.stream)
 		return
 	}
 	if p.hasTransitionCachedStream(res.target) {
+		closeStream(res.stream)
 		return
 	}
 	repeatTrack := p.state != nil &&
@@ -483,17 +507,20 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	p.emitPlaybackState()
 	var prefetched bool
 	if p.secondaryStream != nil && p.secondaryStream.Is(*spotId) {
+		closeStream(p.primaryStream)
 		p.primaryStream = p.secondaryStream
 		p.clearSecondaryStream()
 		prefetched = true
 	} else {
 		if trackPosition == 0 {
 			if cached := p.takeTransitionCachedStream(*spotId); cached != nil {
+				closeStream(p.primaryStream)
 				p.primaryStream = cached
 				prefetched = true
 			}
 		}
 		if p.primaryStream == nil {
+			closeStream(p.primaryStream)
 			p.clearSecondaryStream()
 			prefetched = false
 			var err error

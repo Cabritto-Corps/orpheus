@@ -55,6 +55,9 @@ func (p *AppPlayer) putTransitionCachedStream(id golibrespot.SpotifyId, stream *
 	if len(p.transitionStreamOrder) >= transitionStreamCacheMax {
 		evict := p.transitionStreamOrder[0]
 		p.transitionStreamOrder = p.transitionStreamOrder[1:]
+		if old := p.transitionStreamCache[evict]; old != nil {
+			closeStream(old)
+		}
 		delete(p.transitionStreamCache, evict)
 	}
 	p.transitionStreamOrder = append(p.transitionStreamOrder, key)
@@ -64,6 +67,9 @@ func (p *AppPlayer) putTransitionCachedStream(id golibrespot.SpotifyId, stream *
 
 func (p *AppPlayer) clearTransitionStreamCache() {
 	p.transitionStreamMu.Lock()
+	for _, s := range p.transitionStreamCache {
+		closeStream(s)
+	}
 	p.transitionStreamCache = make(map[string]*player.Stream, transitionStreamCacheMax)
 	p.transitionStreamOrder = nil
 	p.prefetchPending = make(map[string]struct{}, transitionStreamCacheMax)
