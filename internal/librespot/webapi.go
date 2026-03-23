@@ -32,7 +32,7 @@ func (c *playlistCatalog) CurrentUserID(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("webapi me: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return "", fmt.Errorf("webapi me: %d %s", resp.StatusCode, string(body))
@@ -63,7 +63,7 @@ func (c *playlistCatalog) ListUserPlaylistsPage(ctx context.Context, offset, lim
 	if err != nil {
 		return nil, fmt.Errorf("webapi playlists: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("webapi playlists: %d %s", resp.StatusCode, string(body))
@@ -124,7 +124,7 @@ func (c *playlistCatalog) ListSavedAlbumsPage(ctx context.Context, offset, limit
 	if err != nil {
 		return nil, fmt.Errorf("webapi albums: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("webapi albums: %d %s", resp.StatusCode, string(body))
@@ -206,7 +206,7 @@ func (c *playlistCatalog) ResolveContextImageURL(ctx context.Context, kind, id s
 		if err != nil {
 			return "", fmt.Errorf("webapi playlist images: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != 200 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			return "", fmt.Errorf("webapi playlist images: %d %s", resp.StatusCode, string(body))
@@ -224,7 +224,7 @@ func (c *playlistCatalog) ResolveContextImageURL(ctx context.Context, kind, id s
 		if err != nil {
 			return "", fmt.Errorf("webapi album details: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != 200 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			return "", fmt.Errorf("webapi album details: %d %s", resp.StatusCode, string(body))
@@ -265,7 +265,7 @@ func (c *playlistCatalog) ListPlaylistItemsPage(ctx context.Context, playlistID 
 	if err != nil {
 		return nil, fmt.Errorf("webapi playlist items: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var raw struct {
 		Items []spotify.PlaylistEntryWire `json:"items"`
 		Next  *string                     `json:"next"`

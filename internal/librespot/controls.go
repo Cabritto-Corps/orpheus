@@ -810,8 +810,6 @@ func (p *AppPlayer) logAdvanceInvariants(forceNext bool, selection advanceNextSe
 	if !selection.hasNextTrack && !forceNext && repeatTrack {
 		p.runtime.Log.Warn("repeat-track invariant violated: no next track selected during auto-advance")
 	}
-	if selection.wrappedContext {
-	}
 }
 
 func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool, error) {
@@ -863,8 +861,6 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 		return p.advanceNext(ctx, true, drop)
 	} else if err != nil {
 		return false, fmt.Errorf("failed loading current track (advance to %s): %w", uri, err)
-	}
-	if selection.wrappedContext {
 	}
 	return hasNextTrack, nil
 }
