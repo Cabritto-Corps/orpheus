@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	golibrespot "github.com/elxgy/go-librespot"
 
 	"orpheus/internal/cache"
@@ -73,6 +75,14 @@ type model struct {
 	helpOpen       bool
 	navToken       int
 	actionInFlight bool
+
+	trackPopupOpen  bool
+	trackPopupList  list.Model
+	trackPopupKind  string
+	trackPopupID    string
+	trackPopupURI   string
+	trackPopupName  string
+	trackPopupItems []spotify.QueueItem
 
 	volDebouncePending  int
 	volDebounceToken    int
@@ -149,6 +159,46 @@ func (p playlistItem) Description() string {
 	default:
 		return "playlist by " + p.summary.Owner
 	}
+}
+
+type trackItem struct {
+	item spotify.QueueItem
+}
+
+func (t trackItem) Title() string       { return t.item.Name }
+func (t trackItem) FilterValue() string { return t.item.Name }
+func (t trackItem) Description() string {
+	return fmt.Sprintf("%s  %s", t.item.Artist, fmtDuration(t.item.DurationMS))
+}
+
+func newTrackPopupDelegate() list.DefaultDelegate {
+	d := list.NewDefaultDelegate()
+	d.ShowDescription = true
+	d.SetHeight(2)
+	d.SetSpacing(0)
+
+	d.Styles.SelectedTitle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorBlue).
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(colorBlue).
+		Padding(0, 0, 0, 1)
+
+	d.Styles.SelectedDesc = lipgloss.NewStyle().
+		Foreground(colorMutedBlue).
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(colorBlue).
+		Padding(0, 0, 0, 1)
+
+	d.Styles.NormalTitle = lipgloss.NewStyle().
+		Foreground(colorOffWhite).
+		Padding(0, 0, 0, 2)
+
+	d.Styles.NormalDesc = lipgloss.NewStyle().
+		Foreground(colorMutedBlue).
+		Padding(0, 0, 0, 2)
+
+	return d
 }
 
 func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand) model {
@@ -605,6 +655,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.trackPopupOpen {
+		return m.handleTrackPopupKey(msg)
+	}
+
 	if keyMatches(msg, k.Tab) {
 		filtering := (m.activeTab == tabPlaylists && m.playlistList.FilterState() == list.Filtering) ||
 			(m.activeTab == tabAlbums && m.albumList.FilterState() == list.Filtering)
@@ -652,6 +706,12 @@ func (m model) handlePlaylistKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	}
+	if keyMatches(msg, k.PlayPause) {
+		if sel, ok := m.playlistList.SelectedItem().(playlistItem); ok {
+			return m.openTrackPopup(sel)
+		}
+		return m, nil
+	}
 	switch {
 	case keyMatches(msg, k.Refresh):
 		m.playlistsLoading = true
@@ -693,6 +753,12 @@ func (m model) handleAlbumKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	}
+	if keyMatches(msg, k.PlayPause) {
+		if sel, ok := m.albumList.SelectedItem().(playlistItem); ok {
+			return m.openTrackPopup(sel)
+		}
+		return m, nil
+	}
 	switch {
 	case keyMatches(msg, k.Select):
 		sel, ok := m.albumList.SelectedItem().(playlistItem)
@@ -720,8 +786,6 @@ func (m model) matchGlobalPlaybackKey(msg tea.KeyMsg) playbackInputKind {
 		return playbackInputVolUp
 	case keyMatches(msg, k.VolDown):
 		return playbackInputVolDown
-	case keyMatches(msg, k.PlayPause):
-		return playbackInputPlayPause
 	default:
 		return ""
 	}
@@ -772,6 +836,124 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.enqueuePlaybackInput(action)
 	return m, m.pumpInputExecutor()
+}
+
+type trackPopupItemsMsg struct{ items []spotify.QueueItem }
+
+func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
+	m.trackPopupOpen = true
+	m.trackPopupKind = sel.summary.Kind
+	m.trackPopupID = sel.summary.ID
+	m.trackPopupURI = sel.summary.URI
+	m.trackPopupName = sel.summary.Name
+	m.trackPopupItems = nil
+
+	delegate := newTrackPopupDelegate()
+	popup := list.New(nil, delegate, 40, 10)
+	popup.SetShowTitle(false)
+	popup.SetShowStatusBar(true)
+	popup.SetFilteringEnabled(true)
+	popup.SetShowFilter(true)
+	popup.SetShowHelp(false)
+	popup.FilterInput.Prompt = "/ "
+	popup.Styles.FilterPrompt = lipgloss.NewStyle().Foreground(colorMutedBlue)
+	popup.Styles.StatusBar = lipgloss.NewStyle().Foreground(colorMutedBlue).PaddingLeft(1)
+	m.trackPopupList = popup
+
+	var loadCmd tea.Cmd
+	if sel.summary.Kind == spotify.ContextKindPlaylist {
+		loadCmd = m.loadTrackPopupItemsCmd(sel.summary.ID, 0, 50)
+	} else {
+		loadCmd = m.loadTrackPopupAlbumItemsCmd(sel.summary.ID, 0, 50)
+	}
+	return m, loadCmd
+}
+
+func (m model) handleTrackPopupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	k := m.keys
+	switch {
+	case keyMatches(msg, k.CloseModal):
+		m.trackPopupOpen = false
+		return m, nil
+	case keyMatches(msg, k.Select):
+		sel, ok := m.trackPopupList.SelectedItem().(trackItem)
+		if !ok {
+			return m, nil
+		}
+		trackIndex := 0
+		for i, item := range m.trackPopupItems {
+			if item.ID == sel.item.ID {
+				trackIndex = i
+				break
+			}
+		}
+		m.trackPopupOpen = false
+		return m.playFromTrack(trackIndex)
+	}
+	var cmd tea.Cmd
+	m.trackPopupList, cmd = m.trackPopupList.Update(msg)
+	return m, cmd
+}
+
+func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
+	m.activeTab = tabPlayer
+	if m.status != nil && m.status.TrackID != "" {
+		m.pendingContextFrom = golibrespot.NormalizeSpotifyId(m.status.TrackID)
+		m.pendingContextFromAt = time.Now()
+	}
+	m.queue = nil
+	m.queueHasMore = false
+	m.stableQueueLen = 0
+	m.beginTransportTransition()
+
+	trackID := ""
+	if trackIndex >= 0 && trackIndex < len(m.trackPopupItems) {
+		trackID = m.trackPopupItems[trackIndex].ID
+	}
+
+	if m.tuiCmdCh != nil {
+		select {
+		case m.tuiCmdCh <- librespot.TUICommand{
+			Kind:    librespot.TUICommandPlayContextFromTrack,
+			URI:     m.trackPopupURI,
+			TrackID: trackID,
+		}:
+		default:
+		}
+		return m, nil
+	}
+
+	cmds := []tea.Cmd{
+		m.actionCmd(func(ctx context.Context) error {
+			return m.service.PlayPlaylist(ctx, m.deviceName, m.trackPopupURI)
+		}, "play-from-track"),
+	}
+	m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) loadTrackPopupItemsCmd(playlistID string, offset, limit int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 15*time.Second)
+		defer cancel()
+		page, err := m.catalog.ListPlaylistItemsPage(ctx, playlistID, offset, limit)
+		if err != nil {
+			return nil
+		}
+		return trackPopupItemsMsg{items: page.ItemInfos}
+	}
+}
+
+func (m model) loadTrackPopupAlbumItemsCmd(albumID string, offset, limit int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 15*time.Second)
+		defer cancel()
+		page, err := m.catalog.ListAlbumTracksPage(ctx, albumID, offset, limit)
+		if err != nil {
+			return nil
+		}
+		return trackPopupItemsMsg{items: page.ItemInfos}
+	}
 }
 
 func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model, tea.Cmd) {

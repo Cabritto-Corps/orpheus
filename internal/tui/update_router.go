@@ -37,6 +37,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleVolDebounceMsg(msg)
 	case seekDebounceMsg:
 		return m.handleSeekDebounceMsg(msg)
+	case trackPopupItemsMsg:
+		return m.handleTrackPopupItemsMsg(msg)
 	case list.FilterMatchesMsg:
 		return m.handleFilterMatchesMsg(msg)
 	case tea.KeyMsg:

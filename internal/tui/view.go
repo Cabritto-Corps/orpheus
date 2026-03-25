@@ -53,6 +53,10 @@ func (m model) View() string {
 		return header + "\n" + m.helpModalView() + m.kittyOverlay()
 	}
 
+	if m.trackPopupOpen {
+		return header + "\n" + m.trackPopupView() + m.kittyOverlay()
+	}
+
 	tabBar := m.tabBarView()
 
 	var body string
@@ -527,6 +531,41 @@ func (m model) playerBarView() string {
 	return sep + "\n" + bar
 }
 
+func (m model) trackPopupView() string {
+	modalW := min(m.width-8, 60)
+	bodyH := m.height - tabBarH - 1
+	innerH := bodyH - 4
+	if innerH < 10 {
+		innerH = 10
+	}
+
+	m.trackPopupList.SetSize(modalW-2, innerH-4)
+
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorBlue).
+		Render(fmt.Sprintf("  %s", m.trackPopupName))
+
+	listView := m.trackPopupList.View()
+
+	hint := lipgloss.NewStyle().
+		Foreground(colorMutedBlue).
+		Render("  enter: play  /: search  esc: close")
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		listView,
+		hint,
+	)
+
+	box := styleModalBox.
+		Width(modalW).
+		Height(innerH).
+		Render(content)
+
+	return lipgloss.Place(m.width, bodyH, lipgloss.Center, lipgloss.Center, box)
+}
+
 func (m model) helpModalView() string {
 	modalW := min(m.width-8, 80)
 	innerH := m.height - 14
@@ -711,7 +750,7 @@ func (m model) kittyOverlay() string {
 	if m.imgs == nil || m.imgs.protocol != imageProtocolKitty {
 		return ""
 	}
-	if m.helpOpen {
+	if m.helpOpen || m.trackPopupOpen {
 		m.imgs.beginKittyOverlayState("", "")
 		return kittyDeleteAll
 	}

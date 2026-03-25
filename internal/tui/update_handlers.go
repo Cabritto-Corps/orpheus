@@ -463,6 +463,10 @@ func (m model) handleSeekDebounceMsg(msg seekDebounceMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleFilterMatchesMsg(msg list.FilterMatchesMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+	if m.trackPopupOpen {
+		m.trackPopupList, cmd = m.trackPopupList.Update(msg)
+		return m, cmd
+	}
 	switch m.activeTab {
 	case tabPlaylists:
 		m.playlistList, cmd = m.playlistList.Update(msg)
@@ -470,4 +474,17 @@ func (m model) handleFilterMatchesMsg(msg list.FilterMatchesMsg) (tea.Model, tea
 		m.albumList, cmd = m.albumList.Update(msg)
 	}
 	return m, cmd
+}
+
+func (m model) handleTrackPopupItemsMsg(msg trackPopupItemsMsg) (tea.Model, tea.Cmd) {
+	if !m.trackPopupOpen {
+		return m, nil
+	}
+	m.trackPopupItems = msg.items
+	items := make([]list.Item, 0, len(msg.items))
+	for _, qi := range msg.items {
+		items = append(items, trackItem{item: qi})
+	}
+	m.trackPopupList.SetItems(items)
+	return m, nil
 }

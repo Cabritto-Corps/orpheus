@@ -28,6 +28,10 @@ func (f fakeCatalog) ListPlaylistItemsPage(_ context.Context, _ string, offset, 
 	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 }
 
+func (f fakeCatalog) ListAlbumTracksPage(_ context.Context, _ string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
+	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+}
+
 func (f fakeCatalog) ResolveContextImageURL(_ context.Context, _ string, _ string) (string, error) {
 	return "", nil
 }

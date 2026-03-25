@@ -4,6 +4,7 @@ type TUICommandKind int
 
 const (
 	TUICommandPlayContext TUICommandKind = iota
+	TUICommandPlayContextFromTrack
 	TUICommandPause
 	TUICommandResume
 	TUICommandSeek
@@ -17,6 +18,7 @@ const (
 type TUICommand struct {
 	Kind     TUICommandKind
 	URI      string
+	TrackID  string
 	Position int64
 	Volume   int
 }

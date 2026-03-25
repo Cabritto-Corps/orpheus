@@ -153,6 +153,7 @@ type PlaylistCatalog interface {
 	ListUserPlaylistsPage(ctx context.Context, offset, limit int) (*PlaylistPage, error)
 	ListSavedAlbumsPage(ctx context.Context, offset, limit int) (*PlaylistPage, error)
 	ListPlaylistItemsPage(ctx context.Context, playlistID string, offset, limit int) (*PlaylistItemsPage, error)
+	ListAlbumTracksPage(ctx context.Context, albumID string, offset, limit int) (*PlaylistItemsPage, error)
 	ResolveContextImageURL(ctx context.Context, kind, id string) (string, error)
 	CurrentUserID(ctx context.Context) (string, error)
 }
