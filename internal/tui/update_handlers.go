@@ -212,8 +212,9 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 		m.loadImageCmd(playlistPreviewURL, true),
 		m.loadImageCmd(albumPreviewURL, true),
 		m.loadVisiblePlaylistCoversCmd(),
+		m.drainCoverQueueCmd(libraryCoverRefreshBatch*4),
 		m.loadLibraryCoversCmd(libraryCoverRefreshBatch*4),
-		m.queueMissingLibraryImageResolvesCmd(libraryCoverRefreshBatch),
+		m.queueMissingLibraryImageResolvesCmd(missingImageURLs),
 		m.maybeLoadMorePlaylistsCmd(m.playlistList),
 	)
 }
@@ -293,6 +294,7 @@ func (m model) handleNavDebounceMsg(msg navDebounceMsg) (tea.Model, tea.Cmd) {
 	}
 	return m, tea.Batch(
 		m.loadVisiblePlaylistCoversCmd(),
+		m.drainCoverQueueCmd(coverQueueDrainBatch),
 		m.maybeLoadMorePlaylistsCmd(m.playlistList),
 	)
 }
@@ -487,4 +489,41 @@ func (m model) handleTrackPopupItemsMsg(msg trackPopupItemsMsg) (tea.Model, tea.
 	}
 	m.trackPopupList.SetItems(items)
 	return m, nil
+}
+
+func (m model) handleCoverImageURLsBatchResolvedMsg(msg coverImageURLsBatchResolvedMsg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	for _, r := range msg.results {
+		key := coverResolveKey(r.kind, r.id)
+		delete(m.cover.resolveInFlight, key)
+		if r.err != nil || strings.TrimSpace(r.url) == "" {
+			continue
+		}
+		if !m.applyResolvedContextImageURL(r.kind, r.id, r.url) {
+			continue
+		}
+		cmds = append(cmds, m.loadImageCmd(r.url, false))
+	}
+	if len(cmds) == 0 {
+		return m, nil
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) handleImagesBatchLoadedMsg(msg imagesBatchLoadedMsg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	for _, r := range msg.results {
+		if r.err != nil {
+			m.imgs.markFailed(r.url)
+			continue
+		}
+		m.imgs.clearFailed(r.url)
+	}
+	if cmd := m.drainCoverQueueCmd(coverQueueDrainBatch); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if len(cmds) == 0 {
+		return m, nil
+	}
+	return m, tea.Batch(cmds...)
 }

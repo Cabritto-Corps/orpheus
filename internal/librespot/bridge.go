@@ -5,6 +5,7 @@ type TUICommandKind int
 const (
 	TUICommandPlayContext TUICommandKind = iota
 	TUICommandPlayContextFromTrack
+	TUICommandGetContextTracks
 	TUICommandPause
 	TUICommandResume
 	TUICommandSeek
@@ -21,6 +22,7 @@ type TUICommand struct {
 	TrackID  string
 	Position int64
 	Volume   int
+	ResultCh chan<- []PlaybackStateQueueEntry
 }
 
 type PlaybackStateQueueEntry struct {

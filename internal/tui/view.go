@@ -539,22 +539,36 @@ func (m model) trackPopupView() string {
 		innerH = 10
 	}
 
-	m.trackPopupList.SetSize(modalW-2, innerH-4)
-
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorBlue).
 		Render(fmt.Sprintf("  %s", m.trackPopupName))
 
-	listView := m.trackPopupList.View()
-
-	hint := lipgloss.NewStyle().
-		Foreground(colorMutedBlue).
-		Render("  enter: play  /: search  esc: close")
+	var body string
+	var hint string
+	if m.trackPopupItems == nil {
+		body = lipgloss.NewStyle().
+			Foreground(colorMutedBlue).
+			Render("\n  Loading...")
+		hint = ""
+	} else if len(m.trackPopupItems) == 0 {
+		body = lipgloss.NewStyle().
+			Foreground(colorMutedBlue).
+			Render("\n  No tracks found")
+		hint = lipgloss.NewStyle().
+			Foreground(colorMutedBlue).
+			Render("  esc: close")
+	} else {
+		m.trackPopupList.SetSize(modalW-2, innerH-4)
+		body = m.trackPopupList.View()
+		hint = lipgloss.NewStyle().
+			Foreground(colorMutedBlue).
+			Render("  enter: play  /: search  esc: close")
+	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		title,
-		listView,
+		body,
 		hint,
 	)
 

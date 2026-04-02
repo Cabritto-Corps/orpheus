@@ -121,32 +121,34 @@ func (m *model) queueMissingLibraryImageResolvesCmd(limit int) tea.Cmd {
 	if limit <= 0 {
 		return nil
 	}
-	cmds := make([]tea.Cmd, 0, limit)
+	items := make([]struct{ Kind, ID string }, 0, limit)
 	for _, item := range m.playlistList.Items() {
-		if len(cmds) >= limit {
+		if len(items) >= limit {
 			break
 		}
 		pl, ok := item.(playlistItem)
 		if !ok || strings.TrimSpace(pl.summary.ImageURL) != "" {
 			continue
 		}
-		if cmd := m.queueCoverResolveCmd(spotify.ContextKindPlaylist, pl.summary.ID); cmd != nil {
-			cmds = append(cmds, cmd)
+		if !m.cover.queueResolve(spotify.ContextKindPlaylist, pl.summary.ID) {
+			continue
 		}
+		items = append(items, struct{ Kind, ID string }{Kind: spotify.ContextKindPlaylist, ID: pl.summary.ID})
 	}
 	for _, item := range m.albumList.Items() {
-		if len(cmds) >= limit {
+		if len(items) >= limit {
 			break
 		}
 		al, ok := item.(playlistItem)
 		if !ok || strings.TrimSpace(al.summary.ImageURL) != "" {
 			continue
 		}
-		if cmd := m.queueCoverResolveCmd(spotify.ContextKindAlbum, al.summary.ID); cmd != nil {
-			cmds = append(cmds, cmd)
+		if !m.cover.queueResolve(spotify.ContextKindAlbum, al.summary.ID) {
+			continue
 		}
+		items = append(items, struct{ Kind, ID string }{Kind: spotify.ContextKindAlbum, ID: al.summary.ID})
 	}
-	return tea.Batch(cmds...)
+	return m.resolveContextImageURLsBatchCmd(items)
 }
 
 func (m *model) queueResolvesForImageURLCmd(url string, limit int) tea.Cmd {
@@ -190,27 +192,21 @@ func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
 	if limit <= 0 {
 		limit = coverQueueDrainBatch
 	}
-	cmds := make([]tea.Cmd, 0, limit)
+	urls := make([]string, 0, limit)
 	if m.status != nil {
 		playerURL := strings.TrimSpace(m.status.AlbumImageURL)
 		if playerURL != "" && m.cover.removeFromQueue(playerURL) && m.imgs.shouldQueueLoad(playerURL) {
-			if cmd := m.loadImageCmd(playerURL, true); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+			urls = append(urls, playerURL)
 		}
 	}
-	for len(m.cover.queue) > 0 && len(cmds) < limit {
+	for len(m.cover.queue) > 0 && len(urls) < limit {
 		url, _ := m.cover.popURL()
 		if !m.imgs.shouldQueueLoad(url) {
 			continue
 		}
-		cmd := m.loadImageCmd(url, false)
-		if cmd == nil {
-			continue
-		}
-		cmds = append(cmds, cmd)
+		urls = append(urls, url)
 	}
-	return tea.Batch(cmds...)
+	return m.loadImagesBatchCmd(urls)
 }
 
 func (m *model) maybeFallbackFromKittyOnPlayerFailures(url string) {

@@ -471,7 +471,9 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 	p.resetQueueMetaForContext(strings.TrimSpace(spotCtx.Uri))
 	p.resetPlaybackCaches(true)
 	p.syncPlayerTrackState(ctx, ctxTracks, nil)
-	p.preloadContextQueueMetadata(ctxTracks, spotCtx.Uri)
+	metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), 15*time.Second)
+	p.resolveContextQueueMetadata(metaCtx, ctxTracks)
+	metaCancel()
 	if err := p.loadCurrentTrack(ctx, paused, drop); err != nil {
 		return fmt.Errorf("failed loading current track (load context): %w", err)
 	}

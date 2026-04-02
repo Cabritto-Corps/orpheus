@@ -322,7 +322,7 @@ func TestShouldQueueAlbumImageLoad(t *testing.T) {
 }
 
 func TestShouldEnsureAlbumImageLoadWhenCoverNotCached(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil)
 	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
 	next := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
 	if !m.shouldEnsureAlbumImageLoad(prev, next) {
@@ -336,7 +336,7 @@ func TestShouldEnsureAlbumImageLoadWhenCoverNotCached(t *testing.T) {
 }
 
 func TestAdvancePlayerCoverEpochOnQueueHeadChange(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil)
 	m.imgs.protocol = imageProtocolKitty
 	prev := &spotify.PlaybackStatus{AlbumImageURL: "u1", ProgressMS: 10000}
 	next := &spotify.PlaybackStatus{AlbumImageURL: "u1", ProgressMS: 2000}
@@ -351,7 +351,7 @@ func TestAdvancePlayerCoverEpochOnQueueHeadChange(t *testing.T) {
 }
 
 func TestAdvancePlayerCoverEpochNoChangeWhenSignalsMissing(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil)
 	m.imgs.protocol = imageProtocolKitty
 	prev := &spotify.PlaybackStatus{AlbumImageURL: "u1", TrackID: "t1", ProgressMS: 10000}
 	next := &spotify.PlaybackStatus{AlbumImageURL: "u1", TrackID: "t1", ProgressMS: 10200}
@@ -458,7 +458,7 @@ func TestStuckTransportTransitionSetsRecovery(t *testing.T) {
 }
 
 func TestHandlePollMsgIgnoresStaleToken(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil)
 	m.stateFetchToken = 3
 	m.playbackErr = nil
 	msg := pollMsg{
@@ -475,7 +475,7 @@ func TestHandlePollMsgIgnoresStaleToken(t *testing.T) {
 }
 
 func TestHandleActionReconcileMsgIgnoresStaleToken(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil)
 	m.stateFetchToken = 5
 	m.status = &spotify.PlaybackStatus{TrackID: "current"}
 	msg := actionReconcileMsg{
@@ -492,7 +492,7 @@ func TestHandleActionReconcileMsgIgnoresStaleToken(t *testing.T) {
 }
 
 func TestHandleActionMsgIgnoresStaleToken(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil)
 	m.stateFetchToken = 7
 	m.status = &spotify.PlaybackStatus{TrackID: "current"}
 	msg := actionMsg{
@@ -512,7 +512,7 @@ func TestHandleActionMsgIgnoresStaleToken(t *testing.T) {
 }
 
 func TestHandlePlaybackStateMsgIgnoresOutOfOrderSeq(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil)
 	m.lastPlaybackStateSeq = 10
 	msg := playbackStateMsg{
 		seq:    9,
@@ -526,7 +526,7 @@ func TestHandlePlaybackStateMsgIgnoresOutOfOrderSeq(t *testing.T) {
 }
 
 func TestHandlePollMsgClearsQueueOnTrackChangeWithoutQueueFetch(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil)
 	m.stateFetchToken = 1
 	m.status = &spotify.PlaybackStatus{TrackID: "track-a"}
 	m.queue = []spotify.QueueItem{{ID: "track-a"}, {ID: "track-b"}}
@@ -546,8 +546,8 @@ func TestHandlePollMsgClearsQueueOnTrackChangeWithoutQueueFetch(t *testing.T) {
 }
 
 func TestStatusQueueCacheScopedPerModel(t *testing.T) {
-	m1 := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
-	m2 := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m1 := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil)
+	m2 := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil)
 	if m1.statusQueueCache == nil || m2.statusQueueCache == nil {
 		t.Fatal("expected status queue cache to be initialized")
 	}

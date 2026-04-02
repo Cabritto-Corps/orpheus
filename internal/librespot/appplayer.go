@@ -42,6 +42,8 @@ type AppPlayer struct {
 
 	spotConnId string
 
+	suppressEmit bool
+
 	prodInfo    *ap.ProductInfo
 	countryCode *string
 
@@ -410,24 +412,11 @@ func (p *AppPlayer) handleTUICommand(ctx context.Context, cmd TUICommand) error 
 }
 
 func (p *AppPlayer) emitPlaybackState() {
+	if p.suppressEmit {
+		return
+	}
 	u := p.BuildPlaybackStateUpdate()
 	if u != nil {
-		hasUnknown := false
-		for _, e := range u.Queue {
-			if e.Name == "Unknown track" {
-				hasUnknown = true
-				break
-			}
-		}
-		if hasUnknown {
-			contextKey := ""
-			if p.state != nil && p.state.player != nil {
-				contextKey = p.state.player.ContextUri
-			}
-			if !p.checkNamePreloadStatus(contextKey) && p.state != nil {
-				p.preloadContextQueueMetadata(p.state.tracks, contextKey)
-			}
-		}
 		p.runtime.EmitPlaybackState(u)
 	}
 }

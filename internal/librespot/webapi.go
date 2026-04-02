@@ -284,12 +284,18 @@ func (c *playlistCatalog) ListPlaylistItemsPage(ctx context.Context, playlistID 
 		return out, nil
 	}
 	out.ItemIDs = make([]string, 0, len(raw.Items))
+	out.ItemInfos = make([]spotify.QueueItem, 0, len(raw.Items))
 	for _, item := range raw.Items {
 		entry := item.ResolvedItem()
 		if entry == nil || entry.ID == "" {
 			continue
 		}
+		qi := spotify.QueueItem{ID: entry.ID, Name: entry.Name, DurationMS: entry.DurationMS}
+		if len(entry.Artists) > 0 {
+			qi.Artist = entry.Artists[0].Name
+		}
 		out.ItemIDs = append(out.ItemIDs, entry.ID)
+		out.ItemInfos = append(out.ItemInfos, qi)
 	}
 	out.NextOffset = offset + len(raw.Items)
 	out.HasMore = raw.Next != nil && *raw.Next != ""

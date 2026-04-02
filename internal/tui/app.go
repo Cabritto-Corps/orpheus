@@ -53,11 +53,12 @@ const (
 )
 
 type model struct {
-	ctx        context.Context
-	catalog    spotify.PlaylistCatalog
-	service    *spotify.Service
-	deviceName string
-	tuiCmdCh   chan librespot.TUICommand
+	ctx             context.Context
+	catalog         spotify.PlaylistCatalog
+	service         *spotify.Service
+	deviceName      string
+	tuiCmdCh        chan librespot.TUICommand
+	contextTracksCh chan<- []librespot.PlaybackStateQueueEntry
 
 	pollInterval            time.Duration
 	pollTick                int
@@ -201,7 +202,7 @@ func newTrackPopupDelegate() list.DefaultDelegate {
 	return d
 }
 
-func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand) model {
+func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- []librespot.PlaybackStateQueueEntry) model {
 	delegate := newPlaylistDelegate()
 
 	browser := list.New(nil, delegate, 40, 20)
@@ -230,13 +231,14 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		service:                service,
 		deviceName:             cfg.DeviceName,
 		tuiCmdCh:               tuiCmdCh,
+		contextTracksCh:        contextTracksCh,
 		pollInterval:           cfg.PollInterval,
 		activeTab:              tabPlaylists,
 		playlistList:           browser,
 		albumList:              albums,
 		imgs:                   newImgCache(),
 		statusQueueCache:       newStatusQueueSnapshotCache(),
-		startupCoverBoostTicks: 20,
+		startupCoverBoostTicks: 40,
 		preloadedItemIDs:       make(map[string]struct{}),
 		trackCache:             cache.NewTTL[string, spotify.QueueItem](4096, trackMetadataTTL),
 		cover:                  newCoverManager(),
@@ -389,7 +391,8 @@ func (m model) hasMissingLibraryImageURLs() bool {
 }
 
 func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, playbackStateCh <-chan *librespot.PlaybackStateUpdate) error {
-	m := newModel(ctx, catalog, service, cfg, tuiCmdCh)
+	contextTracksCh := make(chan []librespot.PlaybackStateQueueEntry, 1)
+	m := newModel(ctx, catalog, service, cfg, tuiCmdCh, contextTracksCh)
 	p := tea.NewProgram(m,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
@@ -397,6 +400,7 @@ func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.
 	if playbackStateCh != nil {
 		StartPlaybackStateListener(playbackStateCh, p.Send, ctx)
 	}
+	StartContextTracksListener(contextTracksCh, p.Send, ctx)
 	_, err := p.Run()
 	return err
 }
@@ -838,7 +842,9 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, m.pumpInputExecutor()
 }
 
-type trackPopupItemsMsg struct{ items []spotify.QueueItem }
+type trackPopupItemsMsg struct {
+	items []spotify.QueueItem
+}
 
 func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.trackPopupOpen = true
@@ -860,13 +866,19 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	popup.Styles.StatusBar = lipgloss.NewStyle().Foreground(colorMutedBlue).PaddingLeft(1)
 	m.trackPopupList = popup
 
-	var loadCmd tea.Cmd
-	if sel.summary.Kind == spotify.ContextKindPlaylist {
-		loadCmd = m.loadTrackPopupItemsCmd(sel.summary.ID, 0, 50)
+	if m.tuiCmdCh != nil && m.contextTracksCh != nil {
+		select {
+		case m.tuiCmdCh <- librespot.TUICommand{
+			Kind:     librespot.TUICommandGetContextTracks,
+			URI:      sel.summary.URI,
+			ResultCh: m.contextTracksCh,
+		}:
+		default:
+		}
 	} else {
-		loadCmd = m.loadTrackPopupAlbumItemsCmd(sel.summary.ID, 0, 50)
+		m.trackPopupItems = []spotify.QueueItem{}
 	}
-	return m, loadCmd
+	return m, nil
 }
 
 func (m model) handleTrackPopupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -930,30 +942,6 @@ func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 	}
 	m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
 	return m, tea.Batch(cmds...)
-}
-
-func (m model) loadTrackPopupItemsCmd(playlistID string, offset, limit int) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, 15*time.Second)
-		defer cancel()
-		page, err := m.catalog.ListPlaylistItemsPage(ctx, playlistID, offset, limit)
-		if err != nil {
-			return nil
-		}
-		return trackPopupItemsMsg{items: page.ItemInfos}
-	}
-}
-
-func (m model) loadTrackPopupAlbumItemsCmd(albumID string, offset, limit int) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, 15*time.Second)
-		defer cancel()
-		page, err := m.catalog.ListAlbumTracksPage(ctx, albumID, offset, limit)
-		if err != nil {
-			return nil
-		}
-		return trackPopupItemsMsg{items: page.ItemInfos}
-	}
 }
 
 func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model, tea.Cmd) {

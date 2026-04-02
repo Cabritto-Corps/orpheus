@@ -97,6 +97,14 @@ type coverImageResolvedMsg struct {
 	err  error
 }
 
+type coverImageURLsBatchResolvedMsg struct {
+	results []coverImageResolvedMsg
+}
+
+type imagesBatchLoadedMsg struct {
+	results []imageLoadedMsg
+}
+
 type tickMsg time.Time
 
 type navDebounceMsg struct {
@@ -122,6 +130,23 @@ func StartPlaybackStateListener(playbackStateCh <-chan *librespot.PlaybackStateU
 				seq++
 				status, queue, queueHasMore := PlaybackStateFromLibrespot(u)
 				send(playbackStateMsg{seq: seq, status: status, queue: queue, queueHasMore: queueHasMore})
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+func StartContextTracksListener(ch <-chan []librespot.PlaybackStateQueueEntry, send func(tea.Msg), ctx context.Context) {
+	go func() {
+		for {
+			select {
+			case entries := <-ch:
+				items := make([]spotify.QueueItem, 0, len(entries))
+				for _, e := range entries {
+					items = append(items, spotify.QueueItem{ID: e.ID, Name: e.Name, Artist: e.Artist, DurationMS: e.DurationMS})
+				}
+				send(trackPopupItemsMsg{items: items})
 			case <-ctx.Done():
 				return
 			}
@@ -629,5 +654,92 @@ func (m model) resolveContextImageURLCmd(kind, id string) tea.Cmd {
 			url:  strings.TrimSpace(url),
 			err:  err,
 		}
+	}
+}
+
+func (m model) resolveContextImageURLsBatchCmd(items []struct{ Kind, ID string }) tea.Cmd {
+	if len(items) == 0 {
+		return nil
+	}
+	var catalog spotify.PlaylistCatalog
+	if m.catalog != nil {
+		catalog = m.catalog
+	} else if m.service != nil {
+		catalog = m.service
+	} else {
+		return nil
+	}
+	return func() tea.Msg {
+		results := make([]coverImageResolvedMsg, 0, len(items))
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 20)
+		var mu sync.Mutex
+		for _, item := range items {
+			wg.Add(1)
+			go func(kind, id string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				ctx, cancel := context.WithTimeout(m.ctx, catalogRequestTimeout)
+				defer cancel()
+				url, err := catalog.ResolveContextImageURL(ctx, kind, id)
+				mu.Lock()
+				results = append(results, coverImageResolvedMsg{
+					kind: kind,
+					id:   id,
+					url:  strings.TrimSpace(url),
+					err:  err,
+				})
+				mu.Unlock()
+			}(item.Kind, item.ID)
+		}
+		wg.Wait()
+		return coverImageURLsBatchResolvedMsg{results: results}
+	}
+}
+
+func (m *model) loadImagesBatchCmd(urls []string) tea.Cmd {
+	if len(urls) == 0 {
+		return nil
+	}
+	validURLs := make([]string, 0, len(urls))
+	for _, url := range urls {
+		if url == "" {
+			continue
+		}
+		if !m.imgs.beginLoad(url) {
+			continue
+		}
+		validURLs = append(validURLs, url)
+	}
+	if len(validURLs) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		results := make([]imageLoadedMsg, 0, len(validURLs))
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 8)
+		var mu sync.Mutex
+		for _, u := range validURLs {
+			wg.Add(1)
+			go func(url string) {
+				defer wg.Done()
+				defer m.imgs.finishLoad(url)
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				ctx, cancel := context.WithTimeout(m.ctx, imageFetchTimeout)
+				defer cancel()
+				_, err := httpImageProvider{}.Fetch(ctx, url)
+				mu.Lock()
+				if err != nil {
+					results = append(results, imageLoadedMsg{url: url, err: err})
+				} else {
+					results = append(results, imageLoadedMsg{url: url})
+				}
+				mu.Unlock()
+			}(u)
+		}
+		wg.Wait()
+		return imagesBatchLoadedMsg{results: results}
 	}
 }
