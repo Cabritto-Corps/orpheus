@@ -1,7 +1,12 @@
 package tui
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"strings"
 	"sync"
 	"time"
@@ -11,8 +16,6 @@ import (
 	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
-
-var imgSemaphore = make(chan struct{}, 16)
 
 const (
 	pollRequestTimeout         = 5 * time.Second
@@ -449,22 +452,16 @@ func (m *model) loadImageCmd(url string, priority bool) tea.Cmd {
 	if !cache.beginLoad(url) {
 		return nil
 	}
-	coverSizes := m.currentCoverSizes()
+	if m.loader == nil {
+		cache.finishLoad(url)
+		return nil
+	}
 	return func() tea.Msg {
 		defer cache.finishLoad(url)
 
-		select {
-		case imgSemaphore <- struct{}{}:
-			defer func() { <-imgSemaphore }()
-		case <-m.ctx.Done():
-			return imageLoadedMsg{url: url, err: m.ctx.Err()}
-		}
-
-		ctx, cancel := context.WithTimeout(m.ctx, imageFetchTimeout)
-		defer cancel()
-
 		if img, ok := cache.getImage(url); ok {
 			displayCols, displayRows := 0, 0
+			coverSizes := m.currentCoverSizes()
 			if len(coverSizes) > 0 {
 				displayCols, displayRows = coverSizes[0][0], coverSizes[0][1]
 			}
@@ -475,15 +472,36 @@ func (m *model) loadImageCmd(url string, priority bool) tea.Cmd {
 			return imageLoadedMsg{url: url}
 		}
 
-		img, err := fetchImage(ctx, url)
-		if err != nil {
-			return imageLoadedMsg{url: url, err: err}
+		results := m.loader.Execute(LoadRequest{
+			Type:    LoadTypeImage,
+			Items:   []LoadItem{{URL: url}},
+			Timeout: imageFetchTimeout,
+		})
+		if len(results) == 0 || results[0].Error != nil {
+			if len(results) > 0 {
+				return imageLoadedMsg{url: url, err: results[0].Error}
+			}
+			return imageLoadedMsg{url: url, err: fmt.Errorf("no results")}
 		}
+
+		imgData, ok := results[0].Data.(ImageData)
+		if !ok {
+			return imageLoadedMsg{url: url, err: fmt.Errorf("unexpected result type")}
+		}
+		img, _, err := image.Decode(bytes.NewReader(imgData.Data))
+		if err != nil {
+			return imageLoadedMsg{url: url, err: fmt.Errorf("decode image: %w", err)}
+		}
+
 		displayCols, displayRows := 0, 0
+		coverSizes := m.currentCoverSizes()
 		if len(coverSizes) > 0 {
 			displayCols, displayRows = coverSizes[0][0], coverSizes[0][1]
 		}
 		cache.setImage(url, img, displayCols, displayRows)
+		if err := cache.ensureKittyEncoding(url, img, displayCols, displayRows); err != nil {
+			return imageLoadedMsg{url: url, err: err}
+		}
 		cache.preRenderCovers(url, coverSizes)
 		return imageLoadedMsg{url: url}
 	}

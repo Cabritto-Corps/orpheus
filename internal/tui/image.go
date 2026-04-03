@@ -21,7 +21,6 @@ import (
 	_ "golang.org/x/image/webp"
 
 	"orpheus/internal/cache"
-	"orpheus/internal/infra/ports"
 )
 
 type coverKey struct {
@@ -583,20 +582,6 @@ func (httpImageProvider) Fetch(ctx context.Context, url string) ([]byte, error) 
 		return nil, fmt.Errorf("read image body: %w", err)
 	}
 	return body, nil
-}
-
-var imageProvider ports.ImageProvider = httpImageProvider{}
-
-func fetchImage(ctx context.Context, url string) (image.Image, error) {
-	body, err := imageProvider.Fetch(ctx, url)
-	if err != nil {
-		return nil, err
-	}
-	img, _, err := image.Decode(bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("decode image: %w", err)
-	}
-	return img, nil
 }
 
 func resizeBilinear(src image.Image, width, height int) *image.RGBA {

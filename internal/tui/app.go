@@ -59,6 +59,7 @@ type model struct {
 	deviceName      string
 	tuiCmdCh        chan librespot.TUICommand
 	contextTracksCh chan<- []librespot.PlaybackStateQueueEntry
+	loader          *BackgroundLoader
 
 	pollInterval            time.Duration
 	pollTick                int
@@ -202,7 +203,7 @@ func newTrackPopupDelegate() list.DefaultDelegate {
 	return d
 }
 
-func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- []librespot.PlaybackStateQueueEntry) model {
+func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- []librespot.PlaybackStateQueueEntry, loader *BackgroundLoader) model {
 	delegate := newPlaylistDelegate()
 
 	browser := list.New(nil, delegate, 40, 20)
@@ -232,6 +233,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		deviceName:             cfg.DeviceName,
 		tuiCmdCh:               tuiCmdCh,
 		contextTracksCh:        contextTracksCh,
+		loader:                 loader,
 		pollInterval:           cfg.PollInterval,
 		activeTab:              tabPlaylists,
 		playlistList:           browser,
@@ -392,7 +394,8 @@ func (m model) hasMissingLibraryImageURLs() bool {
 
 func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, playbackStateCh <-chan *librespot.PlaybackStateUpdate) error {
 	contextTracksCh := make(chan []librespot.PlaybackStateQueueEntry, 1)
-	m := newModel(ctx, catalog, service, cfg, tuiCmdCh, contextTracksCh)
+	loader := NewBackgroundLoader(ctx)
+	m := newModel(ctx, catalog, service, cfg, tuiCmdCh, contextTracksCh, loader)
 	p := tea.NewProgram(m,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
