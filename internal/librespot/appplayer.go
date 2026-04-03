@@ -238,7 +238,9 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 			p.state.player.SessionId = *sessId
 		} else {
 			sessionId := make([]byte, 16)
-			_, _ = rand.Read(sessionId)
+			if _, err := rand.Read(sessionId); err != nil {
+				p.runtime.Log.WithError(err).Warn("failed generating session ID")
+			}
 			p.state.player.SessionId = base64.StdEncoding.EncodeToString(sessionId)
 		}
 		p.state.setActive(true)

@@ -18,6 +18,7 @@ import (
 	"orpheus/internal/cache"
 	"orpheus/internal/config"
 	"orpheus/internal/librespot"
+	"orpheus/internal/loader"
 	"orpheus/internal/spotify"
 )
 
@@ -59,7 +60,7 @@ type model struct {
 	deviceName      string
 	tuiCmdCh        chan librespot.TUICommand
 	contextTracksCh chan<- []librespot.PlaybackStateQueueEntry
-	loader          *BackgroundLoader
+	ldr             *loader.BackgroundLoader
 
 	pollInterval            time.Duration
 	pollTick                int
@@ -203,7 +204,7 @@ func newTrackPopupDelegate() list.DefaultDelegate {
 	return d
 }
 
-func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- []librespot.PlaybackStateQueueEntry, loader *BackgroundLoader) model {
+func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- []librespot.PlaybackStateQueueEntry, ldr *loader.BackgroundLoader) model {
 	delegate := newPlaylistDelegate()
 
 	browser := list.New(nil, delegate, 40, 20)
@@ -233,7 +234,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		deviceName:             cfg.DeviceName,
 		tuiCmdCh:               tuiCmdCh,
 		contextTracksCh:        contextTracksCh,
-		loader:                 loader,
+		ldr:                    ldr,
 		pollInterval:           cfg.PollInterval,
 		activeTab:              tabPlaylists,
 		playlistList:           browser,
@@ -394,8 +395,8 @@ func (m model) hasMissingLibraryImageURLs() bool {
 
 func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, playbackStateCh <-chan *librespot.PlaybackStateUpdate) error {
 	contextTracksCh := make(chan []librespot.PlaybackStateQueueEntry, 1)
-	loader := NewBackgroundLoader(ctx)
-	m := newModel(ctx, catalog, service, cfg, tuiCmdCh, contextTracksCh, loader)
+	ldr := loader.New(ctx, 128, NewTUIExecutor(ctx, catalog))
+	m := newModel(ctx, catalog, service, cfg, tuiCmdCh, contextTracksCh, ldr)
 	p := tea.NewProgram(m,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
@@ -1142,7 +1143,7 @@ func (m *model) loadLibraryCoversCmd(limit int) tea.Cmd {
 		add(al.summary.ImageURL)
 	}
 
-	return m.drainCoverQueueCmd(coverQueueDrainBatch)
+	return m.drainCoverQueueCmd(added)
 }
 
 func (m model) visiblePlaylistItems() []playlistItem {

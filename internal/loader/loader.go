@@ -1,4 +1,4 @@
-package tui
+package loader
 
 import (
 	"context"
@@ -10,10 +10,13 @@ type LoadType int
 
 const (
 	LoadTypeImage LoadType = iota
+	LoadTypeContextImageURL
 )
 
 type LoadItem struct {
-	URL string
+	URL  string
+	Kind string
+	ID   string
 }
 
 type LoadResult struct {
@@ -26,24 +29,39 @@ type ImageData struct {
 	Data []byte
 }
 
+type ImageURLData struct {
+	URL string
+}
+
+type TrackMetadataData struct {
+	ID         string
+	Name       string
+	Artist     string
+	DurationMS int
+}
+
 type LoadRequest struct {
 	Type    LoadType
 	Items   []LoadItem
 	Timeout time.Duration
 }
 
+type Executor func(ctx context.Context, req LoadRequest) []LoadResult
+
 type BackgroundLoader struct {
 	ctx      context.Context
 	pool     chan struct{}
 	mu       sync.Mutex
 	inflight map[string]struct{}
+	executor Executor
 }
 
-func NewBackgroundLoader(ctx context.Context) *BackgroundLoader {
+func New(ctx context.Context, poolSize int, exec Executor) *BackgroundLoader {
 	return &BackgroundLoader{
 		ctx:      ctx,
-		pool:     make(chan struct{}, 64),
+		pool:     make(chan struct{}, poolSize),
 		inflight: make(map[string]struct{}),
+		executor: exec,
 	}
 }
 
@@ -78,31 +96,10 @@ func (l *BackgroundLoader) Execute(req LoadRequest) []LoadResult {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
+	req.Timeout = timeout
 
-	switch req.Type {
-	case LoadTypeImage:
-		return l.loadImages(req.Items, timeout)
+	if l.executor == nil {
+		return nil
 	}
-	return nil
-}
-
-func (l *BackgroundLoader) loadImages(items []LoadItem, timeout time.Duration) []LoadResult {
-	results := make([]LoadResult, len(items))
-	for i, item := range items {
-		select {
-		case <-l.ctx.Done():
-			results[i] = LoadResult{Index: i, Error: l.ctx.Err()}
-			return results
-		default:
-		}
-		ctx, cancel := context.WithTimeout(l.ctx, timeout)
-		data, err := httpImageProvider{}.Fetch(ctx, item.URL)
-		cancel()
-		if err != nil {
-			results[i] = LoadResult{Index: i, Error: err}
-		} else {
-			results[i] = LoadResult{Index: i, Data: ImageData{Data: data}}
-		}
-	}
-	return results
+	return l.executor(l.ctx, req)
 }

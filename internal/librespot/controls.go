@@ -427,7 +427,9 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 	}
 	golibrespot.SetPaused(p.state.player, paused)
 	sessionId := make([]byte, 16)
-	_, _ = rand.Read(sessionId)
+	if _, err := rand.Read(sessionId); err != nil {
+		p.runtime.Log.WithError(err).Warn("failed generating session ID")
+	}
 	p.state.player.SessionId = base64.StdEncoding.EncodeToString(sessionId)
 	p.state.player.ContextUri = spotCtx.Uri
 	p.state.player.ContextUrl = spotCtx.Url
@@ -855,16 +857,23 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 		p.state.player.IsBuffering = false
 	}
 	p.logAdvanceInvariants(forceNext, selection, beforeTrackID)
-	if err := p.loadCurrentTrackFromTransition(ctx, !hasNextTrack, drop, "advance next"); errors.Is(err, golibrespot.ErrMediaRestricted) || errors.Is(err, golibrespot.ErrNoSupportedFormats) {
-		p.runtime.Log.WithError(err).Infof("skipping unplayable media: %s", uri)
-		if forceNext {
-			return false, err
+
+	maxRetries := 10
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if err := p.loadCurrentTrackFromTransition(ctx, !hasNextTrack, drop, "advance next"); errors.Is(err, golibrespot.ErrMediaRestricted) || errors.Is(err, golibrespot.ErrNoSupportedFormats) {
+			p.runtime.Log.WithError(err).Infof("skipping unplayable media (attempt %d/%d): %s", attempt+1, maxRetries, uri)
+			if forceNext {
+				return false, err
+			}
+			hasNextTrack = true
+			continue
+		} else if err != nil {
+			return false, fmt.Errorf("failed loading current track (advance to %s): %w", uri, err)
 		}
-		return p.advanceNext(ctx, true, drop)
-	} else if err != nil {
-		return false, fmt.Errorf("failed loading current track (advance to %s): %w", uri, err)
+		return hasNextTrack, nil
 	}
-	return hasNextTrack, nil
+	p.runtime.Log.Warnf("gave up advancing after %d unplayable tracks", maxRetries)
+	return false, nil
 }
 
 func (p *AppPlayer) apiVolume() uint32 {

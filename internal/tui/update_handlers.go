@@ -38,7 +38,7 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	var startupCoverCmd tea.Cmd
 	if m.startupCoverBoostTicks > 0 {
 		m.startupCoverBoostTicks--
-		startupCoverCmd = m.drainCoverQueueCmd(coverQueueDrainBatch * 3)
+		startupCoverCmd = m.drainCoverQueueCmd(coverQueueDrainBatch * 8)
 	}
 
 	m.coverRefreshTick++
@@ -211,9 +211,7 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(
 		m.loadImageCmd(playlistPreviewURL, true),
 		m.loadImageCmd(albumPreviewURL, true),
-		m.loadVisiblePlaylistCoversCmd(),
-		m.drainCoverQueueCmd(libraryCoverRefreshBatch*4),
-		m.loadLibraryCoversCmd(libraryCoverRefreshBatch*4),
+		m.loadLibraryCoversCmd(len(plItems)+len(alItems)),
 		m.queueMissingLibraryImageResolvesCmd(missingImageURLs),
 		m.maybeLoadMorePlaylistsCmd(m.playlistList),
 	)
@@ -376,13 +374,6 @@ func (m model) handleActionMsg(msg actionMsg) (tea.Model, tea.Cmd) {
 		if msg.rollback != nil {
 			m.status = msg.rollback
 		}
-		if msg.reconcile {
-			cmds := []tea.Cmd{m.pollCmd(true)}
-			if cmd := m.pumpInputExecutor(); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			return m, tea.Batch(cmds...)
-		}
 		return m, m.pumpInputExecutor()
 	}
 	m.playbackErr = nil
@@ -426,6 +417,9 @@ func (m model) handleVolDebounceMsg(msg volDebounceMsg) (tea.Model, tea.Cmd) {
 	}
 	m.beginReconcileAction(0)
 	v := target
+	if m.service == nil {
+		return m, nil
+	}
 	return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
 		return m.service.SetVolume(ctx, m.deviceName, v)
 	}, rollback)
@@ -458,6 +452,9 @@ func (m model) handleSeekDebounceMsg(msg seekDebounceMsg) (tea.Model, tea.Cmd) {
 	}
 	m.beginReconcileAction(0)
 	p := target
+	if m.service == nil {
+		return m, nil
+	}
 	return m, m.actionWithReconcileCmd(func(ctx context.Context) error {
 		return m.service.Seek(ctx, m.deviceName, p)
 	}, rollback)
@@ -513,6 +510,7 @@ func (m model) handleCoverImageURLsBatchResolvedMsg(msg coverImageURLsBatchResol
 func (m model) handleImagesBatchLoadedMsg(msg imagesBatchLoadedMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	for _, r := range msg.results {
+		m.imgs.finishLoad(r.url)
 		if r.err != nil {
 			m.imgs.markFailed(r.url)
 			continue
