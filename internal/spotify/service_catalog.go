@@ -2,8 +2,10 @@ package spotify
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -298,4 +300,77 @@ func (s *Service) fetchPlaylistsViaHTTP(ctx context.Context, offset, limit int) 
 		return nil, err
 	}
 	return &page, nil
+}
+
+func (s *Service) ListAlbumTracksPage(ctx context.Context, albumID string, offset, limit int) (*PlaylistItemsPage, error) {
+	albumID = strings.TrimSpace(albumID)
+	if albumID == "" {
+		return nil, errors.New("album ID must not be empty")
+	}
+	if offset < 0 {
+		return nil, errors.New("album offset must be >= 0")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	u := spotifyAPIBase + "albums/" + url.PathEscape(albumID) + "/tracks?"
+	params := url.Values{}
+	params.Set("limit", strconv.Itoa(limit))
+	params.Set("offset", strconv.Itoa(offset))
+	u += params.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.itemsHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("webapi album tracks: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("webapi album tracks: %d %s", resp.StatusCode, string(body))
+	}
+
+	var raw struct {
+		Items []struct {
+			ID         string `json:"id"`
+			Name       string `json:"name"`
+			DurationMs int    `json:"duration_ms"`
+			Artists    []struct {
+				Name string `json:"name"`
+			} `json:"artists"`
+		} `json:"items"`
+		Next *string `json:"next"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decode album tracks: %w", err)
+	}
+
+	out := &PlaylistItemsPage{Offset: offset, Limit: limit}
+	if len(raw.Items) == 0 {
+		out.NextOffset = offset
+		return out, nil
+	}
+	out.ItemIDs = make([]string, 0, len(raw.Items))
+	out.ItemInfos = make([]QueueItem, 0, len(raw.Items))
+	for _, item := range raw.Items {
+		if item.ID == "" {
+			continue
+		}
+		qi := QueueItem{ID: item.ID, Name: item.Name, DurationMS: item.DurationMs}
+		if len(item.Artists) > 0 {
+			qi.Artist = item.Artists[0].Name
+		}
+		out.ItemIDs = append(out.ItemIDs, item.ID)
+		out.ItemInfos = append(out.ItemInfos, qi)
+	}
+	out.NextOffset = offset + len(raw.Items)
+	out.HasMore = raw.Next != nil && *raw.Next != ""
+	return out, nil
 }

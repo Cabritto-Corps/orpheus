@@ -28,6 +28,10 @@ func (f fakeCatalog) ListPlaylistItemsPage(_ context.Context, _ string, offset, 
 	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 }
 
+func (f fakeCatalog) ListAlbumTracksPage(_ context.Context, _ string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
+	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+}
+
 func (f fakeCatalog) ResolveContextImageURL(_ context.Context, _ string, _ string) (string, error) {
 	return "", nil
 }
@@ -68,7 +72,7 @@ func TestLoadPlaylistsCmdInitialInterleavesAlbums(t *testing.T) {
 			return &spotify.PlaylistPage{Items: items, Offset: offset, Limit: limit, NextOffset: offset + len(items), HasMore: offset+len(items) < totalPerKind}, nil
 		},
 	}
-	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, nil)
 	msg, ok := m.loadPlaylistsCmd(0, playlistLoadBatchSize)().(playlistsMsg)
 	if !ok {
 		t.Fatalf("expected playlistsMsg")
@@ -105,7 +109,7 @@ func TestLoadPlaylistsCmdInitialAlbumsForbiddenSetsHintFlag(t *testing.T) {
 			return nil, errors.New("forbidden")
 		},
 	}
-	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, nil)
 	msg, ok := m.loadPlaylistsCmd(0, playlistLoadBatchSize)().(playlistsMsg)
 	if !ok {
 		t.Fatalf("expected playlistsMsg")
@@ -146,7 +150,7 @@ func TestLoadPlaylistsCmdInitialLoadsBeyondPlaylistLoadMax(t *testing.T) {
 			return &spotify.PlaylistPage{Items: nil, Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 		},
 	}
-	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, nil)
 	msg, ok := m.loadPlaylistsCmd(0, playlistLoadBatchSize)().(playlistsMsg)
 	if !ok {
 		t.Fatalf("expected playlistsMsg")

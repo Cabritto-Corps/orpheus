@@ -18,7 +18,7 @@ const (
 	gapFooterH = 0
 )
 
-const chromeH = headerH + tabBarH + playerBarH + 1
+const chromeH = headerH + tabBarH + playerBarH + 2
 
 const bodyStartRow1Based = headerH + tabBarH + 1
 
@@ -51,6 +51,10 @@ func (m model) View() string {
 
 	if m.helpOpen {
 		return header + "\n" + m.helpModalView() + m.kittyOverlay()
+	}
+
+	if m.trackPopupOpen {
+		return header + "\n" + m.trackPopupView() + m.kittyOverlay()
 	}
 
 	tabBar := m.tabBarView()
@@ -124,7 +128,7 @@ func (m model) headerView() string {
 	}
 	line2 := layoutThreeZone(w, "", centerL2, "")
 
-	sep := styleDivider.Render(strings.Repeat("─", w))
+	sep := sectionDivider(w)
 	return line1 + "\n" + line2 + "\n" + sep
 }
 
@@ -161,8 +165,8 @@ func (m model) headerVolumeBar(vol int) string {
 	if filled > w {
 		filled = w
 	}
-	return lipgloss.NewStyle().Foreground(colorBlue).Render(strings.Repeat(volChar, filled)) +
-		lipgloss.NewStyle().Foreground(colorDivider).Render(strings.Repeat(volChar, w-filled))
+	return styleVolumeBarFilled.Render(strings.Repeat(volChar, filled)) +
+		styleVolumeBarEmpty.Render(strings.Repeat(volChar, w-filled))
 }
 
 func (m model) tabBarView() string {
@@ -184,12 +188,12 @@ func (m model) tabBarView() string {
 	}
 	sep := styleDivider.Render("│")
 	bar := strings.Join(parts, sep)
-	underline := styleDivider.Render(strings.Repeat("─", m.width))
+	underline := sectionDivider(m.width)
 	return bar + "\n" + underline
 }
 
 func (m model) playlistsTabView() string {
-	layout := m.bodyLayout()
+	layout := m.getBodyLayout()
 	left := m.coverPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
 	divider := verticalDivider(layout.bodyH)
 	right := m.playlistBrowserPanel(layout.rightW, layout.bodyH)
@@ -202,7 +206,6 @@ func (m model) playlistBrowserPanel(w, h int) string {
 	label := styleSectionLabel.Render("Playlists")
 	countStr := styleDimmed.Render(fmt.Sprintf("%d playlists", count))
 	labelLine := label + "\n" + countStr + "\n" + sectionDivider(w-1)
-	innerH := h - 3
 
 	var inner string
 	if m.playlistsErr != nil && len(m.playlistList.Items()) == 0 {
@@ -215,7 +218,6 @@ func (m model) playlistBrowserPanel(w, h int) string {
 	} else if m.playlistsLoading && len(m.playlistList.Items()) == 0 {
 		inner = styleDimmed.Render("loading library...")
 	} else {
-		m.playlistList.SetSize(w-1, innerH)
 		inner = m.playlistList.View()
 	}
 	if m.albumsForbidden {
@@ -244,7 +246,8 @@ func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
 	innerW := w - 2
 
 	var coverStr string
-	if pl, ok := m.selectedPlaylist(); ok && pl.summary.ImageURL != "" {
+	pl, plOk := m.selectedPlaylist()
+	if plOk && pl.summary.ImageURL != "" {
 		url := pl.summary.ImageURL
 		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
 			if m.imgs.hasImage(url) {
@@ -262,7 +265,7 @@ func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
 	}
 
 	meta := ""
-	if pl, ok := m.selectedPlaylist(); ok {
+	if plOk {
 		ownerLine := "playlist by " + truncate(pl.summary.Owner, innerW)
 		if pl.summary.Kind == spotify.ContextKindAlbum {
 			ownerLine = "album by " + truncate(pl.summary.Owner, innerW)
@@ -274,12 +277,12 @@ func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
 		meta = "\n" + styleDimmed.Render("select an item")
 	}
 
-	content := labelLine + "\n" + m.composeCoverSection(coverStr, meta)
+	content := labelLine + "\n" + coverStr + meta
 	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
 }
 
 func (m model) playbackScreenView() string {
-	layout := m.bodyLayout()
+	layout := m.getBodyLayout()
 	left := m.albumCoverPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
 	divider := verticalDivider(layout.bodyH)
 	right := m.queuePanel(layout.rightW, layout.bodyH)
@@ -288,7 +291,7 @@ func (m model) playbackScreenView() string {
 }
 
 func (m model) albumsTabView() string {
-	layout := m.bodyLayout()
+	layout := m.getBodyLayout()
 	left := m.albumPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
 	divider := verticalDivider(layout.bodyH)
 	right := m.albumBrowserPanel(layout.rightW, layout.bodyH)
@@ -301,7 +304,6 @@ func (m model) albumBrowserPanel(w, h int) string {
 	label := styleSectionLabel.Render("Albums")
 	countStr := styleDimmed.Render(fmt.Sprintf("%d albums", count))
 	labelLine := label + "\n" + countStr + "\n" + sectionDivider(w-1)
-	innerH := h - 3
 
 	var inner string
 	if m.playlistsErr != nil && len(m.albumList.Items()) == 0 {
@@ -312,7 +314,6 @@ func (m model) albumBrowserPanel(w, h int) string {
 	} else if m.albumsForbidden && len(m.albumList.Items()) == 0 {
 		inner = styleDimmed.Render("saved albums unavailable — re-run 'orpheus auth login' (needs user-library-read)")
 	} else {
-		m.albumList.SetSize(w-1, innerH)
 		inner = m.albumList.View()
 	}
 
@@ -326,8 +327,9 @@ func (m model) albumPreviewPanel(w, h, coverCols, coverRows int) string {
 	innerW := w - 2
 
 	var coverStr string
-	if pl, ok := m.selectedAlbum(); ok && pl.summary.ImageURL != "" {
-		url := pl.summary.ImageURL
+	al, alOk := m.selectedAlbum()
+	if alOk && al.summary.ImageURL != "" {
+		url := al.summary.ImageURL
 		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
 			if m.imgs.hasImage(url) {
 				coverStr = m.blankArt(coverCols, coverRows)
@@ -344,15 +346,15 @@ func (m model) albumPreviewPanel(w, h, coverCols, coverRows int) string {
 	}
 
 	meta := ""
-	if pl, ok := m.selectedAlbum(); ok {
+	if alOk {
 		meta = "\n" +
-			stylePlaylistName.Render(truncate(pl.summary.Name, innerW)) + "\n" +
-			stylePlaylistOwner.Render("album by "+truncate(pl.summary.Owner, innerW))
+			stylePlaylistName.Render(truncate(al.summary.Name, innerW)) + "\n" +
+			stylePlaylistOwner.Render("album by "+truncate(al.summary.Owner, innerW))
 	} else {
 		meta = "\n" + styleDimmed.Render("select an album")
 	}
 
-	content := labelLine + "\n" + m.composeCoverSection(coverStr, meta)
+	content := labelLine + "\n" + coverStr + meta
 	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
 }
 
@@ -400,7 +402,7 @@ func (m model) albumCoverPanel(w, h, coverCols, coverRows int) string {
 		meta = "\n" + styleDimmed.Render("nothing playing")
 	}
 
-	content := labelLine + "\n" + m.composeCoverSection(coverStr, meta)
+	content := labelLine + "\n" + coverStr + meta
 	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
 }
 
@@ -442,8 +444,8 @@ func (m model) queuePanel(w, h int) string {
 		for i := 0; i < n; i++ {
 			q := displayQueue[i]
 			idx := styleQueueIndex.Render(fmt.Sprintf("%*d.", idxW-1, i+1))
-			title := styleQueueTrack.Render(truncate(q.Name, titleW))
-			artist := styleQueueArtist.Render(truncate(q.Artist, artistW))
+			title := truncate(q.Name, titleW)
+			artist := truncate(q.Artist, artistW)
 			titlePad := titleW - lipgloss.Width(title)
 			artistPad := artistW - lipgloss.Width(artist)
 			if titlePad < 0 {
@@ -452,7 +454,7 @@ func (m model) queuePanel(w, h int) string {
 			if artistPad < 0 {
 				artistPad = 0
 			}
-			lines = append(lines, " "+idx+" "+title+strings.Repeat(" ", titlePad)+"  "+artist+strings.Repeat(" ", artistPad))
+			lines = append(lines, " "+idx+" "+styleQueueTrack.Render(title)+strings.Repeat(" ", titlePad)+"  "+styleQueueArtist.Render(artist)+strings.Repeat(" ", artistPad))
 		}
 
 		stableVisibleQueueLen := m.stableQueueLen
@@ -490,7 +492,7 @@ func (m model) queuePanel(w, h int) string {
 func (m model) playerBarView() string {
 	barW := m.width
 
-	sep := styleDivider.Render(strings.Repeat("─", barW))
+	sep := sectionDivider(barW)
 
 	if m.status == nil {
 		return sep
@@ -527,6 +529,43 @@ func (m model) playerBarView() string {
 	return sep + "\n" + bar
 }
 
+func (m model) trackPopupView() string {
+	modalW := min(m.width-8, 60)
+	bodyH := m.height - headerH - tabBarH - 2
+	innerH := bodyH - 4
+	if innerH < 10 {
+		innerH = 10
+	}
+
+	title := styleTrackPopupTitle.Render(fmt.Sprintf("  %s", m.trackPopupName))
+
+	var body string
+	var hint string
+	if m.trackPopupItems == nil {
+		body = styleTrackPopupLoading.Render("\n  Loading...")
+		hint = ""
+	} else if len(m.trackPopupItems) == 0 {
+		body = styleTrackPopupLoading.Render("\n  No tracks found")
+		hint = styleTrackPopupHint.Render("  esc: close")
+	} else {
+		body = m.trackPopupList.View()
+		hint = styleTrackPopupHint.Render("  enter: play  /: search  esc: close")
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		body,
+		hint,
+	)
+
+	box := styleModalBox.
+		Width(modalW).
+		Height(innerH).
+		Render(content)
+
+	return lipgloss.Place(m.width, bodyH, lipgloss.Center, lipgloss.Center, box)
+}
+
 func (m model) helpModalView() string {
 	modalW := min(m.width-8, 80)
 	innerH := m.height - 14
@@ -549,7 +588,7 @@ func (m model) helpModalView() string {
 	box := styleModalBox.Width(modalW).Height(innerH).Render(boxContent)
 	placed := lipgloss.Place(
 		m.width,
-		m.height-tabBarH-gapFooterH,
+		m.height-headerH-tabBarH-gapFooterH,
 		lipgloss.Center,
 		lipgloss.Center,
 		box,
@@ -657,8 +696,8 @@ func (m model) renderProgressBar(pct float64, width int) string {
 		filled = width
 	}
 	empty := width - filled
-	return lipgloss.NewStyle().Foreground(colorBlue).Render(strings.Repeat("█", filled)) +
-		lipgloss.NewStyle().Foreground(colorDivider).Render(strings.Repeat("░", empty))
+	return styleProgressBarFilled.Render(strings.Repeat("█", filled)) +
+		styleProgressBarEmpty.Render(strings.Repeat("░", empty))
 }
 
 func fmtDuration(ms int) string {
@@ -711,12 +750,12 @@ func (m model) kittyOverlay() string {
 	if m.imgs == nil || m.imgs.protocol != imageProtocolKitty {
 		return ""
 	}
-	if m.helpOpen {
+	if m.helpOpen || m.trackPopupOpen {
 		m.imgs.beginKittyOverlayState("", "")
 		return kittyDeleteAll
 	}
 
-	layout := m.bodyLayout()
+	layout := m.getBodyLayout()
 	if layout.coverCols <= 0 || layout.coverRows <= 0 {
 		_, shouldDelete, _ := m.imgs.beginKittyOverlayState("", "")
 		if shouldDelete {
@@ -795,8 +834,14 @@ func (m model) kittyOverlay() string {
 	return out
 }
 
-func (m model) composeCoverSection(coverStr, meta string) string {
-	return coverStr + meta
+func (m *model) getBodyLayout() bodyLayout {
+	if m.cachedBodyLayoutValid {
+		return m.cachedBodyLayout
+	}
+	layout := m.bodyLayout()
+	m.cachedBodyLayout = layout
+	m.cachedBodyLayoutValid = true
+	return layout
 }
 
 func (m model) blankArt(cols, rows int) string {
@@ -817,7 +862,7 @@ func (m model) placeholderArt(cols, rows int) string {
 	if cols <= 2 || rows <= 2 {
 		return ""
 	}
-	style := lipgloss.NewStyle().Foreground(colorDivider)
+	style := stylePlaceholderBorder
 	top := style.Render("╭" + strings.Repeat("─", cols-2) + "╮")
 	mid := style.Render("│" + strings.Repeat(" ", cols-2) + "│")
 	bot := style.Render("╰" + strings.Repeat("─", cols-2) + "╯")

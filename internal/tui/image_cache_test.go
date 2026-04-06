@@ -1,11 +1,9 @@
 package tui
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"image"
-	"image/png"
 	"strings"
 	"testing"
 	"time"
@@ -14,12 +12,16 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"orpheus/internal/config"
-	"orpheus/internal/infra/ports"
+	"orpheus/internal/loader"
 	"orpheus/internal/spotify"
 )
 
+func NewLoaderModel() model {
+	return newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), nil)))
+}
+
 func TestHandlePlaylistKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	items := []list.Item{
 		playlistItem{summary: spotify.PlaylistSummary{ID: "1", Name: "one", ImageURL: "u1"}},
 		playlistItem{summary: spotify.PlaylistSummary{ID: "2", Name: "two", ImageURL: "u2"}},
@@ -38,7 +40,7 @@ func TestHandlePlaylistKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
 }
 
 func TestHandleAlbumKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	items := []list.Item{
 		playlistItem{summary: spotify.PlaylistSummary{ID: "1", Name: "one", ImageURL: "u1", Kind: spotify.ContextKindAlbum}},
 		playlistItem{summary: spotify.PlaylistSummary{ID: "2", Name: "two", ImageURL: "u2", Kind: spotify.ContextKindAlbum}},
@@ -59,7 +61,7 @@ func TestHandleAlbumKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
 }
 
 func TestTabSwitchClampsTargetPaginationAndQueuesCoverLoad(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	playlists := make([]list.Item, 0, 24)
 	for i := 0; i < 24; i++ {
 		playlists = append(playlists, playlistItem{
@@ -143,7 +145,7 @@ func TestImageCacheEvictsOldestRenderedCover(t *testing.T) {
 }
 
 func TestHandleImageLoadedMsgSchedulesRetryOnError(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 
 	nextModel, cmd := m.handleImageLoadedMsg(imageLoadedMsg{url: "u1", err: fmt.Errorf("network")})
 	got := nextModel.(model)
@@ -159,7 +161,7 @@ func TestHandleImageLoadedMsgSchedulesRetryOnError(t *testing.T) {
 }
 
 func TestHandleImageLoadedMsgForCurrentPlayerCoverForcesKittyRedraw(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.activeTab = tabPlayer
 	m.imgs.protocol = imageProtocolKitty
 	m.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
@@ -175,7 +177,7 @@ func TestHandleImageLoadedMsgForCurrentPlayerCoverForcesKittyRedraw(t *testing.T
 }
 
 func TestHandleImageLoadedMsgForOtherURLDoesNotForceKittyRedraw(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.activeTab = tabPlayer
 	m.imgs.protocol = imageProtocolKitty
 	m.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
@@ -196,7 +198,7 @@ func TestHandleImageLoadedMsgExhaustedRetriesQueuesMetadataResolveWhenURLStillRe
 			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 		},
 	}
-	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), catalog)))
 	m.playlistsLoading = false
 	m.cover.imageRetryCount["u1"] = imageLoadRetryMax
 	m.playlistList.SetItems([]list.Item{
@@ -222,7 +224,7 @@ func TestHandleImageLoadedMsgExhaustedRetriesSkipsMetadataRefreshWhenURLNotRefer
 			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 		},
 	}
-	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), catalog)))
 	m.playlistsLoading = false
 	m.cover.imageRetryCount["u1"] = imageLoadRetryMax
 
@@ -234,7 +236,7 @@ func TestHandleImageLoadedMsgExhaustedRetriesSkipsMetadataRefreshWhenURLNotRefer
 }
 
 func TestHandleImageRetryMsgSkipsStaleOrUnneededURL(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.cover.imageRetryToken["u-stale"] = 2
 
 	nextModel, cmd := m.handleImageRetryMsg(imageRetryMsg{url: "u-stale", token: 1})
@@ -262,7 +264,7 @@ func TestHandleImageRetryMsgSkipsStaleOrUnneededURL(t *testing.T) {
 }
 
 func TestNeedsImageURLIncludesWholeLibrary(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.playlistList.SetItems([]list.Item{
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", ImageURL: "u-library"}},
 	})
@@ -280,7 +282,7 @@ func TestQueueMissingLibraryImageResolvesCmdQueuesEmptyImageEntries(t *testing.T
 			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 		},
 	}
-	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), catalog)))
 	m.playlistList.SetItems([]list.Item{
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", Kind: spotify.ContextKindPlaylist, ImageURL: ""}},
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p2", Name: "two", Kind: spotify.ContextKindPlaylist, ImageURL: "u2"}},
@@ -295,7 +297,7 @@ func TestQueueMissingLibraryImageResolvesCmdQueuesEmptyImageEntries(t *testing.T
 }
 
 func TestLoadLibraryCoversCmdQueuesAllUniqueLibraryImages(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.playlistList.SetItems([]list.Item{
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", ImageURL: "u1"}},
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p2", Name: "two", ImageURL: "u2"}},
@@ -317,7 +319,7 @@ func TestLoadLibraryCoversCmdQueuesAllUniqueLibraryImages(t *testing.T) {
 }
 
 func TestLoadLibraryCoversCmdRespectsLimit(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.playlistList.SetItems([]list.Item{
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", ImageURL: "u1"}},
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p2", Name: "two", ImageURL: "u2"}},
@@ -339,7 +341,7 @@ func TestLoadLibraryCoversCmdRespectsLimit(t *testing.T) {
 }
 
 func TestHandleCoverImageResolvedMsgUpdatesItemAndQueuesImageLoad(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.playlistList.SetItems([]list.Item{
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", Kind: spotify.ContextKindPlaylist, ImageURL: ""}},
 	})
@@ -364,7 +366,7 @@ func TestHandleCoverImageResolvedMsgUpdatesItemAndQueuesImageLoad(t *testing.T) 
 }
 
 func TestApplyResolvedContextImageURLKeepsSelectionIndex(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.playlistList.SetItems([]list.Item{
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", Kind: spotify.ContextKindPlaylist, ImageURL: ""}},
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p2", Name: "two", Kind: spotify.ContextKindPlaylist, ImageURL: "u2"}},
@@ -381,7 +383,7 @@ func TestApplyResolvedContextImageURLKeepsSelectionIndex(t *testing.T) {
 }
 
 func TestHandlePlaylistsMsgQueuesInitialPlaylistAndAlbumPreviewCover(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.playlistsLoading = true
 
 	nextModel, _ := m.handlePlaylistsMsg(playlistsMsg{
@@ -403,7 +405,7 @@ func TestHandlePlaylistsMsgQueuesInitialPlaylistAndAlbumPreviewCover(t *testing.
 }
 
 func TestHandleTickMsgPlayerTabQueuesCurrentAlbumImageRefresh(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.activeTab = tabPlayer
 	m.status = &spotify.PlaybackStatus{AlbumImageURL: "player-u1"}
 	m.playerCoverRefreshTick = playerCoverRefreshEvery - 1
@@ -416,7 +418,7 @@ func TestHandleTickMsgPlayerTabQueuesCurrentAlbumImageRefresh(t *testing.T) {
 }
 
 func TestCoverQueueDedupesAndDrains(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.enqueueCoverURL("u1")
 	m.enqueueCoverURL("u1")
 	if len(m.cover.queue) != 1 {
@@ -432,7 +434,7 @@ func TestCoverQueueDedupesAndDrains(t *testing.T) {
 }
 
 func TestPlayerCoverFailuresFallbackFromKitty(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.imgs.protocol = imageProtocolKitty
 	m.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
 	for i := 0; i < kittyProtocolFallbackFailures; i++ {
@@ -495,14 +497,7 @@ func TestImageCacheShouldQueueLoadWhenKittyEncodedMissing(t *testing.T) {
 }
 
 func TestLoadImageCmdRepairsMissingKittyEncodingFromCachedImage(t *testing.T) {
-	oldProvider := imageProvider
-	defer func() { imageProvider = oldProvider }()
-	imageProvider = imageProviderFunc(func(ctx context.Context, url string) ([]byte, error) {
-		t.Fatal("expected cached image path to avoid provider fetch")
-		return nil, nil
-	})
-
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.imgs.protocol = imageProtocolKitty
 	m.imgs.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)), 0, 0)
 	m.imgs.mu.Lock()
@@ -523,65 +518,8 @@ func TestLoadImageCmdRepairsMissingKittyEncodingFromCachedImage(t *testing.T) {
 	}
 }
 
-func TestLoadImageCmdWaitsForSemaphoreBeforeFetchTimeoutStarts(t *testing.T) {
-	oldProvider := imageProvider
-	oldSemaphore := imgSemaphore
-	defer func() {
-		imageProvider = oldProvider
-		imgSemaphore = oldSemaphore
-	}()
-
-	imgSemaphore = make(chan struct{}, 1)
-	imgSemaphore <- struct{}{}
-
-	providerCalled := make(chan struct{}, 1)
-	imageProvider = imageProviderFunc(func(ctx context.Context, url string) ([]byte, error) {
-		providerCalled <- struct{}{}
-		var buf bytes.Buffer
-		if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
-			return nil, err
-		}
-		return buf.Bytes(), nil
-	})
-
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
-	cmd := m.loadImageCmd("u1", false)
-	if cmd == nil {
-		t.Fatal("expected image load command")
-	}
-
-	done := make(chan tea.Msg, 1)
-	go func() {
-		done <- cmd()
-	}()
-
-	select {
-	case <-providerCalled:
-		t.Fatal("expected fetch to wait for semaphore slot")
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	<-imgSemaphore
-
-	select {
-	case <-providerCalled:
-	case <-time.After(time.Second):
-		t.Fatal("expected fetch to start after semaphore release")
-	}
-
-	select {
-	case msg := <-done:
-		loaded, ok := msg.(imageLoadedMsg)
-		if !ok || loaded.err != nil {
-			t.Fatalf("expected successful imageLoadedMsg, got %#v", msg)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("expected command to finish")
-	}
-}
-
 func TestKittyOverlayStateAvoidsRedrawWhenUnchanged(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.width = 120
 	m.height = 40
 	m.activeTab = tabPlayer
@@ -613,7 +551,7 @@ func TestKittyOverlayStateAvoidsRedrawWhenUnchanged(t *testing.T) {
 }
 
 func TestKittyOverlayDeletesOnceWhenImageDisappears(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.width = 120
 	m.height = 40
 	m.activeTab = tabPlayer
@@ -636,7 +574,7 @@ func TestKittyOverlayDeletesOnceWhenImageDisappears(t *testing.T) {
 }
 
 func TestKittyOverlayDeletesWhenHelpOpens(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.width = 120
 	m.height = 40
 	m.activeTab = tabPlayer
@@ -659,7 +597,7 @@ func TestKittyOverlayDeletesWhenHelpOpens(t *testing.T) {
 }
 
 func TestKittyOverlayPlayerClearsPreviousImageWhileNextLoads(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.width = 120
 	m.height = 40
 	m.activeTab = tabPlayer
@@ -680,7 +618,7 @@ func TestKittyOverlayPlayerClearsPreviousImageWhileNextLoads(t *testing.T) {
 }
 
 func TestKittyOverlayPlayerClearsWhileTransportTransitionPending(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.width = 120
 	m.height = 40
 	m.activeTab = tabPlayer
@@ -701,7 +639,7 @@ func TestKittyOverlayPlayerClearsWhileTransportTransitionPending(t *testing.T) {
 }
 
 func TestKittyOverlayPlayerDoesNotForceClearForSameCoverDuringTransition(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.width = 120
 	m.height = 40
 	m.activeTab = tabPlayer
@@ -718,7 +656,7 @@ func TestKittyOverlayPlayerDoesNotForceClearForSameCoverDuringTransition(t *test
 }
 
 func TestKittyOverlayResetStateNextLoadReturnsEmptyWhenNothingDisplayed(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.width = 120
 	m.height = 40
 	m.activeTab = tabPlayer
@@ -739,7 +677,7 @@ func TestKittyOverlayResetStateNextLoadReturnsEmptyWhenNothingDisplayed(t *testi
 }
 
 func TestAlbumCoverPanelKittyShowsPlaceholderWhileLoading(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.width = 120
 	m.height = 40
 	m.imgs.protocol = imageProtocolKitty
@@ -756,7 +694,7 @@ func TestAlbumCoverPanelKittyShowsPlaceholderWhileLoading(t *testing.T) {
 }
 
 func TestAlbumCoverPanelAnsiShowsPlaceholderWhileLoading(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.width = 120
 	m.height = 40
 	m.imgs.protocol = imageProtocolNone
@@ -773,7 +711,7 @@ func TestAlbumCoverPanelAnsiShowsPlaceholderWhileLoading(t *testing.T) {
 }
 
 func TestKittyOverlayPlayerSameCoverDifferentTrackStillRedraws(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.width = 120
 	m.height = 40
 	m.activeTab = tabPlayer
@@ -806,7 +744,7 @@ func TestKittyOverlayPlayerSameCoverDifferentTrackStillRedraws(t *testing.T) {
 }
 
 func TestKittyOverlayPlayerEpochForcesRedrawWithSameKeyInputs(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.width = 120
 	m.height = 40
 	m.activeTab = tabPlayer
@@ -834,7 +772,7 @@ func TestKittyOverlayPlayerEpochForcesRedrawWithSameKeyInputs(t *testing.T) {
 }
 
 func TestKittyOverlaySameURLWithoutEncodingKeepsCurrentImage(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.width = 120
 	m.height = 40
 	m.activeTab = tabPlayer
@@ -855,7 +793,7 @@ func TestKittyOverlaySameURLWithoutEncodingKeepsCurrentImage(t *testing.T) {
 }
 
 func TestKittyOverlayClearsStaleImageOnTabSwitchWithoutEncodedCover(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.width = 120
 	m.height = 40
 	m.activeTab = tabPlaylists
@@ -888,11 +826,3 @@ func hasInflightURL(cache *imgCache, url string) bool {
 	_, ok := cache.inflight[url]
 	return ok
 }
-
-type imageProviderFunc func(ctx context.Context, url string) ([]byte, error)
-
-func (f imageProviderFunc) Fetch(ctx context.Context, url string) ([]byte, error) {
-	return f(ctx, url)
-}
-
-var _ ports.ImageProvider = imageProviderFunc(nil)

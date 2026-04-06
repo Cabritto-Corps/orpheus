@@ -42,6 +42,8 @@ type AppPlayer struct {
 
 	spotConnId string
 
+	suppressEmit bool
+
 	prodInfo    *ap.ProductInfo
 	countryCode *string
 
@@ -71,7 +73,7 @@ type AppPlayer struct {
 	namePreloadToken     uint64
 	namePreloadDone      bool
 
-	advanceInFlight bool
+	advanceInFlight atomic.Bool
 }
 
 func (p *AppPlayer) setRunContext(ctx context.Context) {
@@ -236,7 +238,9 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 			p.state.player.SessionId = *sessId
 		} else {
 			sessionId := make([]byte, 16)
-			_, _ = rand.Read(sessionId)
+			if _, err := rand.Read(sessionId); err != nil {
+				p.runtime.Log.WithError(err).Warn("failed generating session ID")
+			}
 			p.state.player.SessionId = base64.StdEncoding.EncodeToString(sessionId)
 		}
 		p.state.setActive(true)
@@ -410,24 +414,11 @@ func (p *AppPlayer) handleTUICommand(ctx context.Context, cmd TUICommand) error 
 }
 
 func (p *AppPlayer) emitPlaybackState() {
+	if p.suppressEmit {
+		return
+	}
 	u := p.BuildPlaybackStateUpdate()
 	if u != nil {
-		hasUnknown := false
-		for _, e := range u.Queue {
-			if e.Name == "Unknown track" {
-				hasUnknown = true
-				break
-			}
-		}
-		if hasUnknown {
-			contextKey := ""
-			if p.state != nil && p.state.player != nil {
-				contextKey = p.state.player.ContextUri
-			}
-			if !p.checkNamePreloadStatus(contextKey) && p.state != nil {
-				p.preloadContextQueueMetadata(p.state.tracks, contextKey)
-			}
-		}
 		p.runtime.EmitPlaybackState(u)
 	}
 }

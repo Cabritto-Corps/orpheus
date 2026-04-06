@@ -332,7 +332,7 @@ func (m *model) shouldApplyIncomingQueue(incomingTrack string) bool {
 	return true
 }
 
-func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool, _ bool) {
+func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool) {
 	m.queue = mergeQueueNames(m.queue, incoming, m.trackCache)
 	if updateStable {
 		m.stableQueueLen = len(m.queue)
@@ -452,14 +452,19 @@ func mergeQueueNames(prev, next []spotify.QueueItem, cache *cache.TTL[string, sp
 func (m *model) rebuildPreloadedFromQueue() {
 	if m.preloadedItemIDs == nil {
 		m.preloadedItemIDs = make(map[string]struct{}, len(m.queue))
-	} else {
-		for k := range m.preloadedItemIDs {
+	}
+	newIDs := make(map[string]struct{}, len(m.queue))
+	for _, q := range m.queue {
+		if q.ID != "" {
+			newIDs[golibrespot.NormalizeSpotifyId(q.ID)] = struct{}{}
+		}
+	}
+	for k := range m.preloadedItemIDs {
+		if _, ok := newIDs[k]; !ok {
 			delete(m.preloadedItemIDs, k)
 		}
 	}
-	for _, q := range m.queue {
-		if q.ID != "" {
-			m.preloadedItemIDs[golibrespot.NormalizeSpotifyId(q.ID)] = struct{}{}
-		}
+	for k := range newIDs {
+		m.preloadedItemIDs[k] = struct{}{}
 	}
 }

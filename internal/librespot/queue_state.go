@@ -3,7 +3,6 @@ package librespot
 import (
 	"context"
 	"strings"
-	"time"
 
 	golibrespot "github.com/elxgy/go-librespot"
 	"github.com/elxgy/go-librespot/tracks"
@@ -93,76 +92,67 @@ func (p *AppPlayer) checkNamePreloadStatus(contextKey string) bool {
 	return p.namePreloadDone
 }
 
-func (p *AppPlayer) preloadContextQueueMetadata(trackList *tracks.List, contextKey string) {
-	token, ok := p.claimContextNamePreload(contextKey)
-	if !ok || trackList == nil {
+func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, trackList *tracks.List) {
+	if trackList == nil {
 		return
 	}
-	go func(token uint64, contextKey string, list *tracks.List) {
-		defer p.finishContextNamePreload(contextKey, token)
 
-		ctx, cancel := context.WithTimeout(p.ownerContext(), 20*time.Second)
-		defer cancel()
+	all := trackList.AllTracks(ctx)
+	if len(all) == 0 {
+		return
+	}
 
-		all := list.AllTracks(ctx)
-		if len(all) == 0 {
-			return
+	seen := make(map[string]struct{}, len(all))
+	toResolve := make([]string, 0, len(all))
+	for _, t := range all {
+		if t == nil {
+			continue
 		}
-		seen := make(map[string]struct{}, len(all))
-		toResolve := make([]string, 0, len(all))
-		for _, t := range all {
-			if t == nil {
-				continue
-			}
-			id := golibrespot.NormalizeSpotifyId(t.Uri)
-			if id == "" {
-				continue
-			}
-			if _, exists := seen[id]; exists {
-				continue
-			}
-			seen[id] = struct{}{}
-			if p.getCachedQueueMeta(id) != nil {
-				continue
-			}
-			e := PlaybackStateQueueEntry{ID: id}
-			if t.Metadata != nil {
-				e.Name = metadataValue(t.Metadata, "title", "name", "track_name", "entity_name", "track_title")
-				e.Artist = metadataValue(t.Metadata, "artist_name", "artist", "artists", "show_name", "album_artist_name")
-				e.DurationMS = metadataDurationMS(t.Metadata)
-			}
-			if e.Name != "" {
-				if e.Artist == "" {
-					e.Artist = "-"
-				}
-				p.setCachedQueueMeta(id, e)
-				continue
-			}
-			toResolve = append(toResolve, t.Uri)
+		id := golibrespot.NormalizeSpotifyId(t.Uri)
+		if id == "" {
+			continue
 		}
-		if len(toResolve) == 0 {
-			p.runtime.EmitPlaybackState(p.BuildPlaybackStateUpdate())
-			return
+		if _, exists := seen[id]; exists {
+			continue
 		}
-
-		batch, err := p.sess.Spclient().ResolveTrackOrEpisodeMetadataBatch(ctx, toResolve)
-		if err != nil {
-			p.runtime.Log.WithError(err).Warn("batch metadata resolution failed")
-			return
+		seen[id] = struct{}{}
+		if p.getCachedQueueMeta(id) != nil {
+			continue
 		}
-		for uri, entry := range batch {
-			id := golibrespot.NormalizeSpotifyId(uri)
-			if id == "" {
-				continue
-			}
-			e := PlaybackStateQueueEntry{ID: id, Name: entry.Name, Artist: entry.Artist, DurationMS: entry.DurationMS}
+		e := PlaybackStateQueueEntry{ID: id}
+		if t.Metadata != nil {
+			e.Name = metadataValue(t.Metadata, "title", "name", "track_name", "entity_name", "track_title")
+			e.Artist = metadataValue(t.Metadata, "artist_name", "artist", "artists", "show_name", "album_artist_name")
+			e.DurationMS = metadataDurationMS(t.Metadata)
+		}
+		if e.Name != "" {
 			if e.Artist == "" {
 				e.Artist = "-"
 			}
 			p.setCachedQueueMeta(id, e)
+			continue
 		}
-		if len(batch) > 0 {
-			p.runtime.EmitPlaybackState(p.BuildPlaybackStateUpdate())
+		toResolve = append(toResolve, t.Uri)
+	}
+
+	if len(toResolve) == 0 {
+		return
+	}
+
+	batch, err := p.sess.Spclient().ResolveTrackOrEpisodeMetadataBatch(ctx, toResolve)
+	if err != nil {
+		p.runtime.Log.WithError(err).Warn("batch metadata resolution failed")
+		return
+	}
+	for uri, entry := range batch {
+		id := golibrespot.NormalizeSpotifyId(uri)
+		if id == "" {
+			continue
 		}
-	}(token, strings.TrimSpace(contextKey), trackList)
+		e := PlaybackStateQueueEntry{ID: id, Name: entry.Name, Artist: entry.Artist, DurationMS: entry.DurationMS}
+		if e.Artist == "" {
+			e.Artist = "-"
+		}
+		p.setCachedQueueMeta(id, e)
+	}
 }

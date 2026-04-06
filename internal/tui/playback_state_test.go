@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"image"
 	"testing"
@@ -11,7 +10,6 @@ import (
 	golibrespot "github.com/elxgy/go-librespot"
 
 	"orpheus/internal/cache"
-	"orpheus/internal/config"
 	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
@@ -227,7 +225,6 @@ func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 		false,
 		true,
 		true,
-		false,
 	)
 
 	if _, ok := m.preloadedItemIDs["2WfaOiMkCvy7F5fcp2zZ8L"]; !ok {
@@ -259,7 +256,7 @@ func TestApplyMergedQueueReplacesQueueWithoutTailPreservation(t *testing.T) {
 		preloadedItemIDs: make(map[string]struct{}),
 		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 	}
-	m.applyMergedQueue(next, false, true, true, false)
+	m.applyMergedQueue(next, false, true, true)
 	if len(m.queue) != len(next) {
 		t.Fatalf("expected queue to be replaced by incoming entries, got %d queue entries", len(m.queue))
 	}
@@ -277,7 +274,7 @@ func TestApplyMergedQueueDoesNotPreserveTailWhenShuffleTurnsOff(t *testing.T) {
 		preloadedItemIDs: make(map[string]struct{}),
 		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 	}
-	m.applyMergedQueue(next, false, true, true, false)
+	m.applyMergedQueue(next, false, true, true)
 	if len(m.queue) != len(next) {
 		t.Fatalf("expected queue to match incoming length after shuffle toggle, got %d queue entries", len(m.queue))
 	}
@@ -322,7 +319,7 @@ func TestShouldQueueAlbumImageLoad(t *testing.T) {
 }
 
 func TestShouldEnsureAlbumImageLoadWhenCoverNotCached(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
 	next := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
 	if !m.shouldEnsureAlbumImageLoad(prev, next) {
@@ -336,7 +333,7 @@ func TestShouldEnsureAlbumImageLoadWhenCoverNotCached(t *testing.T) {
 }
 
 func TestAdvancePlayerCoverEpochOnQueueHeadChange(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.imgs.protocol = imageProtocolKitty
 	prev := &spotify.PlaybackStatus{AlbumImageURL: "u1", ProgressMS: 10000}
 	next := &spotify.PlaybackStatus{AlbumImageURL: "u1", ProgressMS: 2000}
@@ -351,7 +348,7 @@ func TestAdvancePlayerCoverEpochOnQueueHeadChange(t *testing.T) {
 }
 
 func TestAdvancePlayerCoverEpochNoChangeWhenSignalsMissing(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.imgs.protocol = imageProtocolKitty
 	prev := &spotify.PlaybackStatus{AlbumImageURL: "u1", TrackID: "t1", ProgressMS: 10000}
 	next := &spotify.PlaybackStatus{AlbumImageURL: "u1", TrackID: "t1", ProgressMS: 10200}
@@ -458,7 +455,7 @@ func TestStuckTransportTransitionSetsRecovery(t *testing.T) {
 }
 
 func TestHandlePollMsgIgnoresStaleToken(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.stateFetchToken = 3
 	m.playbackErr = nil
 	msg := pollMsg{
@@ -475,7 +472,7 @@ func TestHandlePollMsgIgnoresStaleToken(t *testing.T) {
 }
 
 func TestHandleActionReconcileMsgIgnoresStaleToken(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.stateFetchToken = 5
 	m.status = &spotify.PlaybackStatus{TrackID: "current"}
 	msg := actionReconcileMsg{
@@ -492,7 +489,7 @@ func TestHandleActionReconcileMsgIgnoresStaleToken(t *testing.T) {
 }
 
 func TestHandleActionMsgIgnoresStaleToken(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.stateFetchToken = 7
 	m.status = &spotify.PlaybackStatus{TrackID: "current"}
 	msg := actionMsg{
@@ -512,7 +509,7 @@ func TestHandleActionMsgIgnoresStaleToken(t *testing.T) {
 }
 
 func TestHandlePlaybackStateMsgIgnoresOutOfOrderSeq(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.lastPlaybackStateSeq = 10
 	msg := playbackStateMsg{
 		seq:    9,
@@ -526,7 +523,7 @@ func TestHandlePlaybackStateMsgIgnoresOutOfOrderSeq(t *testing.T) {
 }
 
 func TestHandlePollMsgClearsQueueOnTrackChangeWithoutQueueFetch(t *testing.T) {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m := NewLoaderModel()
 	m.stateFetchToken = 1
 	m.status = &spotify.PlaybackStatus{TrackID: "track-a"}
 	m.queue = []spotify.QueueItem{{ID: "track-a"}, {ID: "track-b"}}
@@ -546,8 +543,8 @@ func TestHandlePollMsgClearsQueueOnTrackChangeWithoutQueueFetch(t *testing.T) {
 }
 
 func TestStatusQueueCacheScopedPerModel(t *testing.T) {
-	m1 := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
-	m2 := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil)
+	m1 := NewLoaderModel()
+	m2 := NewLoaderModel()
 	if m1.statusQueueCache == nil || m2.statusQueueCache == nil {
 		t.Fatal("expected status queue cache to be initialized")
 	}
