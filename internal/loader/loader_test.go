@@ -21,42 +21,6 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestBeginLoadDedup(t *testing.T) {
-	ctx := context.Background()
-	loader := New(ctx, 64, nil)
-
-	if !loader.BeginLoad("url1") {
-		t.Fatal("expected first begin to succeed")
-	}
-	if loader.BeginLoad("url1") {
-		t.Fatal("expected duplicate begin to fail")
-	}
-
-	loader.FinishLoad("url1")
-	if !loader.BeginLoad("url1") {
-		t.Fatal("expected begin after finish to succeed")
-	}
-}
-
-func TestBeginLoadEmptyID(t *testing.T) {
-	ctx := context.Background()
-	loader := New(ctx, 64, nil)
-
-	if loader.BeginLoad("") {
-		t.Fatal("expected empty ID to fail")
-	}
-}
-
-func TestFinishLoadNonExistent(t *testing.T) {
-	ctx := context.Background()
-	loader := New(ctx, 64, nil)
-
-	loader.FinishLoad("nonexistent")
-	if !loader.BeginLoad("nonexistent") {
-		t.Fatal("expected begin to succeed after finish on non-existent")
-	}
-}
-
 func TestExecuteWithNilExecutor(t *testing.T) {
 	ctx := context.Background()
 	loader := New(ctx, 64, nil)
@@ -165,22 +129,41 @@ func TestPoolBlocking(t *testing.T) {
 	close(done)
 }
 
-func TestConcurrentBeginFinishLoad(t *testing.T) {
+func TestConcurrentExecute(t *testing.T) {
 	ctx := context.Background()
-	loader := New(ctx, 64, nil)
+	var concurrent atomic.Int32
+	var maxConcurrent atomic.Int32
+
+	exec := func(ctx context.Context, req LoadRequest) []LoadResult {
+		c := concurrent.Add(1)
+		defer concurrent.Add(-1)
+		if c > maxConcurrent.Load() {
+			maxConcurrent.Store(c)
+		}
+		time.Sleep(50 * time.Millisecond)
+		return nil
+	}
+
+	loader := New(ctx, 8, exec)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 16; i++ {
 		wg.Add(1)
-		go func(id int) {
+		go func() {
 			defer wg.Done()
-			key := "key"
-			if loader.BeginLoad(key) {
-				loader.FinishLoad(key)
-			}
-		}(i)
+			loader.Execute(LoadRequest{
+				Type:    LoadTypeImage,
+				Items:   []LoadItem{{URL: "http://example.com"}},
+				Timeout: 2 * time.Second,
+			})
+		}()
 	}
 	wg.Wait()
+
+	mc := maxConcurrent.Load()
+	if mc > 8 {
+		t.Fatalf("expected max concurrent <= 8, got %d", mc)
+	}
 }
 
 func TestExecuteHappyPathWithHTTP(t *testing.T) {

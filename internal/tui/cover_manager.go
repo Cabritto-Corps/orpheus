@@ -15,7 +15,7 @@ type coverManager struct {
 	imageRetryToken       map[string]int
 	resolveInFlight       map[string]struct{}
 	queue                 []string
-	queued                map[string]struct{}
+	queued                map[string]int
 	playerCoverFailStreak int
 }
 
@@ -24,7 +24,7 @@ func newCoverManager() coverManager {
 		imageRetryCount: make(map[string]int),
 		imageRetryToken: make(map[string]int),
 		resolveInFlight: make(map[string]struct{}),
-		queued:          make(map[string]struct{}),
+		queued:          make(map[string]int),
 	}
 }
 
@@ -66,7 +66,7 @@ func (c *coverManager) enqueueURL(url string) bool {
 	if _, exists := c.queued[url]; exists {
 		return false
 	}
-	c.queued[url] = struct{}{}
+	c.queued[url] = len(c.queue)
 	c.queue = append(c.queue, url)
 	return true
 }
@@ -78,22 +78,24 @@ func (c *coverManager) popURL() (string, bool) {
 	url := c.queue[0]
 	c.queue = c.queue[1:]
 	delete(c.queued, url)
+	for i, u := range c.queue {
+		c.queued[u] = i
+	}
 	return url, true
 }
 
 func (c *coverManager) removeFromQueue(url string) bool {
 	url = strings.TrimSpace(url)
-	if _, ok := c.queued[url]; !ok {
+	idx, ok := c.queued[url]
+	if !ok {
 		return false
 	}
-	for i, u := range c.queue {
-		if strings.TrimSpace(u) == url {
-			c.queue = append(c.queue[:i], c.queue[i+1:]...)
-			delete(c.queued, url)
-			return true
-		}
+	c.queue = append(c.queue[:idx], c.queue[idx+1:]...)
+	delete(c.queued, url)
+	for i := idx; i < len(c.queue); i++ {
+		c.queued[c.queue[i]] = i
 	}
-	return false
+	return true
 }
 
 func coverResolveKey(kind, id string) string {

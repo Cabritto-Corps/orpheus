@@ -225,7 +225,6 @@ func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 		false,
 		true,
 		true,
-		false,
 	)
 
 	if _, ok := m.preloadedItemIDs["2WfaOiMkCvy7F5fcp2zZ8L"]; !ok {
@@ -257,7 +256,7 @@ func TestApplyMergedQueueReplacesQueueWithoutTailPreservation(t *testing.T) {
 		preloadedItemIDs: make(map[string]struct{}),
 		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 	}
-	m.applyMergedQueue(next, false, true, true, false)
+	m.applyMergedQueue(next, false, true, true)
 	if len(m.queue) != len(next) {
 		t.Fatalf("expected queue to be replaced by incoming entries, got %d queue entries", len(m.queue))
 	}
@@ -275,7 +274,7 @@ func TestApplyMergedQueueDoesNotPreserveTailWhenShuffleTurnsOff(t *testing.T) {
 		preloadedItemIDs: make(map[string]struct{}),
 		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 	}
-	m.applyMergedQueue(next, false, true, true, false)
+	m.applyMergedQueue(next, false, true, true)
 	if len(m.queue) != len(next) {
 		t.Fatalf("expected queue to match incoming length after shuffle toggle, got %d queue entries", len(m.queue))
 	}

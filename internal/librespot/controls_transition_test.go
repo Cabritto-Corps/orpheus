@@ -55,13 +55,13 @@ func TestMaybeAdvanceOnTrackEndGuardSkipsWhenTransitionInFlight(t *testing.T) {
 				Options:               &connectpb.ContextPlayerOptions{},
 			},
 		},
-		primaryStream:   newTestStreamWithDuration(1000),
-		advanceInFlight: true,
+		primaryStream: newTestStreamWithDuration(1000),
 	}
+	p.advanceInFlight.Store(true)
 
 	p.maybeAdvanceOnTrackEndGuard()
 
-	if !p.advanceInFlight {
+	if !p.advanceInFlight.Load() {
 		t.Fatal("expected in-flight transition guard to remain enabled")
 	}
 	if !p.state.player.IsPlaying {

@@ -110,6 +110,33 @@ var (
 )
 
 var (
+	styleProgressBarFilled = lipgloss.NewStyle().
+				Foreground(colorBlue)
+
+	styleProgressBarEmpty = lipgloss.NewStyle().
+				Foreground(colorDivider)
+
+	styleVolumeBarFilled = lipgloss.NewStyle().
+				Foreground(colorBlue)
+
+	styleVolumeBarEmpty = lipgloss.NewStyle().
+				Foreground(colorDivider)
+
+	stylePlaceholderBorder = lipgloss.NewStyle().
+				Foreground(colorDivider)
+
+	styleTrackPopupTitle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(colorBlue)
+
+	styleTrackPopupLoading = lipgloss.NewStyle().
+				Foreground(colorMutedBlue)
+
+	styleTrackPopupHint = lipgloss.NewStyle().
+				Foreground(colorMutedBlue)
+)
+
+var (
 	styleTabActive = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(colorBlue)

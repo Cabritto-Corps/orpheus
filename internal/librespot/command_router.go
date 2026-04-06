@@ -48,11 +48,10 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 			return golibrespot.NormalizeSpotifyId(track.Uri) == targetID
 		}
 		p.suppressEmit = true
+		defer func() { p.suppressEmit = false }()
 		if err := p.loadContext(ctx, spotCtx, skipTo, false, true); err != nil {
-			p.suppressEmit = false
 			return true, err
 		}
-		p.suppressEmit = false
 		if p.state.tracks != nil {
 			if p.state.tracks.CurrentTrack() != nil {
 				currentID := golibrespot.NormalizeSpotifyId(p.state.tracks.CurrentTrack().Uri)
@@ -146,12 +145,18 @@ func (p *AppPlayer) handleTUIPlaybackCommand(ctx context.Context, cmd TUICommand
 		return true, nil
 	case TUICommandShuffle:
 		if p.state == nil || p.state.player == nil || p.state.player.Options == nil {
+			if p.runtime != nil {
+				p.runtime.Log.Warn("shuffle ignored: no active playback state")
+			}
 			return true, nil
 		}
 		target := !p.state.player.Options.ShufflingContext
 		return true, p.setOptions(ctx, nil, nil, &target)
 	case TUICommandCycleRepeat:
 		if p.state == nil || p.state.player == nil || p.state.player.Options == nil {
+			if p.runtime != nil {
+				p.runtime.Log.Warn("repeat cycle ignored: no active playback state")
+			}
 			return true, nil
 		}
 		curr := playbackdomain.TraversalOptions{

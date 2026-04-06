@@ -51,18 +51,22 @@ type imgCache struct {
 	kittyForceRedraw bool
 	kittyImageID     uint64
 	kittyChunks      map[string][]string
+	kittyChunkOrder  []string
+	coverKeysByURL   map[string]map[coverKey]struct{}
 }
 
 func newImgCache() *imgCache {
 	return &imgCache{
-		imgs:        cache.NewLRU[string, image.Image](maxCachedImages),
-		covers:      cache.NewLRU[coverKey, string](maxCachedCoverRenders),
-		encoded:     make(map[string]string),
-		inflight:    make(map[string]struct{}),
-		failedAt:    make(map[string]time.Time),
-		rendering:   make(map[coverKey]chan struct{}),
-		protocol:    detectImageProtocol(os.Getenv),
-		kittyChunks: make(map[string][]string),
+		imgs:            cache.NewLRU[string, image.Image](maxCachedImages),
+		covers:          cache.NewLRU[coverKey, string](maxCachedCoverRenders),
+		encoded:         make(map[string]string),
+		inflight:        make(map[string]struct{}),
+		failedAt:        make(map[string]time.Time),
+		rendering:       make(map[coverKey]chan struct{}),
+		protocol:        detectImageProtocol(os.Getenv),
+		kittyChunks:     make(map[string][]string),
+		kittyChunkOrder: make([]string, 0, maxKittyChunkCacheEntries),
+		coverKeysByURL:  make(map[string]map[coverKey]struct{}),
 	}
 }
 
@@ -164,12 +168,12 @@ func (c *imgCache) buildKittyPayload(url, encoded string, cols, rows int, imageI
 	if chunks == nil {
 		chunks = chunkBase64(encoded, 4096)
 		for len(c.kittyChunks) >= maxKittyChunkCacheEntries {
-			for k := range c.kittyChunks {
-				delete(c.kittyChunks, k)
-				break
-			}
+			oldest := c.kittyChunkOrder[0]
+			delete(c.kittyChunks, oldest)
+			c.kittyChunkOrder = c.kittyChunkOrder[1:]
 		}
 		c.kittyChunks[url] = chunks
+		c.kittyChunkOrder = append(c.kittyChunkOrder, url)
 	}
 	localChunks := append([]string(nil), chunks...)
 	c.mu.Unlock()
@@ -245,19 +249,19 @@ func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
 			continue
 		}
 		key := coverKey{url: url, cols: cols, rows: rows}
-		c.mu.RLock()
-		_, already := c.covers.Peek(key)
-		c.mu.RUnlock()
+		c.mu.Lock()
+		_, already := c.covers.Get(key)
 		if already {
-			c.mu.Lock()
-			_, _ = c.covers.Get(key)
 			c.mu.Unlock()
 			continue
 		}
 		s := renderCover(c.protocol, img, encoded, cols, rows)
-		c.mu.Lock()
 		if _, exists := c.covers.Peek(key); !exists {
 			c.covers.Set(key, s)
+			if _, ok := c.coverKeysByURL[url]; !ok {
+				c.coverKeysByURL[url] = make(map[coverKey]struct{})
+			}
+			c.coverKeysByURL[url][key] = struct{}{}
 		}
 		c.mu.Unlock()
 	}
@@ -372,6 +376,9 @@ func (c *imgCache) invalidateCovers() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.covers.Clear()
+	for url := range c.coverKeysByURL {
+		delete(c.coverKeysByURL, url)
+	}
 }
 
 func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
@@ -401,18 +408,26 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 		c.rendering[key] = ch
 		c.mu.Unlock()
 
+		defer func() {
+			c.mu.Lock()
+			delete(c.rendering, key)
+			c.mu.Unlock()
+			close(ch)
+		}()
+
 		s := renderCover(c.protocol, img, encoded, cols, rows)
 
 		c.mu.Lock()
-		delete(c.rendering, key)
 		if existing, ok := c.covers.Get(key); ok {
 			c.mu.Unlock()
-			close(ch)
 			return existing, true
 		}
 		c.covers.Set(key, s)
+		if _, ok := c.coverKeysByURL[url]; !ok {
+			c.coverKeysByURL[url] = make(map[coverKey]struct{})
+		}
+		c.coverKeysByURL[url][key] = struct{}{}
 		c.mu.Unlock()
-		close(ch)
 		return s, true
 	}
 }
@@ -427,11 +442,11 @@ const (
 )
 
 func (c *imgCache) deleteCoversForURLLocked(url string) {
-	for _, key := range c.covers.Keys() {
-		if key.url != url {
-			continue
+	if keys, ok := c.coverKeysByURL[url]; ok {
+		for key := range keys {
+			c.covers.Delete(key)
 		}
-		c.covers.Delete(key)
+		delete(c.coverKeysByURL, url)
 	}
 }
 

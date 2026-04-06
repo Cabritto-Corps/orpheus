@@ -7,6 +7,7 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +25,7 @@ const (
 	catalogRequestTimeout      = 60 * time.Second
 	playlistPageRequestTimeout = 90 * time.Second
 	playlistItemRequestTimeout = 45 * time.Second
-	statusQueueCacheTTL        = 120 * time.Millisecond
+	statusQueueCacheTTL        = 500 * time.Millisecond
 )
 
 type statusQueueSnapshotCache struct {
@@ -290,16 +291,6 @@ func (m *model) actionCmd(fn func(context.Context) error, action string) tea.Cmd
 
 func (m *model) actionWithReconcileCmd(fn func(context.Context) error, rollback *spotify.PlaybackStatus) tea.Cmd {
 	token := m.nextStateFetchToken()
-	if m.service == nil {
-		return func() tea.Msg {
-			ctx, cancel := context.WithTimeout(m.ctx, actionRequestTimeout)
-			defer cancel()
-			if err := fn(ctx); err != nil {
-				return actionReconcileMsg{token: token, err: err, rollback: rollback}
-			}
-			return actionReconcileMsg{token: token}
-		}
-	}
 	svc := m.service
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, actionRequestTimeout)
@@ -307,6 +298,9 @@ func (m *model) actionWithReconcileCmd(fn func(context.Context) error, rollback 
 
 		if err := fn(ctx); err != nil {
 			return actionReconcileMsg{token: token, err: err, rollback: rollback}
+		}
+		if svc == nil {
+			return actionReconcileMsg{token: token}
 		}
 
 		status, queue, statusErr, queueErr := fetchStatusAndQueue(ctx, svc, false, m.statusQueueCache)
@@ -342,12 +336,8 @@ func (m *model) reconcileCmd() tea.Cmd {
 const playlistAPIPageSize = 50
 
 func (m model) loadPlaylistsCmd(offset, limit int) tea.Cmd {
-	var catalog spotify.PlaylistCatalog
-	if m.catalog != nil {
-		catalog = m.catalog
-	} else if m.service != nil {
-		catalog = m.service
-	} else {
+	catalog := m.resolveCatalog()
+	if catalog == nil {
 		return nil
 	}
 	if offset < 0 {
@@ -360,19 +350,27 @@ func (m model) loadPlaylistsCmd(offset, limit int) tea.Cmd {
 		ctx, cancel := context.WithTimeout(m.ctx, playlistPageRequestTimeout)
 		defer cancel()
 		if offset == 0 {
-			all := make([]spotify.PlaylistSummary, 0, playlistAPIPageSize)
-			playlistOffset := 0
-			albumOffset := 0
-			playlistMore := true
-			albumMore := true
-			albumsForbidden := false
+			type plResult struct {
+				items []spotify.PlaylistSummary
+				err   error
+			}
+			type alResult struct {
+				items           []spotify.PlaylistSummary
+				albumsForbidden bool
+				err             error
+			}
+			plCh := make(chan plResult, 1)
+			alCh := make(chan alResult, 1)
 
-			for playlistMore || albumMore {
-				if playlistMore {
-					pageSize := playlistAPIPageSize
-					page, err := catalog.ListUserPlaylistsPage(ctx, playlistOffset, pageSize)
+			go func() {
+				var all []spotify.PlaylistSummary
+				playlistOffset := 0
+				playlistMore := true
+				for playlistMore {
+					page, err := catalog.ListUserPlaylistsPage(ctx, playlistOffset, playlistAPIPageSize)
 					if err != nil {
-						return playlistsMsg{offset: 0, limit: limit, err: err}
+						plCh <- plResult{err: err}
+						return
 					}
 					if len(page.Items) > 0 {
 						all = append(all, page.Items...)
@@ -380,16 +378,23 @@ func (m model) loadPlaylistsCmd(offset, limit int) tea.Cmd {
 					playlistMore = page.HasMore && len(page.Items) > 0
 					playlistOffset = page.NextOffset
 				}
+				plCh <- plResult{items: all}
+			}()
 
-				if albumMore {
-					pageSize := playlistAPIPageSize
-					page, err := catalog.ListSavedAlbumsPage(ctx, albumOffset, pageSize)
+			go func() {
+				var all []spotify.PlaylistSummary
+				albumOffset := 0
+				albumMore := true
+				albumsForbidden := false
+				for albumMore {
+					page, err := catalog.ListSavedAlbumsPage(ctx, albumOffset, playlistAPIPageSize)
 					if err != nil {
 						if spotify.IsForbidden(err) {
 							albumsForbidden = true
 							albumMore = false
 						} else {
-							return playlistsMsg{offset: 0, limit: limit, err: err}
+							alCh <- alResult{err: err}
+							return
 						}
 					} else {
 						if len(page.Items) > 0 {
@@ -399,13 +404,27 @@ func (m model) loadPlaylistsCmd(offset, limit int) tea.Cmd {
 						albumOffset = page.NextOffset
 					}
 				}
+				alCh <- alResult{items: all, albumsForbidden: albumsForbidden}
+			}()
+
+			pr := <-plCh
+			if pr.err != nil {
+				return playlistsMsg{offset: 0, limit: limit, err: pr.err}
 			}
+			ar := <-alCh
+			if ar.err != nil {
+				return playlistsMsg{offset: 0, limit: limit, err: ar.err}
+			}
+
+			all := make([]spotify.PlaylistSummary, 0, len(pr.items)+len(ar.items))
+			all = append(all, pr.items...)
+			all = append(all, ar.items...)
 			return playlistsMsg{
 				items:           all,
 				offset:          0,
 				limit:           len(all),
 				hasMore:         false,
-				albumsForbidden: albumsForbidden,
+				albumsForbidden: ar.albumsForbidden,
 			}
 		}
 		page, err := catalog.ListUserPlaylistsPage(ctx, offset, limit)
@@ -422,12 +441,8 @@ func (m model) loadPlaylistsCmd(offset, limit int) tea.Cmd {
 }
 
 func (m model) getCurrentUserIDCmd() tea.Cmd {
-	var catalog spotify.PlaylistCatalog
-	if m.catalog != nil {
-		catalog = m.catalog
-	} else if m.service != nil {
-		catalog = m.service
-	} else {
+	catalog := m.resolveCatalog()
+	if catalog == nil {
 		return nil
 	}
 	return func() tea.Msg {
@@ -540,12 +555,8 @@ func (m model) seekDebounceCmd(token int) tea.Cmd {
 }
 
 func (m model) loadPlaylistItemsCmd(playlistID string, offset int, token int) tea.Cmd {
-	var catalog spotify.PlaylistCatalog
-	if m.catalog != nil {
-		catalog = m.catalog
-	} else if m.service != nil {
-		catalog = m.service
-	} else {
+	catalog := m.resolveCatalog()
+	if catalog == nil {
 		return nil
 	}
 	if playlistID == "" || offset < 0 {
@@ -598,7 +609,8 @@ func (m model) loadPlaylistItemsCmd(playlistID string, offset int, token int) te
 
 			for _, r := range results {
 				if r.err != nil {
-					break
+					slog.Warn("playlist preload page failed", "error", r.err)
+					continue
 				}
 				if r.page == nil {
 					break

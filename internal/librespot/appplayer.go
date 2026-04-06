@@ -73,7 +73,7 @@ type AppPlayer struct {
 	namePreloadToken     uint64
 	namePreloadDone      bool
 
-	advanceInFlight bool
+	advanceInFlight atomic.Bool
 }
 
 func (p *AppPlayer) setRunContext(ctx context.Context) {

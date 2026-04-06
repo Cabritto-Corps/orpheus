@@ -26,23 +26,23 @@ func NewTUIExecutor(ctx context.Context, catalog spotify.PlaylistCatalog) loader
 
 func loadImages(ctx context.Context, items []loader.LoadItem, timeout time.Duration) []loader.LoadResult {
 	results := make([]loader.LoadResult, len(items))
+	for i := range results {
+		results[i].Index = i
+	}
+	fctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 16)
 	for i, item := range items {
 		select {
-		case <-ctx.Done():
-			results[i] = loader.LoadResult{Index: i, Error: ctx.Err()}
+		case <-fctx.Done():
+			results[i] = loader.LoadResult{Index: i, Error: fctx.Err()}
 			continue
 		default:
 		}
 		wg.Add(1)
 		go func(idx int, url string) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			fctx, cancel := context.WithTimeout(ctx, timeout)
 			data, err := httpImageProvider{}.Fetch(fctx, url)
-			cancel()
 			if err != nil {
 				results[idx] = loader.LoadResult{Index: idx, Error: err}
 			} else {
@@ -56,23 +56,23 @@ func loadImages(ctx context.Context, items []loader.LoadItem, timeout time.Durat
 
 func resolveContextImageURLs(ctx context.Context, catalog spotify.PlaylistCatalog, items []loader.LoadItem, timeout time.Duration) []loader.LoadResult {
 	results := make([]loader.LoadResult, len(items))
+	for i := range results {
+		results[i].Index = i
+	}
+	fctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 16)
 	for i, item := range items {
 		select {
-		case <-ctx.Done():
-			results[i] = loader.LoadResult{Index: i, Error: ctx.Err()}
+		case <-fctx.Done():
+			results[i] = loader.LoadResult{Index: i, Error: fctx.Err()}
 			continue
 		default:
 		}
 		wg.Add(1)
 		go func(idx int, kind, id string) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			fctx, cancel := context.WithTimeout(ctx, timeout)
 			url, err := catalog.ResolveContextImageURL(fctx, kind, id)
-			cancel()
 			if err != nil {
 				results[idx] = loader.LoadResult{Index: idx, Error: err}
 			} else {

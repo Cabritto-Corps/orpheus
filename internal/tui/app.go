@@ -142,6 +142,9 @@ type model struct {
 	height    int
 	nerdFonts bool
 
+	cachedBodyLayout      bodyLayout
+	cachedBodyLayoutValid bool
+
 	help help.Model
 	keys keyMap
 }
@@ -227,7 +230,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 
 	h := newHelp()
 
-	return model{
+	m := model{
 		ctx:                    ctx,
 		catalog:                catalog,
 		service:                service,
@@ -254,6 +257,8 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		help:                   h,
 		keys:                   newKeys(),
 	}
+
+	return m
 }
 
 func selectedImageURLFromList(l list.Model) string {
@@ -458,7 +463,7 @@ func (m *model) applyFetchedStatusAndQueue(prevTrackID string, status *spotify.P
 	m.maybeClearTransportTransition(m.status)
 	m.clearQueueOnTrackBoundary(prevTrackID, incomingTrack, queueFetched)
 	if queueFetched && m.shouldApplyIncomingQueue(incomingTrack) {
-		m.applyMergedQueue(queue, queueHasMore, true, true, m.status != nil && m.status.ShuffleState)
+		m.applyMergedQueue(queue, queueHasMore, true, true)
 	}
 }
 
@@ -504,14 +509,13 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 		prevShuffleState = prevStatus.ShuffleState
 	}
 	shuffleChanged := msg.status != nil && msg.status.ShuffleState != prevShuffleState
-	newShuffleActive := msg.status != nil && msg.status.ShuffleState
 	if shuffleChanged {
 		m.queue = nil
 		m.queueHasMore = false
 		m.stableQueueLen = 0
 	}
 	if m.shouldApplyIncomingQueue(nextTrackID) {
-		m.applyMergedQueue(msg.queue, msg.queueHasMore, true, true, newShuffleActive)
+		m.applyMergedQueue(msg.queue, msg.queueHasMore, true, true)
 	}
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, msg.status, m.trackCache)
 	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.status, prevQueueHead, queueHeadTrackID(m.queue))
@@ -681,6 +685,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.normalizeLibraryPagination()
 			m.coverRefreshTick = 0
+			m.cachedBodyLayoutValid = false
 			return m, m.loadVisiblePlaylistCoversCmd()
 		}
 	}
@@ -858,8 +863,15 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.trackPopupName = sel.summary.Name
 	m.trackPopupItems = nil
 
+	modalW := min(m.width-8, 60)
+	bodyH := m.height - tabBarH - 1
+	innerH := bodyH - 4
+	if innerH < 10 {
+		innerH = 10
+	}
+
 	delegate := newTrackPopupDelegate()
-	popup := list.New(nil, delegate, 40, 10)
+	popup := list.New(nil, delegate, modalW, innerH)
 	popup.SetShowTitle(false)
 	popup.SetShowStatusBar(true)
 	popup.SetFilteringEnabled(true)
@@ -1283,4 +1295,14 @@ func (m model) canReadPlaylistTracks(pl spotify.PlaylistSummary) bool {
 
 func (m model) shouldLoadPlaylistItems() bool {
 	return m.service != nil
+}
+
+func (m model) resolveCatalog() spotify.PlaylistCatalog {
+	if m.catalog != nil {
+		return m.catalog
+	}
+	if m.service != nil {
+		return m.service
+	}
+	return nil
 }

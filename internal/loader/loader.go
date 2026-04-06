@@ -2,7 +2,6 @@ package loader
 
 import (
 	"context"
-	"sync"
 	"time"
 )
 
@@ -51,8 +50,6 @@ type Executor func(ctx context.Context, req LoadRequest) []LoadResult
 type BackgroundLoader struct {
 	ctx      context.Context
 	pool     chan struct{}
-	mu       sync.Mutex
-	inflight map[string]struct{}
 	executor Executor
 }
 
@@ -60,28 +57,8 @@ func New(ctx context.Context, poolSize int, exec Executor) *BackgroundLoader {
 	return &BackgroundLoader{
 		ctx:      ctx,
 		pool:     make(chan struct{}, poolSize),
-		inflight: make(map[string]struct{}),
 		executor: exec,
 	}
-}
-
-func (l *BackgroundLoader) BeginLoad(id string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if id == "" {
-		return false
-	}
-	if _, ok := l.inflight[id]; ok {
-		return false
-	}
-	l.inflight[id] = struct{}{}
-	return true
-}
-
-func (l *BackgroundLoader) FinishLoad(id string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.inflight, id)
 }
 
 func (l *BackgroundLoader) Execute(req LoadRequest) []LoadResult {

@@ -18,14 +18,16 @@ const (
 	maxInputQueueSize                                   = 96
 	seekStepMS                                          = 5000
 	maxInputActionsPerTick                              = 8
+	maxRequeueRetries                                   = 3
 )
 
 type playbackInputKind string
 type inputPriority int
 
 type playbackInput struct {
-	kind     playbackInputKind
-	priority inputPriority
+	kind       playbackInputKind
+	priority   inputPriority
+	retryCount int
 }
 
 const (
@@ -73,6 +75,9 @@ func (m *model) enqueuePlaybackInput(action playbackInputKind) {
 	if action == playbackInputRefresh && m.hasQueuedAction(action) {
 		return
 	}
+	if action == playbackInputRefresh && m.executorState != executorStateIdle {
+		return
+	}
 	m.inputQueue = append(m.inputQueue, playbackInput{
 		kind:     action,
 		priority: inputPriorityOf(action),
@@ -83,7 +88,14 @@ func (m *model) requeueFront(action playbackInputKind) {
 	if len(m.inputQueue) >= maxInputQueueSize {
 		m.inputQueue = m.inputQueue[:maxInputQueueSize-1]
 	}
-	m.inputQueue = append([]playbackInput{{kind: action, priority: inputPriorityOf(action)}}, m.inputQueue...)
+	retries := 0
+	if len(m.inputQueue) > 0 && m.inputQueue[0].kind == action {
+		retries = m.inputQueue[0].retryCount + 1
+	}
+	if retries >= maxRequeueRetries {
+		return
+	}
+	m.inputQueue = append([]playbackInput{{kind: action, priority: inputPriorityOf(action), retryCount: retries}}, m.inputQueue...)
 }
 
 func (m *model) pumpInputExecutor() tea.Cmd {

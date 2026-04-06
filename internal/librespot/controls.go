@@ -336,12 +336,12 @@ func (p *AppPlayer) logEndOfTrackInvariant() {
 }
 
 func (p *AppPlayer) runAdvanceNextTransition(source string, forceNext, dropTransition bool) {
-	if p.advanceInFlight {
+	if p.advanceInFlight.Load() {
 		p.runtime.Log.WithField("source", source).Debug("ignoring transition while another transition is in flight")
 		return
 	}
-	p.advanceInFlight = true
-	defer func() { p.advanceInFlight = false }()
+	p.advanceInFlight.Store(true)
+	defer p.advanceInFlight.Store(false)
 	transitionCtx, transitionCancel := context.WithTimeout(p.ownerContext(), 30*time.Second)
 	hasNextTrack, err := p.advanceNext(transitionCtx, forceNext, dropTransition)
 	transitionCancel()
@@ -524,7 +524,6 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 			}
 		}
 		if p.primaryStream == nil {
-			closeStream(p.primaryStream)
 			p.clearSecondaryStream()
 			prefetched = false
 			var err error
@@ -666,7 +665,6 @@ func (p *AppPlayer) pause(ctx context.Context) error {
 	p.setPlayerPositionAtNow(streamPos)
 	p.setPlayerTransportState(true, false, true)
 	p.updateState(ctx)
-	p.schedulePrefetchNext()
 	p.emitPlaybackState()
 	return nil
 }
@@ -726,6 +724,7 @@ func (p *AppPlayer) skipNext(ctx context.Context, track *connectpb.ContextTrack)
 		if err := p.state.tracks.TrySeek(ctx, tracks.ContextTrackComparator(contextSpotType, track)); err != nil {
 			return err
 		}
+		p.bumpPrefetchGeneration()
 		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
 		if err := p.loadCurrentTrackFromTransition(ctx, p.state.player.IsPaused, true, "skip next"); err != nil {
 			return err
@@ -914,7 +913,6 @@ func (p *AppPlayer) stopPlayback(ctx context.Context) error {
 	if err := p.putConnectState(ctx, connectpb.PutStateReason_BECAME_INACTIVE); err != nil {
 		return fmt.Errorf("failed inactive state put: %w", err)
 	}
-	p.schedulePrefetchNext()
 	if p.runtime.Cfg.ZeroconfEnabled {
 		p.logout <- p
 	}
