@@ -24,7 +24,7 @@ jobs:
           restore-keys: go-${{ runner.os }}-
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
+        run: sudo apt-get update && sudo apt-get upgrade -y && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
 
       - name: Vet
         run: go vet ./...
@@ -39,10 +39,10 @@ jobs:
         include:
           - os: ubuntu-24.04
             suffix: linux-amd64
-            deps: sudo apt-get update && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
+            deps: sudo apt-get update && sudo apt-get upgrade -y && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
           - os: macos-15
             suffix: darwin-arm64
-            deps: brew install libogg libvorbis flac
+            deps: brew update && brew install libogg libvorbis flac
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
