@@ -864,7 +864,7 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.trackPopupItems = nil
 
 	modalW := min(m.width-8, 60)
-	bodyH := m.height - tabBarH - 1
+	bodyH := m.height - headerH - tabBarH - 2
 	innerH := bodyH - 4
 	if innerH < 10 {
 		innerH = 10
@@ -904,6 +904,9 @@ func (m model) handleTrackPopupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.trackPopupOpen = false
 		return m, nil
 	case keyMatches(msg, k.Select):
+		if m.trackPopupList.FilterState() == list.Filtering {
+			break
+		}
 		sel, ok := m.trackPopupList.SelectedItem().(trackItem)
 		if !ok {
 			return m, nil

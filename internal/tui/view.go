@@ -531,7 +531,7 @@ func (m model) playerBarView() string {
 
 func (m model) trackPopupView() string {
 	modalW := min(m.width-8, 60)
-	bodyH := m.height - tabBarH - 1
+	bodyH := m.height - headerH - tabBarH - 2
 	innerH := bodyH - 4
 	if innerH < 10 {
 		innerH = 10
@@ -588,7 +588,7 @@ func (m model) helpModalView() string {
 	box := styleModalBox.Width(modalW).Height(innerH).Render(boxContent)
 	placed := lipgloss.Place(
 		m.width,
-		m.height-tabBarH-gapFooterH,
+		m.height-headerH-tabBarH-gapFooterH,
 		lipgloss.Center,
 		lipgloss.Center,
 		box,

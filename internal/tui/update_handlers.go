@@ -22,11 +22,22 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 	layout := m.getBodyLayout()
 	listInnerW := layout.rightW - 1
-	listInnerH := layout.bodyH - 3
+	listInnerH := layout.bodyH - 4
 
 	m.playlistList.SetSize(listInnerW, listInnerH)
 	m.albumList.SetSize(listInnerW, listInnerH)
 	m.normalizeLibraryPagination()
+
+	if m.trackPopupOpen {
+		modalW := min(m.width-8, 60)
+		popupBodyH := m.height - headerH - tabBarH - 2
+		popupInnerH := popupBodyH - 4
+		if popupInnerH < 10 {
+			popupInnerH = 10
+		}
+		m.trackPopupList.SetSize(modalW-2, popupInnerH-4)
+	}
+
 	return m, tea.Batch(
 		m.loadVisiblePlaylistCoversCmd(),
 		m.maybeLoadMorePlaylistsCmd(m.playlistList),
