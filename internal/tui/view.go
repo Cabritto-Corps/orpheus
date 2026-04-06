@@ -834,7 +834,7 @@ func (m model) kittyOverlay() string {
 	return out
 }
 
-func (m model) getBodyLayout() bodyLayout {
+func (m *model) getBodyLayout() bodyLayout {
 	if m.cachedBodyLayoutValid {
 		return m.cachedBodyLayout
 	}
