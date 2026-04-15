@@ -422,6 +422,7 @@ func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.
 }
 
 func (m model) Init() tea.Cmd {
+	m.preloadLikedSongsArt()
 	return tea.Batch(
 		m.getCurrentUserIDCmd(),
 		m.pollCmd(true),

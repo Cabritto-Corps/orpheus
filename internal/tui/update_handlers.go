@@ -202,12 +202,12 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	if msg.offset == 0 {
 		plItems = make([]list.Item, 0, len(msg.items)+1)
 		plItems = append(plItems, playlistItem{summary: spotify.PlaylistSummary{
-			ID:         "liked-songs",
-			Name:       "Liked Songs",
-			URI:        "spotify:collection",
-			Kind:       spotify.ContextKindLikedSongs,
-			Owner:      "You",
-			TrackCount: 0,
+			ID:       "liked-songs",
+			Name:     "Liked Songs",
+			URI:      "spotify:collection",
+			Kind:     spotify.ContextKindLikedSongs,
+			Owner:    "You",
+			ImageURL: likedSongsImageURL,
 		}})
 		alItems = make([]list.Item, 0, len(msg.items))
 	} else {
