@@ -3,8 +3,9 @@ package tui
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -86,6 +87,7 @@ type model struct {
 	trackPopupURI   string
 	trackPopupName  string
 	trackPopupItems []spotify.QueueItem
+	trackPopupWidth int
 
 	volDebouncePending  int
 	volDebounceToken    int
@@ -145,6 +147,9 @@ type model struct {
 	cachedBodyLayout      bodyLayout
 	cachedBodyLayoutValid bool
 
+	onSongChange string
+	lastPlayedID string
+
 	help help.Model
 	keys keyMap
 }
@@ -159,6 +164,9 @@ func (p playlistItem) FilterValue() string {
 }
 
 func (p playlistItem) Description() string {
+	if p.summary.Kind == spotify.ContextKindLikedSongs {
+		return "your saved tracks"
+	}
 	switch p.summary.Kind {
 	case spotify.ContextKindAlbum:
 		return "album by " + p.summary.Owner
@@ -173,9 +181,7 @@ type trackItem struct {
 
 func (t trackItem) Title() string       { return t.item.Name }
 func (t trackItem) FilterValue() string { return t.item.Name }
-func (t trackItem) Description() string {
-	return fmt.Sprintf("%s  %s", t.item.Artist, fmtDuration(t.item.DurationMS))
-}
+func (t trackItem) Description() string { return t.item.Artist }
 
 func newTrackPopupDelegate() list.DefaultDelegate {
 	d := list.NewDefaultDelegate()
@@ -256,6 +262,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		seekSentTarget:         -1,
 		help:                   h,
 		keys:                   newKeys(),
+		onSongChange:           cfg.OnSongChange,
 	}
 
 	return m
@@ -521,6 +528,7 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.status, prevQueueHead, queueHeadTrackID(m.queue))
 	m.maybeClearTransportTransition(m.status)
 	m.playbackErr = nil
+	m.fireOnSongChange(prevStatus, m.status)
 	cmds := []tea.Cmd{}
 	if m.shouldEnsureAlbumImageLoad(prevStatus, m.status) {
 		cmds = append(cmds, m.loadImageCmd(m.status.AlbumImageURL, true))
@@ -572,6 +580,7 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 	}
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, m.status, m.trackCache)
 	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.status, prevQueueHead, queueHeadTrackID(m.queue))
+	m.fireOnSongChange(prevStatus, m.status)
 
 	cmds := make([]tea.Cmd, 0, 3)
 	if m.shouldEnsureAlbumImageLoad(prevStatus, m.status) {
@@ -881,6 +890,7 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	popup.Styles.FilterPrompt = lipgloss.NewStyle().Foreground(colorMutedBlue)
 	popup.Styles.StatusBar = lipgloss.NewStyle().Foreground(colorMutedBlue).PaddingLeft(1)
 	m.trackPopupList = popup
+	m.trackPopupWidth = modalW - 4
 
 	if m.tuiCmdCh != nil && m.contextTracksCh != nil {
 		select {
@@ -1308,4 +1318,62 @@ func (m model) resolveCatalog() spotify.PlaylistCatalog {
 		return m.service
 	}
 	return nil
+}
+
+func (m *model) fireOnSongChange(prev, next *spotify.PlaybackStatus) {
+	if m.onSongChange == "" {
+		return
+	}
+	prevID := ""
+	if prev != nil {
+		prevID = golibrespot.NormalizeSpotifyId(prev.TrackID)
+	}
+	nextID := ""
+	nextName := ""
+	nextArtist := ""
+	if next != nil {
+		nextID = golibrespot.NormalizeSpotifyId(next.TrackID)
+		nextName = next.TrackName
+		nextArtist = next.ArtistName
+	}
+	if nextID == "" || nextID == prevID {
+		return
+	}
+	if m.lastPlayedID == nextID {
+		return
+	}
+	m.lastPlayedID = nextID
+	cmd := m.onSongChange
+	go func(name, artist, id string) {
+		execCmd(cmd, name, artist, id)
+	}(nextName, nextArtist, nextID)
+}
+
+func execCmd(template, trackName, artistName, trackID string) {
+	r := strings.NewReplacer(
+		"{track}", trackName,
+		"{artist}", artistName,
+		"{id}", trackID,
+	)
+	expanded := r.Replace(template)
+	parts := strings.Fields(expanded)
+	if len(parts) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var cmd *exec.Cmd
+	if len(parts) > 1 {
+		cmd = exec.CommandContext(ctx, parts[0], parts[1:]...)
+	} else {
+		cmd = exec.CommandContext(ctx, parts[0])
+	}
+	cmd.Env = append(os.Environ(),
+		"ORPHEUS_TRACK="+trackName,
+		"ORPHEUS_ARTIST="+artistName,
+		"ORPHEUS_TRACK_ID="+trackID,
+	)
+	if err := cmd.Run(); err != nil {
+		slog.Warn("on-song-change hook failed", "cmd", template, "error", err)
+	}
 }

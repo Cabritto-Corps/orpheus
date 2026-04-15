@@ -21,8 +21,8 @@ type Config struct {
 	TokenPath            string
 	PollInterval         time.Duration
 	NerdFonts            bool
-
-	LogFile string
+	OnSongChange         string
+	LogFile              string
 }
 
 func LoadFromEnv() (Config, error) {
@@ -42,6 +42,7 @@ func LoadFromEnv() (Config, error) {
 		TokenPath:            envDefault("orpheus_token_path", defaultTokenPath()),
 		PollInterval:         envDuration("orpheus_poll_interval", 1500*time.Millisecond),
 		NerdFonts:            envBool("orpheus_nerd_fonts", false),
+		OnSongChange:         envDefault("orpheus_on_song_change", ""),
 		LogFile:              envDefault("orpheus_log_file", defaultLogPath()),
 	}
 

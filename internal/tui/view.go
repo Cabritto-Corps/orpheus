@@ -413,11 +413,12 @@ func (m model) queuePanel(w, h int) string {
 
 	idxW := 3
 	contentW := max(12, w-idxW-4)
-	artistW := min(26, max(8, contentW*2/5))
-	titleW := max(4, contentW-artistW)
+	artistW := min(20, max(6, contentW*2/5))
+	durW := 5
+	titleW := max(4, contentW-artistW-durW-2)
 
 	colHeader := styleQueueHeader.Render(
-		strings.Repeat(" ", 1+idxW+1) + fmt.Sprintf("%-*s  %-*s", titleW, "Title", artistW, "Artist"),
+		strings.Repeat(" ", 1+idxW+1) + fmt.Sprintf("%-*s  %-*s %-s", titleW, "Title", artistW, "Artist", "Len"),
 	)
 	colDivider := sectionDivider(w)
 
@@ -446,6 +447,10 @@ func (m model) queuePanel(w, h int) string {
 			idx := styleQueueIndex.Render(fmt.Sprintf("%*d.", idxW-1, i+1))
 			title := truncate(q.Name, titleW)
 			artist := truncate(q.Artist, artistW)
+			dur := ""
+			if q.DurationMS > 0 {
+				dur = fmtDuration(q.DurationMS)
+			}
 			titlePad := titleW - lipgloss.Width(title)
 			artistPad := artistW - lipgloss.Width(artist)
 			if titlePad < 0 {
@@ -454,7 +459,7 @@ func (m model) queuePanel(w, h int) string {
 			if artistPad < 0 {
 				artistPad = 0
 			}
-			lines = append(lines, " "+idx+" "+styleQueueTrack.Render(title)+strings.Repeat(" ", titlePad)+"  "+styleQueueArtist.Render(artist)+strings.Repeat(" ", artistPad))
+			lines = append(lines, " "+idx+" "+styleQueueTrack.Render(title)+strings.Repeat(" ", titlePad)+"  "+styleQueueArtist.Render(artist)+strings.Repeat(" ", artistPad)+" "+stylePlayerTime.Render(dur))
 		}
 
 		stableVisibleQueueLen := m.stableQueueLen

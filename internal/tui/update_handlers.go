@@ -36,6 +36,7 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 			popupInnerH = 10
 		}
 		m.trackPopupList.SetSize(modalW-2, popupInnerH-4)
+		m.trackPopupWidth = modalW - 4
 	}
 
 	return m, tea.Batch(
@@ -199,7 +200,15 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	plItems := m.playlistList.Items()
 	alItems := m.albumList.Items()
 	if msg.offset == 0 {
-		plItems = make([]list.Item, 0, len(msg.items))
+		plItems = make([]list.Item, 0, len(msg.items)+1)
+		plItems = append(plItems, playlistItem{summary: spotify.PlaylistSummary{
+			ID:         "liked-songs",
+			Name:       "Liked Songs",
+			URI:        "spotify:collection",
+			Kind:       spotify.ContextKindLikedSongs,
+			Owner:      "You",
+			TrackCount: 0,
+		}})
 		alItems = make([]list.Item, 0, len(msg.items))
 	} else {
 		plItems = append([]list.Item(nil), plItems...)
@@ -210,6 +219,9 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	for _, item := range plItems {
 		pl, ok := item.(playlistItem)
 		if !ok {
+			continue
+		}
+		if pl.summary.Kind == spotify.ContextKindLikedSongs {
 			continue
 		}
 		seenPl[pl.summary.ID] = struct{}{}
@@ -557,8 +569,13 @@ func (m model) handleTrackPopupItemsMsg(msg trackPopupItemsMsg) (tea.Model, tea.
 		return m, nil
 	}
 	m.trackPopupItems = msg.items
+	maxTitleW := m.trackPopupWidth - 6
+	if maxTitleW < 10 {
+		maxTitleW = 10
+	}
 	items := make([]list.Item, 0, len(msg.items))
 	for _, qi := range msg.items {
+		qi.Name = truncate(qi.Name, maxTitleW)
 		items = append(items, trackItem{item: qi})
 	}
 	m.trackPopupList.SetItems(items)
