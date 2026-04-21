@@ -418,7 +418,7 @@ func (m model) queuePanel(w, h int) string {
 	titleW := max(4, contentW-artistW-durW-2)
 
 	colHeader := styleQueueHeader.Render(
-		strings.Repeat(" ", 1+idxW+1) + fmt.Sprintf("%-*s  %-*s %-s", titleW, "Title", artistW, "Artist", "Len"),
+		strings.Repeat(" ", 1+idxW+1) + fmt.Sprintf("%-*s  %-*s %-5s", titleW, "Title", artistW, "Artist", "Dur"),
 	)
 	colDivider := sectionDivider(w)
 
