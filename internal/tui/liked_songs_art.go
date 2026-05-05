@@ -101,4 +101,5 @@ func (m *model) preloadLikedSongsArt() {
 	}
 	img := generateLikedSongsImage(likedSongsArtSize)
 	m.imgs.setImage(likedSongsImageURL, img, likedSongsArtSize, likedSongsArtSize)
+	m.imgs.pinURL(likedSongsImageURL)
 }
