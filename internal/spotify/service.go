@@ -159,8 +159,9 @@ type PlaylistCatalog interface {
 }
 
 const (
-	ContextKindPlaylist = "playlist"
-	ContextKindAlbum    = "album"
+	ContextKindPlaylist   = "playlist"
+	ContextKindAlbum      = "album"
+	ContextKindLikedSongs = "liked-songs"
 )
 
 type DeviceDoctorReport struct {

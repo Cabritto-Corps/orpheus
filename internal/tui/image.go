@@ -53,6 +53,7 @@ type imgCache struct {
 	kittyChunks      map[string][]string
 	kittyChunkOrder  []string
 	coverKeysByURL   map[string]map[coverKey]struct{}
+	pinned           map[string]struct{}
 }
 
 func newImgCache() *imgCache {
@@ -67,6 +68,7 @@ func newImgCache() *imgCache {
 		kittyChunks:     make(map[string][]string),
 		kittyChunkOrder: make([]string, 0, maxKittyChunkCacheEntries),
 		coverKeysByURL:  make(map[string]map[coverKey]struct{}),
+		pinned:          make(map[string]struct{}),
 	}
 }
 
@@ -220,16 +222,26 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	evictedURL, _, evicted := c.imgs.Set(url, img)
+	evictedURL, evictedImg, evicted := c.imgs.Set(url, img)
 	if encoded != "" {
 		c.encoded[url] = encoded
 		delete(c.kittyChunks, url)
 	}
 	if evicted {
-		c.deleteCoversForURLLocked(evictedURL)
-		delete(c.encoded, evictedURL)
-		delete(c.kittyChunks, evictedURL)
+		if _, pinned := c.pinned[evictedURL]; pinned {
+			c.imgs.Set(evictedURL, evictedImg)
+		} else {
+			c.deleteCoversForURLLocked(evictedURL)
+			delete(c.encoded, evictedURL)
+			delete(c.kittyChunks, evictedURL)
+		}
 	}
+}
+
+func (c *imgCache) pinURL(url string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pinned[url] = struct{}{}
 }
 
 func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
