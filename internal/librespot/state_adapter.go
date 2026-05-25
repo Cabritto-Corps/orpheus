@@ -40,7 +40,7 @@ func (p *AppPlayer) BuildPlaybackStateUpdate() *PlaybackStateUpdate {
 		out.QueueHasMore = len(upcoming) >= queueOverrideMaxTracks
 	}
 
-	if p.state.player.Track != nil {
+	if p.primaryStream == nil && p.state.player.Track != nil {
 		out.TrackID = golibrespot.NormalizeSpotifyId(p.state.player.Track.Uri)
 		if p.state.player.Track.Metadata != nil {
 			out.TrackName = metadataValue(p.state.player.Track.Metadata, "title", "name", "track_name")
@@ -62,7 +62,7 @@ func (p *AppPlayer) BuildPlaybackStateUpdate() *PlaybackStateUpdate {
 			}
 		}
 		out.AlbumName = t.AlbumName
-		out.DurationMS = t.Duration
+		out.DurationMS = int(durationMs)
 		out.ProgressMS = int(t.Position)
 		if t.AlbumCoverUrl != nil {
 			out.AlbumImageURL = *t.AlbumCoverUrl

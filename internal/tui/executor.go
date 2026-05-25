@@ -31,6 +31,7 @@ func loadImages(ctx context.Context, items []loader.LoadItem, timeout time.Durat
 	}
 	fctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
 	for i, item := range items {
 		select {
@@ -42,6 +43,13 @@ func loadImages(ctx context.Context, items []loader.LoadItem, timeout time.Durat
 		wg.Add(1)
 		go func(idx int, url string) {
 			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-fctx.Done():
+				results[idx] = loader.LoadResult{Index: idx, Error: fctx.Err()}
+				return
+			}
 			data, err := httpImageProvider{}.Fetch(fctx, url)
 			if err != nil {
 				results[idx] = loader.LoadResult{Index: idx, Error: err}

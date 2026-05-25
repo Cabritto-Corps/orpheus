@@ -24,8 +24,8 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 		logout:          make(chan *AppPlayer, 1),
 		countryCode:     countryCode,
 		volumeUpdate:    volumeUpdate,
-		prefetchJobs:    make(chan prefetchJob, 8),
-		prefetchDone:    make(chan prefetchResult, 8),
+		prefetchJobs:    make(chan prefetchJob, 16),
+		prefetchDone:    make(chan prefetchResult, 16),
 		queueMetaCache:  cache.NewLRU[string, PlaybackStateQueueEntry](8192),
 	}
 	p.prefetchTimer = time.NewTimer(math.MaxInt64)

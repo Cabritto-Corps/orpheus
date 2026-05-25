@@ -473,9 +473,11 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 	p.resetQueueMetaForContext(strings.TrimSpace(spotCtx.Uri))
 	p.resetPlaybackCaches(true)
 	p.syncPlayerTrackState(ctx, ctxTracks, nil)
-	metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), 15*time.Second)
-	p.resolveContextQueueMetadata(metaCtx, ctxTracks)
-	metaCancel()
+	go func() {
+		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), 15*time.Second)
+		defer metaCancel()
+		p.resolveContextQueueMetadata(metaCtx, ctxTracks)
+	}()
 	if err := p.loadCurrentTrack(ctx, paused, drop); err != nil {
 		return fmt.Errorf("failed loading current track (load context): %w", err)
 	}
@@ -506,9 +508,7 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	}
 	p.setPlayerTransportState(true, true, paused)
 	p.state.player.PlaybackSpeed = 0
-	p.updateState(ctx)
 	p.runtime.Emit(&ApiEvent{Type: ApiEventTypeWillPlay, Data: ApiEventDataWillPlay{ContextUri: p.state.player.ContextUri, Uri: spotId.Uri(), PlayOrigin: golibrespot.PlayOrigin(p.state.player)}})
-	p.emitPlaybackState()
 	var prefetched bool
 	if p.secondaryStream != nil && p.secondaryStream.Is(*spotId) {
 		closeStream(p.primaryStream)

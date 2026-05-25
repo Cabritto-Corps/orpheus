@@ -5,7 +5,7 @@ import (
 	"github.com/elxgy/go-librespot/player"
 )
 
-const transitionStreamCacheMax = 4
+const transitionStreamCacheMax = 16
 
 func streamCacheKey(id golibrespot.SpotifyId) string {
 	return id.Uri()
