@@ -397,7 +397,10 @@ func NewClient(_ context.Context, tokenSource oauth2.TokenSource) *spotifyapi.Cl
 	base := http.DefaultTransport
 	if t, ok := http.DefaultTransport.(*http.Transport); ok {
 		clone := t.Clone()
-		clone.ResponseHeaderTimeout = 0
+		clone.ResponseHeaderTimeout = 15 * time.Second
+		clone.MaxIdleConnsPerHost = 20
+		clone.MaxConnsPerHost = 32
+		clone.IdleConnTimeout = 90 * time.Second
 		base = clone
 	}
 	apiClient := &http.Client{
@@ -415,7 +418,10 @@ func NewItemsHTTPClient(tokenSource oauth2.TokenSource) *http.Client {
 	base := http.DefaultTransport
 	if t, ok := http.DefaultTransport.(*http.Transport); ok {
 		clone := t.Clone()
-		clone.ResponseHeaderTimeout = 0
+		clone.ResponseHeaderTimeout = 15 * time.Second
+		clone.MaxIdleConnsPerHost = 20
+		clone.MaxConnsPerHost = 32
+		clone.IdleConnTimeout = 90 * time.Second
 		base = clone
 	}
 	return &http.Client{

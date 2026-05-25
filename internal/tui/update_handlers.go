@@ -136,8 +136,7 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	} else if m.status == nil || !m.status.Playing {
 		interval = min(interval*2, idlePollBackoffMax)
 	}
-	m.pollElapsed += uiTickInterval
-	if m.pollElapsed < interval {
+	if time.Since(m.lastPollTime) < interval {
 		cmds := make([]tea.Cmd, 0, 5)
 		cmds = append(cmds, m.tickCmd(), inputCmd)
 		if startupCoverCmd != nil {
@@ -154,7 +153,7 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	}
-	m.pollElapsed = 0
+	m.lastPollTime = time.Now()
 	m.pollTick++
 	pollQueue := m.pollTick%queuePollEvery == 0
 	cmds := make([]tea.Cmd, 0, 6)
@@ -524,6 +523,7 @@ func (m model) handleSeekDebounceMsg(msg seekDebounceMsg) (tea.Model, tea.Cmd) {
 	m.seekSentAt = time.Now()
 	if m.status != nil {
 		m.status.ProgressMS = target
+		m.resetInterpolationBaseline()
 	}
 	if m.tuiCmdCh != nil {
 		select {
@@ -538,6 +538,7 @@ func (m model) handleSeekDebounceMsg(msg seekDebounceMsg) (tea.Model, tea.Cmd) {
 	rollback := cloneStatus(m.status)
 	if m.status != nil {
 		m.status.ProgressMS = target
+		m.resetInterpolationBaseline()
 	}
 	m.beginReconcileAction(0)
 	p := target

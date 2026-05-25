@@ -418,7 +418,7 @@ func (m model) queuePanel(w, h int) string {
 	titleW := max(4, contentW-artistW-durW-2)
 
 	colHeader := styleQueueHeader.Render(
-		strings.Repeat(" ", 1+idxW+1) + fmt.Sprintf("%-*s  %-*s %-5s", titleW, "Title", artistW, "Artist", "Dur"),
+		strings.Repeat(" ", 1+idxW+1) + fmt.Sprintf("%-*s  %-*s %-5s", titleW, "Title", artistW, "Artist", "Len"),
 	)
 	colDivider := sectionDivider(w)
 
@@ -510,15 +510,20 @@ func (m model) playerBarView() string {
 		stateIcon = styleHeaderPlaying.Render(playIcon)
 	}
 
+	elapsedMs := m.status.ProgressMS
+	if m.status.DurationMS > 0 && elapsedMs > m.status.DurationMS {
+		elapsedMs = m.status.DurationMS
+	}
+
 	pct := 0.0
 	if m.status.DurationMS > 0 {
-		pct = float64(m.status.ProgressMS) / float64(m.status.DurationMS)
+		pct = float64(elapsedMs) / float64(m.status.DurationMS)
 		if pct > 1 {
 			pct = 1
 		}
 	}
 
-	elapsed := stylePlayerTime.Render(fmtDuration(m.status.ProgressMS))
+	elapsed := stylePlayerTime.Render(fmtDuration(elapsedMs))
 	total := stylePlayerTime.Render("--:--")
 	if m.status.DurationMS > 0 {
 		total = stylePlayerTime.Render(fmtDuration(m.status.DurationMS))
@@ -528,7 +533,12 @@ func (m model) playerBarView() string {
 	totalW := lipgloss.Width(total)
 	iconW := lipgloss.Width(stateIcon)
 	progressW := barW - elapsedW - totalW - iconW - 8
-	progressStr := m.renderProgressBar(pct, progressW)
+	var progressStr string
+	if m.status.DurationMS <= 0 {
+		progressStr = styleProgressBarEmpty.Render(strings.Repeat("░", progressW))
+	} else {
+		progressStr = m.renderProgressBar(pct, progressW)
+	}
 
 	bar := "  " + stateIcon + "  " + elapsed + "  " + progressStr + "  " + total
 	return sep + "\n" + bar

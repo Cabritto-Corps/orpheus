@@ -65,7 +65,7 @@ type model struct {
 
 	pollInterval            time.Duration
 	pollTick                int
-	pollElapsed             time.Duration
+	lastPollTime            time.Time
 	coverRefreshTick        int
 	playerCoverRefreshTick  int
 	libraryCoverRefreshTick int
@@ -97,6 +97,9 @@ type model struct {
 	seekSentTarget      int
 	seekDebouncePending int
 	seekDebounceToken   int
+
+	interpolationSyncAt     time.Time
+	interpolationProgressMS int
 
 	status                       *spotify.PlaybackStatus
 	queue                        []spotify.QueueItem
@@ -526,6 +529,9 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 		m.applyMergedQueue(msg.queue, msg.queueHasMore, true, true)
 	}
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, msg.status, m.trackCache)
+	if m.status != nil {
+		m.smoothApplyProgress(m.status.ProgressMS)
+	}
 	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.status, prevQueueHead, queueHeadTrackID(m.queue))
 	m.maybeClearTransportTransition(m.status)
 	m.playbackErr = nil
@@ -550,6 +556,8 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		if errors.Is(msg.err, spotify.ErrNoActiveTrack) {
 			m.status = nil
+			m.interpolationSyncAt = time.Time{}
+			m.interpolationProgressMS = 0
 			m.queue = nil
 			m.queueHasMore = false
 			m.stableQueueLen = 0
@@ -562,7 +570,7 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 		m.syncExecutorState()
 		return m, m.pumpInputExecutor()
 	}
-	m.pollElapsed = 0
+	m.lastPollTime = time.Now()
 	prevStatus := m.status
 	prevQueueHead := queueHeadTrackID(m.queue)
 	prevTrackID := ""
@@ -580,6 +588,9 @@ func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
 		slog.Error("fetch queue failed", "error", msg.queueErr)
 	}
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, m.status, m.trackCache)
+	if m.status != nil {
+		m.smoothApplyProgress(m.status.ProgressMS)
+	}
 	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.status, prevQueueHead, queueHeadTrackID(m.queue))
 	m.fireOnSongChange(prevStatus, m.status)
 
@@ -627,7 +638,7 @@ func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.
 		return m, m.reconcileCmd()
 	}
 	m.playbackErr = nil
-	m.pollElapsed = 0
+	m.lastPollTime = time.Now()
 	prevStatus := m.status
 	prevQueueHead := queueHeadTrackID(m.queue)
 	prevTrackID := ""
@@ -640,6 +651,9 @@ func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.
 	}
 	m.applyFetchedStatusAndQueue(prevTrackID, msg.status, msg.queue, msg.queueFetched, false, reconciledVol)
 	m.status = mergeStatusFromPrevious(prevStatus, m.queue, m.status, m.trackCache)
+	if m.status != nil {
+		m.smoothApplyProgress(m.status.ProgressMS)
+	}
 	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.status, prevQueueHead, queueHeadTrackID(m.queue))
 	cmds := make([]tea.Cmd, 0, 3)
 	if m.shouldEnsureAlbumImageLoad(prevStatus, m.status) {
@@ -946,6 +960,12 @@ func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 	m.queue = nil
 	m.queueHasMore = false
 	m.stableQueueLen = 0
+	if m.status != nil {
+		m.status.ProgressMS = 0
+		m.status.DurationMS = 0
+	}
+	m.interpolationSyncAt = time.Time{}
+	m.interpolationProgressMS = 0
 	m.beginTransportTransition()
 
 	trackID := ""
@@ -995,6 +1015,12 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 	m.queue = nil
 	m.queueHasMore = false
 	m.stableQueueLen = 0
+	if m.status != nil {
+		m.status.ProgressMS = 0
+		m.status.DurationMS = 0
+	}
+	m.interpolationSyncAt = time.Time{}
+	m.interpolationProgressMS = 0
 	if m.tuiCmdCh != nil {
 		select {
 		case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandPlayContext, URI: sel.summary.URI}:

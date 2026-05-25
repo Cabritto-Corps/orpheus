@@ -172,19 +172,62 @@ func (m *model) applyOptimisticSkip(next bool) {
 	}
 	m.status.ProgressMS = 0
 	m.status.Playing = true
+	m.interpolationSyncAt = time.Time{}
+	m.interpolationProgressMS = 0
 	if next && len(m.queue) > 0 {
 		m.status.TrackID = m.queue[0].ID
 		m.status.TrackName = m.queue[0].Name
 		m.status.ArtistName = m.queue[0].Artist
+		m.status.DurationMS = m.queue[0].DurationMS
+	}
+	m.resetInterpolationBaseline()
+}
+
+func (m *model) interpolatePlaybackProgress(_ time.Duration) {
+	if m.status == nil || !m.status.Playing || m.status.DurationMS <= 0 || m.transportTransitionPending {
+		return
+	}
+	if m.interpolationSyncAt.IsZero() {
+		m.interpolationSyncAt = time.Now()
+		m.interpolationProgressMS = m.status.ProgressMS
+		return
+	}
+	elapsed := time.Since(m.interpolationSyncAt)
+	expected := m.interpolationProgressMS + int(elapsed/time.Millisecond)
+	m.status.ProgressMS = min(expected, m.status.DurationMS)
+}
+
+func (m *model) resetInterpolationBaseline() {
+	m.interpolationSyncAt = time.Now()
+	if m.status != nil {
+		m.interpolationProgressMS = m.status.ProgressMS
+	} else {
+		m.interpolationProgressMS = 0
 	}
 }
 
-func (m *model) interpolatePlaybackProgress(step time.Duration) {
-	if step <= 0 || m.status == nil || !m.status.Playing || m.status.DurationMS <= 0 {
+const progressSyncThresholdMS = 300
+
+func (m *model) smoothApplyProgress(incomingProgress int) {
+	if m.status == nil {
 		return
 	}
-	next := m.status.ProgressMS + int(step/time.Millisecond)
-	m.status.ProgressMS = min(next, m.status.DurationMS)
+	if m.transportTransitionPending || m.interpolationSyncAt.IsZero() {
+		m.status.ProgressMS = incomingProgress
+		m.resetInterpolationBaseline()
+		return
+	}
+	elapsed := time.Since(m.interpolationSyncAt)
+	interpolated := m.interpolationProgressMS + int(elapsed/time.Millisecond)
+	if m.status.DurationMS > 0 && interpolated > m.status.DurationMS {
+		interpolated = m.status.DurationMS
+	}
+	delta := absInt(interpolated - incomingProgress)
+	if delta <= progressSyncThresholdMS {
+		return
+	}
+	m.status.ProgressMS = incomingProgress
+	m.resetInterpolationBaseline()
 }
 
 func (m *model) clearVolumeSettleTarget(observed int) {
@@ -348,15 +391,15 @@ func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.Queue
 		return next
 	}
 	out := *next
+	nextID := golibrespot.NormalizeSpotifyId(next.TrackID)
+	sameTrack := func(id string) bool {
+		return golibrespot.NormalizeSpotifyId(id) != "" && golibrespot.NormalizeSpotifyId(id) == nextID
+	}
 	if out.AlbumImageURL == "" && prev != nil && prev.AlbumImageURL != "" {
 		out.AlbumImageURL = prev.AlbumImageURL
 	}
 	if out.TrackName != "" && out.ArtistName != "" && out.DurationMS > 0 {
 		return &out
-	}
-	nextID := golibrespot.NormalizeSpotifyId(next.TrackID)
-	sameTrack := func(id string) bool {
-		return golibrespot.NormalizeSpotifyId(id) != "" && golibrespot.NormalizeSpotifyId(id) == nextID
 	}
 	if prev != nil && sameTrack(prev.TrackID) {
 		if out.TrackName == "" && prev.TrackName != "" {

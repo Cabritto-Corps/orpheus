@@ -325,6 +325,9 @@ func (c *imgCache) shouldQueuePriorityLoad(url string) bool {
 	if _, ok := c.inflight[url]; ok {
 		return false
 	}
+	if t, ok := c.failedAt[url]; ok && time.Since(t) < imageFetchPriorityFailCooldown {
+		return false
+	}
 	return true
 }
 
@@ -445,9 +448,10 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 }
 
 const (
-	imageFetchTimeout         = 6 * time.Second
-	imageFetchFailCooldown    = 30 * time.Second
-	maxCachedImages           = 256
+	imageFetchTimeout               = 6 * time.Second
+	imageFetchFailCooldown         = 30 * time.Second
+	imageFetchPriorityFailCooldown = 5 * time.Second
+	maxCachedImages                = 256
 	maxCachedCoverRenders     = 512
 	maxKittyChunkCacheEntries = 64
 	kittyEncodeMaxSize        = 1024
