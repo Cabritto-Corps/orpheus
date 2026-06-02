@@ -260,6 +260,7 @@ func (p *AppPlayer) handlePrefetchResult(res prefetchResult) {
 	p.clearPrefetchPending(res.target)
 	if res.gen != p.prefetchGen.Load() {
 		p.runtime.Log.WithField("uri", res.target.Uri()).Tracef("dropping stale prefetch result (res_gen=%d current_gen=%d)", res.gen, p.prefetchGen.Load())
+		closeStream(res.stream)
 		return
 	}
 	if res.err != nil {
@@ -487,6 +488,7 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) error {
 	if p.primaryStream != nil {
 		p.sess.Events().OnPrimaryStreamUnload(p.primaryStream, p.currentPositionMs())
+		closeStream(p.primaryStream)
 		p.primaryStream = nil
 	}
 	spotId, err := golibrespot.SpotifyIdFromUri(p.state.player.Track.Uri)
@@ -907,6 +909,7 @@ func (p *AppPlayer) volumeUpdated(ctx context.Context) {
 
 func (p *AppPlayer) stopPlayback(ctx context.Context) error {
 	p.player.Stop()
+	closeStream(p.primaryStream)
 	p.primaryStream = nil
 	p.resetPlaybackCaches(true)
 	p.state.reset()

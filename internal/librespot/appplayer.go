@@ -428,6 +428,11 @@ func (p *AppPlayer) Close() {
 	case p.stop <- struct{}{}:
 	default:
 	}
+	closeStream(p.primaryStream)
+	closeStream(p.secondaryStream)
+	p.clearTransitionStreamCache()
+	p.prefetchTimer.Stop()
+	p.shuffleRefreshTimer.Stop()
 	p.player.Close()
 }
 
