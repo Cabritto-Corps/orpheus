@@ -533,10 +533,7 @@ func (m model) navDebounceCmd(token int) tea.Cmd {
 }
 
 func (m model) imageRetryCmd(url string, attempt int, token int) tea.Cmd {
-	delay := time.Duration(attempt) * 200 * time.Millisecond
-	if delay > 1200*time.Millisecond {
-		delay = 1200 * time.Millisecond
-	}
+	delay := min(time.Duration(attempt)*200*time.Millisecond, 1200*time.Millisecond)
 	return tea.Tick(delay, func(time.Time) tea.Msg {
 		return imageRetryMsg{url: url, token: token}
 	})
@@ -644,10 +641,7 @@ func (m model) loadPlaylistItemsCmd(playlistID string, offset int, token int) te
 		if err != nil {
 			return playlistItemsMsg{playlistID: playlistID, token: token, err: err}
 		}
-		nextOffset := page.NextOffset
-		if nextOffset > playlistItemPreloadMax {
-			nextOffset = playlistItemPreloadMax
-		}
+		nextOffset := min(page.NextOffset, playlistItemPreloadMax)
 		hasMore := page.HasMore && nextOffset < playlistItemPreloadMax
 		return playlistItemsMsg{
 			playlistID: playlistID,

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"strconv"
 	"strings"
@@ -450,9 +451,7 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 	if p.state.player.ContextMetadata == nil {
 		p.state.player.ContextMetadata = map[string]string{}
 	}
-	for k, v := range spotCtx.Metadata {
-		p.state.player.ContextMetadata[k] = v
-	}
+	maps.Copy(p.state.player.ContextMetadata, spotCtx.Metadata)
 	p.state.player.Timestamp = time.Now().UnixMilli()
 	p.state.player.PositionAsOfTimestamp = 0
 	if skipTo == nil {
@@ -860,7 +859,7 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 	p.logAdvanceInvariants(forceNext, selection, beforeTrackID)
 
 	maxRetries := 10
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := range maxRetries {
 		if err := p.loadCurrentTrackFromTransition(ctx, !hasNextTrack, drop, "advance next"); errors.Is(err, golibrespot.ErrMediaRestricted) || errors.Is(err, golibrespot.ErrNoSupportedFormats) {
 			p.runtime.Log.WithError(err).Infof("skipping unplayable media (attempt %d/%d): %s", attempt+1, maxRetries, uri)
 			if forceNext {

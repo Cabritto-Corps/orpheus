@@ -99,7 +99,7 @@ func (m *model) requeueFront(action playbackInputKind) {
 }
 
 func (m *model) pumpInputExecutor() tea.Cmd {
-	for i := 0; i < maxInputActionsPerTick; i++ {
+	for range maxInputActionsPerTick {
 		m.syncExecutorState()
 		if m.executorState != executorStateIdle || len(m.inputQueue) == 0 {
 			return nil

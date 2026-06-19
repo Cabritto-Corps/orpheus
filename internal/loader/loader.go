@@ -20,7 +20,7 @@ type LoadItem struct {
 
 type LoadResult struct {
 	Index int
-	Data  interface{}
+	Data  any
 	Error error
 }
 

@@ -137,10 +137,7 @@ func (p *AppPlayer) handleTUIPlaybackCommand(ctx context.Context, cmd TUICommand
 	case TUICommandSkipPrev:
 		return true, p.skipPrev(ctx, true)
 	case TUICommandSetVolume:
-		vol := uint32(cmd.Volume) * player.MaxStateVolume / p.runtime.Cfg.VolumeSteps
-		if vol > player.MaxStateVolume {
-			vol = player.MaxStateVolume
-		}
+		vol := min(uint32(cmd.Volume)*player.MaxStateVolume/p.runtime.Cfg.VolumeSteps, player.MaxStateVolume)
 		p.updateVolume(vol)
 		return true, nil
 	case TUICommandShuffle:

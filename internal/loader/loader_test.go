@@ -110,7 +110,7 @@ func TestPoolBlocking(t *testing.T) {
 
 	loader := New(ctx, 8, exec)
 
-	for i := 0; i < 12; i++ {
+	for range 12 {
 		go func() {
 			loader.Execute(LoadRequest{
 				Type:    LoadTypeImage,
@@ -147,16 +147,14 @@ func TestConcurrentExecute(t *testing.T) {
 	loader := New(ctx, 8, exec)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 16 {
+		wg.Go(func() {
 			loader.Execute(LoadRequest{
 				Type:    LoadTypeImage,
 				Items:   []LoadItem{{URL: "http://example.com"}},
 				Timeout: 2 * time.Second,
 			})
-		}()
+		})
 	}
 	wg.Wait()
 

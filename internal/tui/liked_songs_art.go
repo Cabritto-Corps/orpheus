@@ -25,9 +25,9 @@ func generateLikedSongsImage(size int) image.Image {
 	cx := float64(ssSize) / 2
 	cy := float64(ssSize) / 2
 
-	for y := 0; y < ssSize; y++ {
+	for y := range ssSize {
 		ty := float64(y) / float64(ssSize-1)
-		for x := 0; x < ssSize; x++ {
+		for x := range ssSize {
 			tx := float64(x) / float64(ssSize-1)
 			bgR := lerp4(tl.R, tr.R, bl.R, br.R, tx, ty)
 			bgG := lerp4(tl.G, tr.G, bl.G, br.G, tx, ty)
@@ -55,11 +55,11 @@ func isInHeart(x, y float64) bool {
 func downsample(src *image.RGBA, srcSize, dstSize int) *image.RGBA {
 	dst := image.NewRGBA(image.Rect(0, 0, dstSize, dstSize))
 	ratio := srcSize / dstSize
-	for dy := 0; dy < dstSize; dy++ {
-		for dx := 0; dx < dstSize; dx++ {
+	for dy := range dstSize {
+		for dx := range dstSize {
 			var r, g, b, count uint32
-			for sy := 0; sy < ratio; sy++ {
-				for sx := 0; sx < ratio; sx++ {
+			for sy := range ratio {
+				for sx := range ratio {
 					sy2 := dy*ratio + sy
 					sx2 := dx*ratio + sx
 					c := src.RGBAAt(sx2, sy2)

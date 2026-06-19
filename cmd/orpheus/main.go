@@ -105,7 +105,7 @@ func ensureUsableTokenWithRetry(ctx context.Context, authManager *auth.Manager) 
 	const maxAttempts = 2
 	var lastErr error
 
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := range maxAttempts {
 		attemptTimeout := tokenRefreshTimeout + time.Duration(attempt)*15*time.Second
 		tokenCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 		token, err := authManager.EnsureUsableToken(tokenCtx)

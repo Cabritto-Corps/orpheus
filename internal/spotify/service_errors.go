@@ -92,10 +92,7 @@ func retryDelayForAPIError(attempt int) time.Duration {
 	if attempt < 0 {
 		attempt = 0
 	}
-	wait := apiRetryInitialDelay * time.Duration(1<<min(attempt, apiRetryExponentCap))
-	if wait > apiRetryMaxDelay {
-		wait = apiRetryMaxDelay
-	}
+	wait := min(apiRetryInitialDelay*time.Duration(1<<min(attempt, apiRetryExponentCap)), apiRetryMaxDelay)
 	return wait
 }
 

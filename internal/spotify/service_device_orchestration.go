@@ -193,7 +193,7 @@ func (s *Service) waitForDeviceActive(ctx context.Context, deviceID spotifyapi.I
 
 func (s *Service) transferWithRetry(ctx context.Context, deviceID spotifyapi.ID) error {
 	wait := transferInitialRetryDelay
-	for i := 0; i < transferMaxAttempts; i++ {
+	for range transferMaxAttempts {
 		err := s.client.TransferPlayback(ctx, deviceID, false)
 		if err == nil {
 			s.invalidateDeviceCache()

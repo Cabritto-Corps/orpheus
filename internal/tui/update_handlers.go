@@ -31,10 +31,7 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	if m.trackPopupOpen {
 		modalW := min(m.width-8, 60)
 		popupBodyH := m.height - headerH - tabBarH - 2
-		popupInnerH := popupBodyH - 4
-		if popupInnerH < 10 {
-			popupInnerH = 10
-		}
+		popupInnerH := max(popupBodyH-4, 10)
 		m.trackPopupList.SetSize(modalW-2, popupInnerH-4)
 		m.trackPopupWidth = modalW - 4
 	}
@@ -570,10 +567,7 @@ func (m model) handleTrackPopupItemsMsg(msg trackPopupItemsMsg) (tea.Model, tea.
 		return m, nil
 	}
 	m.trackPopupItems = msg.items
-	maxTitleW := m.trackPopupWidth - 6
-	if maxTitleW < 10 {
-		maxTitleW = 10
-	}
+	maxTitleW := max(m.trackPopupWidth-6, 10)
 	items := make([]list.Item, 0, len(msg.items))
 	for _, qi := range msg.items {
 		qi.Name = truncate(qi.Name, maxTitleW)

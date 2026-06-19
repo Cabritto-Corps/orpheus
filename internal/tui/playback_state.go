@@ -257,10 +257,7 @@ func (m *model) clampSeekTarget(target int) int {
 	if m.status == nil || m.status.DurationMS <= 0 {
 		return target
 	}
-	maxTarget := m.status.DurationMS - seekBarEndBufferMS
-	if maxTarget < 0 {
-		maxTarget = 0
-	}
+	maxTarget := max(m.status.DurationMS-seekBarEndBufferMS, 0)
 	if target > maxTarget {
 		return maxTarget
 	}

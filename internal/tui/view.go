@@ -137,19 +137,10 @@ func layoutThreeZone(w int, left, center, right string) string {
 	centerW := lipgloss.Width(center)
 	rightW := lipgloss.Width(right)
 
-	centerPad := (w - centerW) / 2
-	if centerPad < leftW+1 {
-		centerPad = leftW + 1
-	}
-	leftPad := centerPad - leftW
-	if leftPad < 0 {
-		leftPad = 0
-	}
+	centerPad := max((w-centerW)/2, leftW+1)
+	leftPad := max(centerPad-leftW, 0)
 	afterCenter := centerPad + centerW
-	rightPad := w - afterCenter - rightW
-	if rightPad < 1 {
-		rightPad = 1
-	}
+	rightPad := max(w-afterCenter-rightW, 1)
 
 	return left +
 		strings.Repeat(" ", leftPad) +
@@ -161,10 +152,7 @@ func layoutThreeZone(w int, left, center, right string) string {
 func (m model) headerVolumeBar(vol int) string {
 	const w = 6
 	volChar := m.icon(iconVolume, iconVolumeNF)
-	filled := int(float64(vol) / 100.0 * float64(w))
-	if filled > w {
-		filled = w
-	}
+	filled := min(int(float64(vol)/100.0*float64(w)), w)
 	return styleVolumeBarFilled.Render(strings.Repeat(volChar, filled)) +
 		styleVolumeBarEmpty.Render(strings.Repeat(volChar, w-filled))
 }
@@ -442,7 +430,7 @@ func (m model) queuePanel(w, h int) string {
 	} else {
 		maxRows := contentLines - 2
 		n := min(len(displayQueue), maxRows)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			q := displayQueue[i]
 			idx := styleQueueIndex.Render(fmt.Sprintf("%*d.", idxW-1, i+1))
 			title := truncate(q.Name, titleW)
@@ -547,10 +535,7 @@ func (m model) playerBarView() string {
 func (m model) trackPopupView() string {
 	modalW := min(m.width-8, 60)
 	bodyH := m.height - headerH - tabBarH - 2
-	innerH := bodyH - 4
-	if innerH < 10 {
-		innerH = 10
-	}
+	innerH := max(bodyH-4, 10)
 
 	title := styleTrackPopupTitle.Render(fmt.Sprintf("  %s", m.trackPopupName))
 
@@ -583,10 +568,7 @@ func (m model) trackPopupView() string {
 
 func (m model) helpModalView() string {
 	modalW := min(m.width-8, 80)
-	innerH := m.height - 14
-	if innerH < 6 {
-		innerH = 6
-	}
+	innerH := max(m.height-14, 6)
 	contentW := max(12, modalW-4)
 	title := styleModalTitle.Render("Help")
 	hint := styleModalHint.Render("? or esc close")
@@ -629,29 +611,17 @@ func (m model) bodyLayout() bodyLayout {
 		return bodyLayout{bodyH: bodyH, leftW: minLeftW, rightW: m.width - minLeftW, coverStartRow: bodyStartRow1Based + 3, coverStartCol: 1}
 	}
 	metaLines := 3
-	availH := bodyH - 2 - 2 - metaLines
-	if availH < 1 {
-		availH = 1
-	}
+	availH := max(bodyH-2-2-metaLines, 1)
 	maxRows := availH
 	coverRows := maxRows
 	coverCols := 2 * coverRows
-	leftW := coverCols + 2
-	if leftW < minLeftW {
-		leftW = minLeftW
-	}
-	maxLeftW := m.width - minRightW
-	if maxLeftW < minLeftW {
-		maxLeftW = minLeftW
-	}
+	leftW := max(coverCols+2, minLeftW)
+	maxLeftW := max(m.width-minRightW, minLeftW)
 	if leftW > maxLeftW {
 		leftW = maxLeftW
 	}
 	innerW := leftW - 2
-	innerH := bodyH - 2 - metaLines
-	if innerH < 1 {
-		innerH = 1
-	}
+	innerH := max(bodyH-2-metaLines, 1)
 	coverCols, coverRows = squareDims(innerW, innerH)
 	if coverCols < 2 {
 		coverCols = 2
@@ -659,10 +629,7 @@ func (m model) bodyLayout() bodyLayout {
 	if coverRows < 1 {
 		coverRows = 1
 	}
-	rightW := m.width - leftW
-	if rightW < 0 {
-		rightW = 0
-	}
+	rightW := max(m.width-leftW, 0)
 	return bodyLayout{
 		bodyH:         bodyH,
 		leftW:         leftW,
@@ -706,10 +673,7 @@ func (m model) renderProgressBar(pct float64, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	filled := int(pct * float64(width))
-	if filled > width {
-		filled = width
-	}
+	filled := min(int(pct*float64(width)), width)
 	empty := width - filled
 	return styleProgressBarFilled.Render(strings.Repeat("█", filled)) +
 		styleProgressBarEmpty.Render(strings.Repeat("░", empty))
@@ -885,7 +849,7 @@ func (m model) placeholderArt(cols, rows int) string {
 	midRows := rows - 2
 	var sb strings.Builder
 	sb.WriteString(top)
-	for i := 0; i < midRows; i++ {
+	for range midRows {
 		sb.WriteByte('\n')
 		sb.WriteString(mid)
 	}

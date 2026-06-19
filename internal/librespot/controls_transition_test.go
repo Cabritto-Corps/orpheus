@@ -12,17 +12,17 @@ import (
 
 type noopLogger struct{}
 
-func (noopLogger) Tracef(string, ...interface{}) {}
-func (noopLogger) Debugf(string, ...interface{}) {}
-func (noopLogger) Infof(string, ...interface{})  {}
-func (noopLogger) Warnf(string, ...interface{})  {}
-func (noopLogger) Errorf(string, ...interface{}) {}
-func (noopLogger) Trace(...interface{})          {}
-func (noopLogger) Debug(...interface{})          {}
-func (noopLogger) Info(...interface{})           {}
-func (noopLogger) Warn(...interface{})           {}
-func (noopLogger) Error(...interface{})          {}
-func (noopLogger) WithField(string, interface{}) golibrespot.Logger {
+func (noopLogger) Tracef(string, ...any) {}
+func (noopLogger) Debugf(string, ...any) {}
+func (noopLogger) Infof(string, ...any)  {}
+func (noopLogger) Warnf(string, ...any)  {}
+func (noopLogger) Errorf(string, ...any) {}
+func (noopLogger) Trace(...any)          {}
+func (noopLogger) Debug(...any)          {}
+func (noopLogger) Info(...any)           {}
+func (noopLogger) Warn(...any)           {}
+func (noopLogger) Error(...any)          {}
+func (noopLogger) WithField(string, any) golibrespot.Logger {
 	return noopLogger{}
 }
 func (noopLogger) WithError(error) golibrespot.Logger {

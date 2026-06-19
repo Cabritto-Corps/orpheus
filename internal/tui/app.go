@@ -889,10 +889,7 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 
 	modalW := min(m.width-8, 60)
 	bodyH := m.height - headerH - tabBarH - 2
-	innerH := bodyH - 4
-	if innerH < 10 {
-		innerH = 10
-	}
+	innerH := max(bodyH-4, 10)
 
 	delegate := newTrackPopupDelegate()
 	popup := list.New(nil, delegate, modalW, innerH)

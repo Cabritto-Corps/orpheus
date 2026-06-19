@@ -1,4 +1,4 @@
-.PHONY: test vet lint check build
+.PHONY: test vet lint check build fix
 
 build:
 	go build -o orpheus ./cmd/orpheus
@@ -12,7 +12,10 @@ test-race:
 vet:
 	go vet ./...
 
+fix:
+	go fix ./...
+
 lint:
 	golangci-lint run --timeout=5m
 
-check: test vet lint
+check: fix test vet lint

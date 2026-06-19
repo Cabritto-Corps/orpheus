@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
+	"maps"
 	"math"
 	"strconv"
 	"strings"
@@ -258,12 +259,8 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		p.state.player.ContextRestrictions = transferState.CurrentSession.Context.Restrictions
 		p.state.player.Suppressions = transferState.CurrentSession.Suppressions
 		p.state.player.ContextMetadata = map[string]string{}
-		for k, v := range transferState.CurrentSession.Context.Metadata {
-			p.state.player.ContextMetadata[k] = v
-		}
-		for k, v := range ctxTracks.Metadata() {
-			p.state.player.ContextMetadata[k] = v
-		}
+		maps.Copy(p.state.player.ContextMetadata, transferState.CurrentSession.Context.Metadata)
+		maps.Copy(p.state.player.ContextMetadata, ctxTracks.Metadata())
 		contextSpotType := golibrespot.InferSpotifyIdTypeFromContextUri(p.state.player.ContextUri)
 		currentTrack := golibrespot.ContextTrackToProvidedTrack(contextSpotType, transferState.Playback.CurrentTrack)
 		if err := ctxTracks.TrySeek(ctx, tracks.ProvidedTrackComparator(contextSpotType, currentTrack)); err != nil {
@@ -362,9 +359,7 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		if p.state.player.ContextMetadata == nil {
 			p.state.player.ContextMetadata = map[string]string{}
 		}
-		for k, v := range req.Command.Context.Metadata {
-			p.state.player.ContextMetadata[k] = v
-		}
+		maps.Copy(p.state.player.ContextMetadata, req.Command.Context.Metadata)
 		p.updateState(ctx)
 		return nil
 	case "set_repeating_context":

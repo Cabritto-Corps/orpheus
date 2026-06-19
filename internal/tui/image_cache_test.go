@@ -63,7 +63,7 @@ func TestHandleAlbumKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
 func TestTabSwitchClampsTargetPaginationAndQueuesCoverLoad(t *testing.T) {
 	m := NewLoaderModel()
 	playlists := make([]list.Item, 0, 24)
-	for i := 0; i < 24; i++ {
+	for i := range 24 {
 		playlists = append(playlists, playlistItem{
 			summary: spotify.PlaylistSummary{ID: fmt.Sprintf("p-%d", i), Name: fmt.Sprintf("playlist-%d", i), ImageURL: fmt.Sprintf("purl-%d", i)},
 		})
@@ -128,7 +128,7 @@ func TestImageCacheEvictsOldestRenderedCover(t *testing.T) {
 	cache.setImage("u", img, 0, 0)
 
 	sizes := make([][2]int, 0, maxCachedCoverRenders+1)
-	for i := 0; i < maxCachedCoverRenders+1; i++ {
+	for i := range maxCachedCoverRenders + 1 {
 		sizes = append(sizes, [2]int{2 + i, 1})
 	}
 	cache.preRenderCovers("u", sizes)
@@ -437,7 +437,7 @@ func TestPlayerCoverFailuresFallbackFromKitty(t *testing.T) {
 	m := NewLoaderModel()
 	m.imgs.protocol = imageProtocolKitty
 	m.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
-	for i := 0; i < kittyProtocolFallbackFailures; i++ {
+	for range kittyProtocolFallbackFailures {
 		nextModel, _ := m.handleImageLoadedMsg(imageLoadedMsg{url: "u1", err: fmt.Errorf("network")})
 		m = nextModel.(model)
 	}

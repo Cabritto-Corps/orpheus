@@ -47,7 +47,7 @@ func TestLoadPlaylistsCmdInitialInterleavesAlbums(t *testing.T) {
 			}
 			count := min(limit, totalPerKind-offset)
 			items := make([]spotify.PlaylistSummary, 0, limit)
-			for i := 0; i < count; i++ {
+			for i := range count {
 				items = append(items, spotify.PlaylistSummary{
 					ID:   fmt.Sprintf("p-%d", offset+i),
 					Name: "Playlist",
@@ -62,7 +62,7 @@ func TestLoadPlaylistsCmdInitialInterleavesAlbums(t *testing.T) {
 			}
 			count := min(limit, totalPerKind-offset)
 			items := make([]spotify.PlaylistSummary, 0, limit)
-			for i := 0; i < count; i++ {
+			for i := range count {
 				items = append(items, spotify.PlaylistSummary{
 					ID:   fmt.Sprintf("a-%d", offset+i),
 					Name: "Album",
@@ -96,7 +96,7 @@ func TestLoadPlaylistsCmdInitialAlbumsForbiddenSetsHintFlag(t *testing.T) {
 	catalog := fakeCatalog{
 		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
 			items := make([]spotify.PlaylistSummary, 0, limit)
-			for i := 0; i < limit; i++ {
+			for i := range limit {
 				items = append(items, spotify.PlaylistSummary{
 					ID:   fmt.Sprintf("p-%d", offset+i),
 					Name: "Playlist",
@@ -131,7 +131,7 @@ func TestLoadPlaylistsCmdInitialLoadsBeyondPlaylistLoadMax(t *testing.T) {
 			}
 			count := min(limit, totalPlaylists-offset)
 			items := make([]spotify.PlaylistSummary, 0, count)
-			for i := 0; i < count; i++ {
+			for i := range count {
 				items = append(items, spotify.PlaylistSummary{
 					ID:   fmt.Sprintf("p-%d", offset+i),
 					Name: "Playlist",

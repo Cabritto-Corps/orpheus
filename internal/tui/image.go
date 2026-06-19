@@ -204,10 +204,7 @@ func chunkBase64(encoded string, size int) []string {
 	}
 	var parts []string
 	for off := 0; off < len(encoded); off += size {
-		end := off + size
-		if end > len(encoded) {
-			end = len(encoded)
-		}
+		end := min(off+size, len(encoded))
 		parts = append(parts, encoded[off:end])
 	}
 	return parts
@@ -448,13 +445,13 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 }
 
 const (
-	imageFetchTimeout               = 6 * time.Second
+	imageFetchTimeout              = 6 * time.Second
 	imageFetchFailCooldown         = 30 * time.Second
 	imageFetchPriorityFailCooldown = 5 * time.Second
 	maxCachedImages                = 256
-	maxCachedCoverRenders     = 512
-	maxKittyChunkCacheEntries = 64
-	kittyEncodeMaxSize        = 1024
+	maxCachedCoverRenders          = 512
+	maxKittyChunkCacheEntries      = 64
+	kittyEncodeMaxSize             = 1024
 )
 
 func (c *imgCache) deleteCoversForURLLocked(url string) {
@@ -556,10 +553,7 @@ func renderKittyImageRawWithID(encoded string, cols, rows int, imageID uint64) s
 	var sb strings.Builder
 	first := true
 	for off := 0; off < len(encoded); off += chunkSize {
-		end := off + chunkSize
-		if end > len(encoded) {
-			end = len(encoded)
-		}
+		end := min(off+chunkSize, len(encoded))
 		part := encoded[off:end]
 		more := 0
 		if end < len(encoded) {
@@ -624,9 +618,9 @@ func resizeBilinear(src image.Image, width, height int) *image.RGBA {
 		return dst
 	}
 	if sw == 1 || sh == 1 || width == 1 || height == 1 {
-		for y := 0; y < height; y++ {
+		for y := range height {
 			sy := sb.Min.Y + y*sh/height
-			for x := 0; x < width; x++ {
+			for x := range width {
 				sx := sb.Min.X + x*sw/width
 				r, g, b, _ := src.At(sx, sy).RGBA()
 				dst.SetRGBA(x, y, color.RGBA{
@@ -642,7 +636,7 @@ func resizeBilinear(src image.Image, width, height int) *image.RGBA {
 
 	scaleX := float64(sw-1) / float64(width-1)
 	scaleY := float64(sh-1) / float64(height-1)
-	for y := 0; y < height; y++ {
+	for y := range height {
 		fy := float64(y) * scaleY
 		y0 := int(fy)
 		y1 := y0 + 1
@@ -650,7 +644,7 @@ func resizeBilinear(src image.Image, width, height int) *image.RGBA {
 			y1 = sh - 1
 		}
 		wy := fy - float64(y0)
-		for x := 0; x < width; x++ {
+		for x := range width {
 			fx := float64(x) * scaleX
 			x0 := int(fx)
 			x1 := x0 + 1
@@ -693,8 +687,8 @@ func renderHalfBlock(img image.Image, cols, rows int) string {
 
 	reset := "\x1b[0m"
 
-	for row := 0; row < rows; row++ {
-		for col := 0; col < cols; col++ {
+	for row := range rows {
+		for col := range cols {
 			top := px.RGBAAt(col, row*2)
 			bot := px.RGBAAt(col, row*2+1)
 
