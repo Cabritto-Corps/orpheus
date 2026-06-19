@@ -34,8 +34,10 @@ type AppPlayer struct {
 	sess    *session.Session
 	baseCtx context.Context
 
-	stop   chan struct{}
-	logout chan *AppPlayer
+	stop      chan struct{}
+	logout    chan *AppPlayer
+	runDone   chan struct{}
+	closeOnce sync.Once
 
 	player            *player.Player
 	initialVolumeOnce sync.Once
@@ -198,7 +200,10 @@ func (p *AppPlayer) handleDealerMessage(ctx context.Context, msg dealer.Message)
 		p.updateVolume(uint32(setVolCmd.Volume))
 	} else if strings.HasPrefix(msg.Uri, "hm://connect-state/v1/connect/logout") {
 		p.runtime.Log.WithField("username", golibrespot.ObfuscateUsername(p.sess.Username())).Debugf("requested logout")
-		p.logout <- p
+		select {
+		case p.logout <- p:
+		default:
+		}
 	} else if strings.HasPrefix(msg.Uri, "hm://connect-state/v1/cluster") {
 		var clusterUpdate connectpb.ClusterUpdate
 		if err := proto.Unmarshal(msg.Payload, &clusterUpdate); err != nil {
@@ -363,13 +368,25 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		p.updateState(ctx)
 		return nil
 	case "set_repeating_context":
-		val := req.Command.Value.(bool)
+		val, ok := req.Command.Value.(bool)
+		if !ok {
+			p.runtime.Log.Warnf("unsupported set_repeating_context value type: %T", req.Command.Value)
+			return nil
+		}
 		return p.setOptions(ctx, &val, nil, nil)
 	case "set_repeating_track":
-		val := req.Command.Value.(bool)
+		val, ok := req.Command.Value.(bool)
+		if !ok {
+			p.runtime.Log.Warnf("unsupported set_repeating_track value type: %T", req.Command.Value)
+			return nil
+		}
 		return p.setOptions(ctx, nil, &val, nil)
 	case "set_shuffling_context":
-		val := req.Command.Value.(bool)
+		val, ok := req.Command.Value.(bool)
+		if !ok {
+			p.runtime.Log.Warnf("unsupported set_shuffling_context value type: %T", req.Command.Value)
+			return nil
+		}
 		return p.setOptions(ctx, nil, nil, &val)
 	case "set_options":
 		return p.setOptions(ctx, req.Command.RepeatingContext, req.Command.RepeatingTrack, req.Command.ShufflingContext)
@@ -419,25 +436,34 @@ func (p *AppPlayer) emitPlaybackState() {
 }
 
 func (p *AppPlayer) Close() {
-	select {
-	case p.stop <- struct{}{}:
-	default:
-	}
-	closeStream(p.primaryStream)
-	closeStream(p.secondaryStream)
-	p.clearTransitionStreamCache()
-	p.prefetchTimer.Stop()
-	p.shuffleRefreshTimer.Stop()
-	p.player.Close()
+	p.closeOnce.Do(func() {
+		select {
+		case p.stop <- struct{}{}:
+		default:
+		}
+		<-p.runDone
+
+		closeStream(p.primaryStream)
+		closeStream(p.secondaryStream)
+		p.clearTransitionStreamCache()
+		p.prefetchTimer.Stop()
+		p.shuffleRefreshTimer.Stop()
+		p.player.Close()
+	})
 }
 
 func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 	p.setRunContext(ctx)
-	go p.runPrefetchWorker(ctx)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		p.runPrefetchWorker(ctx)
+	})
+	defer close(p.runDone)
+	defer wg.Wait()
+
 	err := p.sess.Dealer().Connect(ctx)
 	if err != nil {
 		p.runtime.Log.WithError(err).Error("failed connecting to dealer")
-		p.Close()
 		return
 	}
 	apRecv := p.sess.Accesspoint().Receive(ap.PacketTypeProductInfo, ap.PacketTypeCountryCode)

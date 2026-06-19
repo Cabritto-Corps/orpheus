@@ -473,10 +473,11 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 	p.resetQueueMetaForContext(strings.TrimSpace(spotCtx.Uri))
 	p.resetPlaybackCaches(true)
 	p.syncPlayerTrackState(ctx, ctxTracks, nil)
+	allTracks := ctxTracks.AllTracks(ctx)
 	go func() {
 		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), 15*time.Second)
 		defer metaCancel()
-		p.resolveContextQueueMetadata(metaCtx, ctxTracks)
+		p.resolveContextQueueMetadata(metaCtx, allTracks)
 	}()
 	if err := p.loadCurrentTrack(ctx, paused, drop); err != nil {
 		return fmt.Errorf("failed loading current track (load context): %w", err)
@@ -890,10 +891,9 @@ func (p *AppPlayer) updateVolume(newVal uint32) {
 		p.runtime.Log.WithError(err).Error("failed writing state after volume change")
 	}
 	select {
-	case <-p.volumeUpdate:
+	case p.volumeUpdate <- float32(newVal) / player.MaxStateVolume:
 	default:
 	}
-	p.volumeUpdate <- float32(newVal) / player.MaxStateVolume
 }
 
 func (p *AppPlayer) volumeUpdated(ctx context.Context) {
@@ -916,7 +916,10 @@ func (p *AppPlayer) stopPlayback(ctx context.Context) error {
 		return fmt.Errorf("failed inactive state put: %w", err)
 	}
 	if p.runtime.Cfg.ZeroconfEnabled {
-		p.logout <- p
+		select {
+		case p.logout <- p:
+		default:
+		}
 	}
 	p.runtime.Emit(&ApiEvent{Type: ApiEventTypeInactive})
 	p.emitPlaybackState()

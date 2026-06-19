@@ -22,6 +22,7 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 		baseCtx:         ctx,
 		stop:            make(chan struct{}, 1),
 		logout:          make(chan *AppPlayer, 1),
+		runDone:         make(chan struct{}),
 		countryCode:     countryCode,
 		volumeUpdate:    volumeUpdate,
 		prefetchJobs:    make(chan prefetchJob, 16),

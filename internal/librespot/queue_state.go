@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	golibrespot "github.com/elxgy/go-librespot"
-	"github.com/elxgy/go-librespot/tracks"
+	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
 
 	"orpheus/internal/cache"
 )
@@ -92,12 +92,7 @@ func (p *AppPlayer) checkNamePreloadStatus(contextKey string) bool {
 	return p.namePreloadDone
 }
 
-func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, trackList *tracks.List) {
-	if trackList == nil {
-		return
-	}
-
-	all := trackList.AllTracks(ctx)
+func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*connectpb.ProvidedTrack) {
 	if len(all) == 0 {
 		return
 	}
