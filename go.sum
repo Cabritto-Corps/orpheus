@@ -78,6 +78,8 @@ github.com/elxgy/go-librespot v0.0.0-20260619014921-ab85225061af h1:ljS4oXdCivy6
 github.com/elxgy/go-librespot v0.0.0-20260619014921-ab85225061af/go.mod h1:LlSELKBN3gfkoSbVMjse7wsEvnfD//kQywKuICMjTzY=
 github.com/elxgy/go-librespot v0.0.0-20260619023342-b9aacba27f10 h1:s1YFcGt4Oz23MpxIM+2ASi2WuaBPs26BR8M9pBrEsWg=
 github.com/elxgy/go-librespot v0.0.0-20260619023342-b9aacba27f10/go.mod h1:LlSELKBN3gfkoSbVMjse7wsEvnfD//kQywKuICMjTzY=
+github.com/elxgy/go-librespot v0.0.0-20260619150955-5a8d4fd5f79f h1:VJLUcl3ap7B1G+uMMgdESU7mdYjmHXJ3c4h7MjsTM54=
+github.com/elxgy/go-librespot v0.0.0-20260619150955-5a8d4fd5f79f/go.mod h1:LlSELKBN3gfkoSbVMjse7wsEvnfD//kQywKuICMjTzY=
 github.com/envoyproxy/go-control-plane v0.9.0/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
 github.com/envoyproxy/go-control-plane v0.9.1-0.20191026205805-5f8ba28d4473/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
 github.com/envoyproxy/go-control-plane v0.9.4/go.mod h1:6rpuAdCZL397s3pYoYcLgu1mIlRU8Am5FuJP05cCM98=

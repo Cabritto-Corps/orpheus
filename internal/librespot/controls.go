@@ -72,9 +72,7 @@ func closeStream(s *player.Stream) {
 	if s == nil {
 		return
 	}
-	if closer, ok := s.Source.(interface{ Close() error }); ok {
-		_ = closer.Close()
-	}
+	_ = s.Close()
 }
 
 func (p *AppPlayer) resetPlaybackCaches(stopShuffleRefresh bool) {
