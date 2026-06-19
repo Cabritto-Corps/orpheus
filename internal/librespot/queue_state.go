@@ -136,7 +136,9 @@ func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*conn
 
 	batch, err := p.sess.Spclient().ResolveTrackOrEpisodeMetadataBatch(ctx, toResolve)
 	if err != nil {
-		p.runtime.Log.WithError(err).Warn("batch metadata resolution failed")
+		if ctx.Err() == nil {
+			p.runtime.Log.WithError(err).Warn("batch metadata resolution failed")
+		}
 		return
 	}
 	for uri, entry := range batch {
