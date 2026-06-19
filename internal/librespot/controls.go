@@ -515,7 +515,8 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	if p.secondaryStream != nil && p.secondaryStream.Is(*spotId) {
 		closeStream(p.primaryStream)
 		p.primaryStream = p.secondaryStream
-		p.clearSecondaryStream()
+		p.secondaryStream = nil
+		p.player.SetSecondaryStream(nil)
 		prefetched = true
 	} else {
 		if trackPosition == 0 {
