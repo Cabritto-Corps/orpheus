@@ -38,4 +38,3 @@ func NextRepeatTraversalOptions(curr TraversalOptions) TraversalOptions {
 	}
 	return next
 }
-

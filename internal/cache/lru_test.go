@@ -47,4 +47,3 @@ func TestLRUClearAndKeys(t *testing.T) {
 		t.Fatalf("expected no keys after clear, got %d", len(c.Keys()))
 	}
 }
-

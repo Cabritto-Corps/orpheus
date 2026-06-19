@@ -17,17 +17,17 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 	volumeUpdate := make(chan float32, 1)
 
 	p := &AppPlayer{
-		runtime:         runtime,
-		sess:            sess,
-		baseCtx:         ctx,
-		stop:            make(chan struct{}, 1),
-		logout:          make(chan *AppPlayer, 1),
-		runDone:         make(chan struct{}),
-		countryCode:     countryCode,
-		volumeUpdate:    volumeUpdate,
-		prefetchJobs:    make(chan prefetchJob, 16),
-		prefetchDone:    make(chan prefetchResult, 16),
-		queueMetaCache:  cache.NewLRU[string, PlaybackStateQueueEntry](8192),
+		runtime:        runtime,
+		sess:           sess,
+		baseCtx:        ctx,
+		stop:           make(chan struct{}, 1),
+		logout:         make(chan *AppPlayer, 1),
+		runDone:        make(chan struct{}),
+		countryCode:    countryCode,
+		volumeUpdate:   volumeUpdate,
+		prefetchJobs:   make(chan prefetchJob, 16),
+		prefetchDone:   make(chan prefetchResult, 16),
+		queueMetaCache: cache.NewLRU[string, PlaybackStateQueueEntry](8192),
 	}
 	p.prefetchTimer = time.NewTimer(math.MaxInt64)
 	p.prefetchTimer.Stop()

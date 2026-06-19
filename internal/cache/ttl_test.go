@@ -43,4 +43,3 @@ func TestTTLZeroDurationDoesNotExpire(t *testing.T) {
 		t.Fatalf("expected non-expiring key, got %d ok=%v", got, ok)
 	}
 }
-

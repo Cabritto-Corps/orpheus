@@ -16,10 +16,10 @@ func generateLikedSongsImage(size int) image.Image {
 	ssSize := size * ssFactor
 	ssImg := image.NewRGBA(image.Rect(0, 0, ssSize, ssSize))
 
-	tl := color.NRGBA{R: 60, G: 30, B: 120, A: 255}
-	tr := color.NRGBA{R: 40, G: 60, B: 150, A: 255}
-	bl := color.NRGBA{R: 30, G: 90, B: 160, A: 255}
-	br := color.NRGBA{R: 50, G: 130, B: 200, A: 255}
+	tl := color.NRGBA{R: 60, G: 30, B: 120}
+	tr := color.NRGBA{R: 40, G: 60, B: 150}
+	bl := color.NRGBA{R: 30, G: 90, B: 160}
+	br := color.NRGBA{R: 50, G: 130, B: 200}
 
 	heartScale := float64(ssSize) * 0.07
 	cx := float64(ssSize) / 2

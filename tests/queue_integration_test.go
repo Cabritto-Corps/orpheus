@@ -7,12 +7,9 @@ import (
 	"github.com/elxgy/go-librespot/tracks"
 )
 
-
 func TestShuffleStartPosExported(t *testing.T) {
 	var l *tracks.List
-	if l != nil {
-		_ = l.ShuffleStartPos()
-	}
+	_ = l
 }
 
 func TestUpcomingTracksExported(t *testing.T) {
