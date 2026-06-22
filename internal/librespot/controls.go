@@ -484,6 +484,13 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 		p.resolveContextQueueMetadata(metaCtx, allTracks)
 	}()
 	if err := p.loadCurrentTrack(ctx, paused, drop); err != nil {
+		if errors.Is(err, golibrespot.ErrMediaRestricted) || errors.Is(err, golibrespot.ErrNoSupportedFormats) {
+			p.runtime.Log.WithError(err).Info("first track unplayable, skipping to next")
+			if _, advErr := p.advanceNext(ctx, true, drop); advErr != nil {
+				return fmt.Errorf("failed loading current track (load context): %w", advErr)
+			}
+			return nil
+		}
 		return fmt.Errorf("failed loading current track (load context): %w", err)
 	}
 	return nil
