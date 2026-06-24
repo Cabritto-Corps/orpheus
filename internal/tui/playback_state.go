@@ -66,7 +66,7 @@ func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.
 	queueHeadChanged := prevQueueHead != "" && nextQueueHead != "" && prevQueueHead != nextQueueHead
 	sameURL := prevURL != "" && prevURL == nextURL
 	progressRewind := sameURL && prevProgress >= 0 && nextProgress >= 0 && prevProgress > nextProgress+progressRewindThresholdMS
-	shouldAdvance := nextURL != "" && (subjectChanged || trackChanged || queueHeadChanged || progressRewind)
+	shouldAdvance := subjectChanged || trackChanged || queueHeadChanged || progressRewind
 	if shouldAdvance {
 		m.transport.playerCoverEpoch++
 		if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
@@ -373,7 +373,10 @@ func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.Queue
 	sameTrack := func(id string) bool {
 		return golibrespot.NormalizeSpotifyId(id) != "" && golibrespot.NormalizeSpotifyId(id) == nextID
 	}
-	if out.AlbumImageURL == "" && prev != nil && prev.AlbumImageURL != "" {
+	// Carry prev's AlbumImageURL only on same-track pushes: intermediate librespot
+	// state updates for a new track often omit the cover URL and a stale URL from
+	// the previous track would render the wrong art until the second push arrives.
+	if out.AlbumImageURL == "" && prev != nil && prev.AlbumImageURL != "" && sameTrack(prev.TrackID) {
 		out.AlbumImageURL = prev.AlbumImageURL
 	}
 	if out.TrackName != "" && out.ArtistName != "" && out.DurationMS > 0 {

@@ -110,27 +110,30 @@ func kittyOverlayPlacement(key string) string {
 	return key
 }
 
-func (c *imgCache) beginKittyOverlayState(key, url string) (changed bool, shouldDelete bool, placementChanged bool) {
+func (c *imgCache) beginKittyOverlayState(key, url string) (changed bool, shouldDelete bool, placementChanged bool, urlChanged bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	wasVisible := c.kittyVisible
 	forceRedraw := c.kittyForceRedraw
+	prevURL := c.lastKittyURL
 	if key == "" {
 		c.lastKittyOverlay = ""
 		c.lastKittyURL = ""
 		c.kittyVisible = false
-		return false, wasVisible, false
+		return false, wasVisible, false, strings.TrimSpace(prevURL) != ""
 	}
 	if wasVisible && c.lastKittyOverlay == key && !forceRedraw {
-		return false, false, false
+		return false, false, false, false
 	}
 	placementChanged = kittyOverlayPlacement(c.lastKittyOverlay) != kittyOverlayPlacement(key)
+	trimmedURL := strings.TrimSpace(url)
+	urlChanged = strings.TrimSpace(prevURL) != trimmedURL
 	c.lastKittyOverlay = key
-	c.lastKittyURL = strings.TrimSpace(url)
+	c.lastKittyURL = trimmedURL
 	c.kittyVisible = true
 	c.kittyForceRedraw = false
-	return true, wasVisible || forceRedraw, placementChanged
+	return true, wasVisible || forceRedraw, placementChanged, urlChanged
 }
 
 func (c *imgCache) resetKittyOverlayState() {

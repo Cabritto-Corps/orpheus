@@ -239,7 +239,7 @@ func (m model) kittyOverlay() string {
 
 	layout := m.getBodyLayout()
 	if layout.coverCols <= 0 || layout.coverRows <= 0 {
-		_, shouldDelete, _ := m.ui.imgs.beginKittyOverlayState("", "")
+		_, shouldDelete, _, _ := m.ui.imgs.beginKittyOverlayState("", "")
 		if shouldDelete {
 			return kittyDeleteAll
 		}
@@ -268,7 +268,7 @@ func (m model) kittyOverlay() string {
 		}
 	}
 	if url == "" {
-		_, shouldDelete, _ := m.ui.imgs.beginKittyOverlayState("", "")
+		_, shouldDelete, _, _ := m.ui.imgs.beginKittyOverlayState("", "")
 		if shouldDelete {
 			return kittyDeleteAll
 		}
@@ -281,7 +281,7 @@ func (m model) kittyOverlay() string {
 		target := strings.TrimSpace(url)
 		shouldClear := displayed != "" && displayed != target
 		if shouldClear {
-			_, shouldDelete, _ := m.ui.imgs.beginKittyOverlayState("", "")
+			_, shouldDelete, _, _ := m.ui.imgs.beginKittyOverlayState("", "")
 			if shouldDelete {
 				return kittyDeleteAll
 			}
@@ -301,7 +301,7 @@ func (m model) kittyOverlay() string {
 		playerEpoch = m.transport.playerCoverEpoch
 	}
 	key := fmt.Sprintf("%d:%d:%d:%d:%s:%s:%s:%d", layout.coverStartRow, layout.coverStartCol, layout.coverCols, layout.coverRows, m.ui.activeTab, subjectID, url, playerEpoch)
-	changed, shouldDelete, placementChanged := m.ui.imgs.beginKittyOverlayState(key, url)
+	changed, shouldDelete, placementChanged, urlChanged := m.ui.imgs.beginKittyOverlayState(key, url)
 	if !changed {
 		return ""
 	}
@@ -310,7 +310,7 @@ func (m model) kittyOverlay() string {
 		return kittyDeleteAll
 	}
 	out := fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", layout.coverStartRow, layout.coverStartCol, payload)
-	if shouldDelete && placementChanged {
+	if shouldDelete && (placementChanged || urlChanged) {
 		return kittyDeleteAll + out
 	}
 	return out

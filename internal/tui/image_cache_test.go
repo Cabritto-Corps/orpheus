@@ -818,6 +818,57 @@ func TestKittyOverlayClearsStaleImageOnTabSwitchWithoutEncodedCover(t *testing.T
 	}
 }
 
+func TestKittyOverlayPlayerDeletesOldImageWhenURLChangesAtSamePlacement(t *testing.T) {
+	m := NewLoaderModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
+	m.ui.imgs.encoded["u2"] = "ZmFrZQ=="
+
+	if first := m.kittyOverlay(); first == "" {
+		t.Fatal("expected initial kitty render")
+	}
+	m.transport.status.TrackID = "track-2"
+	m.transport.status.AlbumImageURL = "u2"
+
+	second := m.kittyOverlay()
+	if second == "" {
+		t.Fatal("expected redraw when player cover URL changes")
+	}
+	if !strings.Contains(second, kittyDeleteAll) {
+		t.Fatal("expected old kitty image to be explicitly deleted before drawing new cover at the same placement")
+	}
+	if !strings.Contains(second, "ZmFrZQ==") {
+		t.Fatal("expected redraw to include the new cover payload")
+	}
+}
+
+func TestKittyOverlayPlayerSameURLRedrawOmitsDeleteAll(t *testing.T) {
+	m := NewLoaderModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	if first := m.kittyOverlay(); first == "" {
+		t.Fatal("expected initial kitty render")
+	}
+	m.transport.playerCoverEpoch++
+
+	second := m.kittyOverlay()
+	if second == "" {
+		t.Fatal("expected redraw on epoch bump")
+	}
+	if strings.Contains(second, kittyDeleteAll) {
+		t.Fatal("expected same-URL epoch redraw not to globally delete (no URL change)")
+	}
+}
+
 func hasInflightURL(cache *imgCache, url string) bool {
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()

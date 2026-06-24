@@ -72,13 +72,23 @@ func TestMergeStatusFromPreviousUsesTrackCacheFallback(t *testing.T) {
 	}
 }
 
-func TestMergeStatusFromPreviousFillsAlbumImageURLOnTrackChange(t *testing.T) {
-	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "https://same-album.jpg"}
+func TestMergeStatusFromPreviousDoesNotCarryAlbumImageURLOnTrackChange(t *testing.T) {
+	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "https://album-a.jpg"}
 	next := &spotify.PlaybackStatus{TrackID: "track-2"}
 
 	merged := mergeStatusFromPrevious(prev, nil, next, nil)
-	if merged.AlbumImageURL != "https://same-album.jpg" {
-		t.Fatalf("expected AlbumImageURL from prev on track change when next has none, got %q", merged.AlbumImageURL)
+	if merged.AlbumImageURL != "" {
+		t.Fatalf("expected empty AlbumImageURL on track change when next has none, got %q", merged.AlbumImageURL)
+	}
+}
+
+func TestMergeStatusFromPreviousCarriesAlbumImageURLOnSameTrack(t *testing.T) {
+	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "https://album-a.jpg"}
+	next := &spotify.PlaybackStatus{TrackID: "track-1"}
+
+	merged := mergeStatusFromPrevious(prev, nil, next, nil)
+	if merged.AlbumImageURL != "https://album-a.jpg" {
+		t.Fatalf("expected prev AlbumImageURL carried on same-track push when next has none, got %q", merged.AlbumImageURL)
 	}
 }
 
@@ -389,6 +399,21 @@ func TestAdvancePlayerCoverEpochNoChangeWhenSignalsMissing(t *testing.T) {
 	}
 	if m.ui.imgs.kittyForceRedraw {
 		t.Fatal("expected no kitty redraw force when transition signals are absent")
+	}
+}
+
+func TestAdvancePlayerCoverEpochOnTrackChangeEvenWithEmptyURL(t *testing.T) {
+	m := NewLoaderModel()
+	m.ui.imgs.protocol = imageProtocolKitty
+	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "https://album-a.jpg"}
+	next := &spotify.PlaybackStatus{TrackID: "track-2", AlbumImageURL: ""}
+
+	m.advancePlayerCoverEpochIfNeeded(prev, next, "q1", "q1")
+	if m.transport.playerCoverEpoch == 0 {
+		t.Fatal("expected player cover epoch to advance on track change even when next push lacks an AlbumImageURL")
+	}
+	if !m.ui.imgs.kittyForceRedraw {
+		t.Fatal("expected kitty redraw to be forced on track change with empty URL")
 	}
 }
 
