@@ -2,9 +2,9 @@ package librespot
 
 import (
 	"net/http"
-	"time"
 
 	golibrespot "github.com/elxgy/go-librespot"
+	"github.com/elxgy/go-librespot/sessionconfig"
 )
 
 type Config struct {
@@ -51,7 +51,7 @@ func NewRuntime(cfg *Config, appState *golibrespot.AppState, log golibrespot.Log
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
-	deviceType, err := parseDeviceType(cfg.DeviceType)
+	deviceType, err := sessionconfig.ParseDeviceType(cfg.DeviceType)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +62,7 @@ func NewRuntime(cfg *Config, appState *golibrespot.AppState, log golibrespot.Log
 	return &Runtime{
 		Log:             log,
 		Cfg:             cfg,
-		Client:          &http.Client{Timeout: 30 * time.Second},
+		Client:          &http.Client{Timeout: httpClientTimeout},
 		DeviceId:        deviceID,
 		DeviceType:      deviceType,
 		State:           appState,

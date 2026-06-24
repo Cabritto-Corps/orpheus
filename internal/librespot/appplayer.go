@@ -59,10 +59,7 @@ type AppPlayer struct {
 	prefetchJobs        chan prefetchJob
 	prefetchDone        chan prefetchResult
 
-	transitionStreamMu    sync.Mutex
-	transitionStreamCache map[string]*player.Stream
-	transitionStreamOrder []string
-	prefetchPending       map[string]struct{}
+	transitionCache       *transitionCache
 	prefetchGen           atomic.Uint64
 	shuffleRefreshPending bool
 	shuffleRefreshGen     uint64
@@ -176,7 +173,7 @@ func (p *AppPlayer) handleAccesspointPacket(pktType ap.PacketType, payload []byt
 }
 
 func (p *AppPlayer) handleDealerMessage(ctx context.Context, msg dealer.Message) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, spclientTimeout)
 	defer cancel()
 	if strings.HasPrefix(msg.Uri, "hm://pusher/v1/connections/") {
 		p.spotConnId = msg.Headers["Spotify-Connection-Id"]
@@ -402,7 +399,7 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 }
 
 func (p *AppPlayer) handleDealerRequest(ctx context.Context, req dealer.Request) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, contextResolveTimeout)
 	defer cancel()
 	switch req.MessageIdent {
 	case "hm://connect-state/v1/player/command":
@@ -414,7 +411,7 @@ func (p *AppPlayer) handleDealerRequest(ctx context.Context, req dealer.Request)
 }
 
 func (p *AppPlayer) handleTUICommand(ctx context.Context, cmd TUICommand) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, contextResolveTimeout)
 	defer cancel()
 	if handled, err := p.handleTUIContextCommand(ctx, cmd); handled || err != nil {
 		return err

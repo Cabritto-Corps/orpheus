@@ -13,23 +13,10 @@ func TestStreamCloseOperation(t *testing.T) {
 	src := &mockCloser{onClose: func() { closed = true }}
 	s := &player.Stream{Source: src}
 
-	if closer, ok := s.Source.(interface{ Close() error }); ok {
-		_ = closer.Close()
-	}
+	_ = s.Source.Close()
 	if !closed {
 		t.Fatal("expected stream source to be closed")
 	}
-}
-
-func TestStreamCloseOnNonCloser(t *testing.T) {
-	src := &mockNonCloser{}
-	s := &player.Stream{Source: src}
-
-	if closer, ok := s.Source.(interface{ Close() error }); ok {
-		_ = closer.Close()
-		t.Fatal("expected non-closer to not match interface")
-	}
-	_ = s // use the variable
 }
 
 type mockCloser struct {
@@ -45,12 +32,6 @@ func (m *mockCloser) Close() error {
 	}
 	return nil
 }
-
-type mockNonCloser struct{}
-
-func (m *mockNonCloser) SetPositionMs(int64) error   { return nil }
-func (m *mockNonCloser) PositionMs() int64           { return 0 }
-func (m *mockNonCloser) Read([]float32) (int, error) { return 0, nil }
 
 func TestPlayerStateDefaults(t *testing.T) {
 	state := golibrespot.NewPlayerState()

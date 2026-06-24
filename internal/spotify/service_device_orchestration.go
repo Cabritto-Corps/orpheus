@@ -32,10 +32,8 @@ func (s *Service) FindDeviceByName(ctx context.Context, target string) (*spotify
 		if time.Now().After(deadline) {
 			return nil, err
 		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(deviceLookupRetryDelay):
+		if err := sleepWithContext(ctx, deviceLookupRetryDelay); err != nil {
+			return nil, err
 		}
 	}
 }
@@ -203,12 +201,10 @@ func (s *Service) transferWithRetry(ctx context.Context, deviceID spotifyapi.ID)
 		if !IsTransientAPIError(err) {
 			return err
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(wait):
-			wait *= 2
+		if err := sleepWithContext(ctx, wait); err != nil {
+			return err
 		}
+		wait *= 2
 	}
 	return errors.New("transfer playback failed after retries")
 }

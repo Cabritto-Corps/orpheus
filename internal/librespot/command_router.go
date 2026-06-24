@@ -3,7 +3,6 @@ package librespot
 import (
 	"context"
 	"fmt"
-	"time"
 
 	golibrespot "github.com/elxgy/go-librespot"
 	"github.com/elxgy/go-librespot/player"
@@ -68,7 +67,7 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 		resultCh := cmd.ResultCh
 		uri := cmd.URI
 		go func() {
-			bgCtx, cancel := context.WithTimeout(p.ownerContext(), 30*time.Second)
+			bgCtx, cancel := context.WithTimeout(p.ownerContext(), contextTracksBgTimeout)
 			defer cancel()
 
 			spotCtx, err := p.sess.Spclient().ContextResolve(bgCtx, uri)
@@ -111,7 +110,7 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 			}
 
 			if len(trackURIs) > 0 {
-				metaCtx, metaCancel := context.WithTimeout(bgCtx, 15*time.Second)
+				metaCtx, metaCancel := context.WithTimeout(bgCtx, metadataBatchTimeout)
 				batchMeta, metaErr := p.sess.Spclient().ResolveTrackOrEpisodeMetadataBatch(metaCtx, trackURIs)
 				metaCancel()
 				if metaErr == nil {

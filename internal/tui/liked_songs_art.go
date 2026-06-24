@@ -96,10 +96,10 @@ func lerp4(tl, tr, bl, br uint8, tx, ty float64) uint8 {
 const likedSongsArtSize = 600
 
 func (m *model) preloadLikedSongsArt() {
-	if m.imgs == nil {
+	if m.ui.imgs == nil {
 		return
 	}
 	img := generateLikedSongsImage(likedSongsArtSize)
-	m.imgs.setImage(likedSongsImageURL, img, likedSongsArtSize, likedSongsArtSize)
-	m.imgs.pinURL(likedSongsImageURL)
+	m.ui.imgs.setImage(likedSongsImageURL, img, likedSongsArtSize, likedSongsArtSize)
+	m.ui.imgs.pinURL(likedSongsImageURL)
 }

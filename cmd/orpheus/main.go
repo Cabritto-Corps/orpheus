@@ -20,6 +20,7 @@ import (
 	"orpheus/internal/spotify"
 	"orpheus/internal/tui"
 
+	"github.com/elxgy/go-librespot/sessionconfig"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/oauth2"
 )
@@ -298,7 +299,7 @@ func runLibrespotTUI() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	sess, appState, err := librespot.NewSession(ctx, logger, librespot.SessionOptions{
+	sess, appState, err := sessionconfig.NewSessionFromConfigDir(ctx, logger, sessionconfig.Options{
 		ConfigDir:    configDir,
 		CallbackPort: 8080,
 		DeviceType:   "computer",

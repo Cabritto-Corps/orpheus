@@ -4,7 +4,6 @@ import (
 	"context"
 	"strconv"
 	"strings"
-	"time"
 
 	golibrespot "github.com/elxgy/go-librespot"
 	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
@@ -33,7 +32,7 @@ func (p *AppPlayer) BuildPlaybackStateUpdate() *PlaybackStateUpdate {
 	}
 
 	if p.state.tracks != nil {
-		ctx, cancel := context.WithTimeout(p.ownerContext(), 8*time.Second)
+		ctx, cancel := context.WithTimeout(p.ownerContext(), stateAdapterBatchTimeout)
 		defer cancel()
 		upcoming := p.state.tracks.UpcomingTracks(ctx, queueOverrideMaxTracks)
 		out.Queue = providedTracksToQueueEntries(p, upcoming)

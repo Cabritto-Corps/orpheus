@@ -1,6 +1,8 @@
 package librespot
 
 import (
+	"sync"
+
 	golibrespot "github.com/elxgy/go-librespot"
 	"github.com/elxgy/go-librespot/player"
 )
@@ -11,104 +13,150 @@ func streamCacheKey(id golibrespot.SpotifyId) string {
 	return id.Uri()
 }
 
-func (p *AppPlayer) hasTransitionCachedStream(id golibrespot.SpotifyId) bool {
-	p.transitionStreamMu.Lock()
-	defer p.transitionStreamMu.Unlock()
-	_, ok := p.transitionStreamCache[streamCacheKey(id)]
+type transitionCache struct {
+	mu      sync.Mutex
+	streams map[string]*player.Stream
+	order   []string
+	pending map[string]struct{}
+}
+
+func newTransitionCache() *transitionCache {
+	return &transitionCache{
+		streams: make(map[string]*player.Stream, transitionStreamCacheMax),
+		pending: make(map[string]struct{}, transitionStreamCacheMax),
+	}
+}
+
+func (c *transitionCache) Has(id golibrespot.SpotifyId) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.streams[streamCacheKey(id)]
 	return ok
 }
 
-func (p *AppPlayer) takeTransitionCachedStream(id golibrespot.SpotifyId) *player.Stream {
+func (c *transitionCache) Take(id golibrespot.SpotifyId) *player.Stream {
 	key := streamCacheKey(id)
-	p.transitionStreamMu.Lock()
-	defer p.transitionStreamMu.Unlock()
-	if p.transitionStreamCache == nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.streams == nil {
 		return nil
 	}
-	stream, ok := p.transitionStreamCache[key]
+	stream, ok := c.streams[key]
 	if !ok {
 		return nil
 	}
-	delete(p.transitionStreamCache, key)
-	for i := range p.transitionStreamOrder {
-		if p.transitionStreamOrder[i] == key {
-			p.transitionStreamOrder = append(p.transitionStreamOrder[:i], p.transitionStreamOrder[i+1:]...)
+	delete(c.streams, key)
+	for i := range c.order {
+		if c.order[i] == key {
+			c.order = append(c.order[:i], c.order[i+1:]...)
 			break
 		}
 	}
 	return stream
 }
 
-func (p *AppPlayer) putTransitionCachedStream(id golibrespot.SpotifyId, stream *player.Stream) bool {
+func (c *transitionCache) Put(id golibrespot.SpotifyId, stream *player.Stream) bool {
 	if stream == nil {
 		return false
 	}
 	key := streamCacheKey(id)
-	p.transitionStreamMu.Lock()
-	defer p.transitionStreamMu.Unlock()
-	if p.transitionStreamCache == nil {
-		p.transitionStreamCache = make(map[string]*player.Stream, transitionStreamCacheMax)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.streams == nil {
+		c.streams = make(map[string]*player.Stream, transitionStreamCacheMax)
 	}
-	if _, exists := p.transitionStreamCache[key]; exists {
+	if _, exists := c.streams[key]; exists {
 		return false
 	}
-	if len(p.transitionStreamOrder) >= transitionStreamCacheMax {
-		evict := p.transitionStreamOrder[0]
-		p.transitionStreamOrder = p.transitionStreamOrder[1:]
-		if old := p.transitionStreamCache[evict]; old != nil {
+	if len(c.order) >= transitionStreamCacheMax {
+		evict := c.order[0]
+		c.order = c.order[1:]
+		if old := c.streams[evict]; old != nil {
 			closeStream(old)
 		}
-		delete(p.transitionStreamCache, evict)
+		delete(c.streams, evict)
 	}
-	p.transitionStreamOrder = append(p.transitionStreamOrder, key)
-	p.transitionStreamCache[key] = stream
+	c.order = append(c.order, key)
+	c.streams[key] = stream
 	return true
 }
 
-func (p *AppPlayer) clearTransitionStreamCache() {
-	p.transitionStreamMu.Lock()
-	for _, s := range p.transitionStreamCache {
+func (c *transitionCache) Clear() {
+	c.mu.Lock()
+	for _, s := range c.streams {
 		closeStream(s)
 	}
-	p.transitionStreamCache = make(map[string]*player.Stream, transitionStreamCacheMax)
-	p.transitionStreamOrder = nil
-	p.prefetchPending = make(map[string]struct{}, transitionStreamCacheMax)
-	p.transitionStreamMu.Unlock()
+	c.streams = make(map[string]*player.Stream, transitionStreamCacheMax)
+	c.order = nil
+	c.pending = make(map[string]struct{}, transitionStreamCacheMax)
+	c.mu.Unlock()
+}
+
+func (c *transitionCache) HasPending(id golibrespot.SpotifyId) bool {
+	key := streamCacheKey(id)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.pending[key]
+	return ok
+}
+
+func (c *transitionCache) MarkPending(id golibrespot.SpotifyId) bool {
+	key := streamCacheKey(id)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pending == nil {
+		c.pending = make(map[string]struct{}, transitionStreamCacheMax)
+	}
+	if _, exists := c.pending[key]; exists {
+		return false
+	}
+	c.pending[key] = struct{}{}
+	return true
+}
+
+func (c *transitionCache) ClearPending(id golibrespot.SpotifyId) {
+	key := streamCacheKey(id)
+	c.mu.Lock()
+	delete(c.pending, key)
+	c.mu.Unlock()
+}
+
+func (c *transitionCache) ResetPending() {
+	c.mu.Lock()
+	c.pending = make(map[string]struct{}, transitionStreamCacheMax)
+	c.mu.Unlock()
+}
+
+func (p *AppPlayer) hasTransitionCachedStream(id golibrespot.SpotifyId) bool {
+	return p.transitionCache.Has(id)
+}
+
+func (p *AppPlayer) takeTransitionCachedStream(id golibrespot.SpotifyId) *player.Stream {
+	return p.transitionCache.Take(id)
+}
+
+func (p *AppPlayer) putTransitionCachedStream(id golibrespot.SpotifyId, stream *player.Stream) bool {
+	return p.transitionCache.Put(id, stream)
+}
+
+func (p *AppPlayer) clearTransitionStreamCache() {
+	p.transitionCache.Clear()
 }
 
 func (p *AppPlayer) bumpPrefetchGeneration() uint64 {
 	next := p.prefetchGen.Add(1)
-	p.transitionStreamMu.Lock()
-	p.prefetchPending = make(map[string]struct{}, transitionStreamCacheMax)
-	p.transitionStreamMu.Unlock()
+	p.transitionCache.ResetPending()
 	return next
 }
 
 func (p *AppPlayer) hasPrefetchPending(id golibrespot.SpotifyId) bool {
-	key := streamCacheKey(id)
-	p.transitionStreamMu.Lock()
-	defer p.transitionStreamMu.Unlock()
-	_, ok := p.prefetchPending[key]
-	return ok
+	return p.transitionCache.HasPending(id)
 }
 
 func (p *AppPlayer) markPrefetchPending(id golibrespot.SpotifyId) bool {
-	key := streamCacheKey(id)
-	p.transitionStreamMu.Lock()
-	defer p.transitionStreamMu.Unlock()
-	if p.prefetchPending == nil {
-		p.prefetchPending = make(map[string]struct{}, transitionStreamCacheMax)
-	}
-	if _, exists := p.prefetchPending[key]; exists {
-		return false
-	}
-	p.prefetchPending[key] = struct{}{}
-	return true
+	return p.transitionCache.MarkPending(id)
 }
 
 func (p *AppPlayer) clearPrefetchPending(id golibrespot.SpotifyId) {
-	key := streamCacheKey(id)
-	p.transitionStreamMu.Lock()
-	delete(p.prefetchPending, key)
-	p.transitionStreamMu.Unlock()
+	p.transitionCache.ClearPending(id)
 }

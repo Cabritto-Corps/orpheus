@@ -84,15 +84,17 @@ func TestMergeStatusFromPreviousFillsAlbumImageURLOnTrackChange(t *testing.T) {
 
 func TestSeekSettleProgressUsesPendingAndSentTarget(t *testing.T) {
 	m := model{
-		seekDebouncePending: 15000,
-		seekSentTarget:      10000,
-		seekSentAt:          time.Now(),
-		status:              &spotify.PlaybackStatus{ProgressMS: 5000},
+		transport: transportModel{
+			seekDebouncePending: 15000,
+			seekSentTarget:      10000,
+			seekSentAt:          time.Now(),
+			status:              &spotify.PlaybackStatus{ProgressMS: 5000},
+		},
 	}
 	if got := m.seekSettleProgress(); got != 15000 {
 		t.Fatalf("expected pending seek to win, got %d", got)
 	}
-	m.seekDebouncePending = -1
+	m.transport.seekDebouncePending = -1
 	if got := m.seekSettleProgress(); got != 10000 {
 		t.Fatalf("expected sent target while settling, got %d", got)
 	}
@@ -100,9 +102,11 @@ func TestSeekSettleProgressUsesPendingAndSentTarget(t *testing.T) {
 
 func TestShouldApplySeekSettleRequiresSameTrack(t *testing.T) {
 	m := model{
-		seekSentTarget: 10000,
-		seekSentAt:     time.Now(),
-		status:         &spotify.PlaybackStatus{TrackID: "track-a"},
+		transport: transportModel{
+			seekSentTarget: 10000,
+			seekSentAt:     time.Now(),
+			status:         &spotify.PlaybackStatus{TrackID: "track-a"},
+		},
 	}
 	if m.shouldApplySeekSettle(&spotify.PlaybackStatus{TrackID: "track-b"}) {
 		t.Fatalf("expected seek settle to be skipped across track switch")
@@ -113,7 +117,7 @@ func TestShouldApplySeekSettleRequiresSameTrack(t *testing.T) {
 }
 
 func TestClampSeekTargetAvoidsExactEnd(t *testing.T) {
-	m := model{status: &spotify.PlaybackStatus{DurationMS: 200000}}
+	m := model{transport: transportModel{status: &spotify.PlaybackStatus{DurationMS: 200000}}}
 	if got := m.clampSeekTarget(200000); got != 199750 {
 		t.Fatalf("expected clamp below duration end, got %d", got)
 	}
@@ -121,9 +125,11 @@ func TestClampSeekTargetAvoidsExactEnd(t *testing.T) {
 
 func TestSeekSettleProgressClampsPendingAtEnd(t *testing.T) {
 	m := model{
-		status:              &spotify.PlaybackStatus{DurationMS: 10000},
-		seekDebouncePending: 10000,
-		seekSentTarget:      -1,
+		transport: transportModel{
+			status:              &spotify.PlaybackStatus{DurationMS: 10000},
+			seekDebouncePending: 10000,
+			seekSentTarget:      -1,
+		},
 	}
 	if got := m.seekSettleProgress(); got != 9750 {
 		t.Fatalf("expected pending settle target clamped below end, got %d", got)
@@ -132,10 +138,12 @@ func TestSeekSettleProgressClampsPendingAtEnd(t *testing.T) {
 
 func TestSeekSettleProgressInterpolatedSentTargetClampsAtEnd(t *testing.T) {
 	m := model{
-		status:              &spotify.PlaybackStatus{DurationMS: 5000, Playing: true},
-		seekDebouncePending: -1,
-		seekSentTarget:      4900,
-		seekSentAt:          time.Now().Add(-450 * time.Millisecond),
+		transport: transportModel{
+			status:              &spotify.PlaybackStatus{DurationMS: 5000, Playing: true},
+			seekDebouncePending: -1,
+			seekSentTarget:      4900,
+			seekSentAt:          time.Now().Add(-450 * time.Millisecond),
+		},
 	}
 	if got := m.seekSettleProgress(); got != 4750 {
 		t.Fatalf("expected interpolated settle target clamped below end, got %d", got)
@@ -144,10 +152,12 @@ func TestSeekSettleProgressInterpolatedSentTargetClampsAtEnd(t *testing.T) {
 
 func TestShouldApplySeekSettleSkipsAfterWindowExpires(t *testing.T) {
 	m := model{
-		status:              &spotify.PlaybackStatus{TrackID: "track-a"},
-		seekDebouncePending: -1,
-		seekSentTarget:      10000,
-		seekSentAt:          time.Now().Add(-seekSettleWindow - 10*time.Millisecond),
+		transport: transportModel{
+			status:              &spotify.PlaybackStatus{TrackID: "track-a"},
+			seekDebouncePending: -1,
+			seekSentTarget:      10000,
+			seekSentAt:          time.Now().Add(-seekSettleWindow - 10*time.Millisecond),
+		},
 	}
 	if m.shouldApplySeekSettle(&spotify.PlaybackStatus{TrackID: "track-a"}) {
 		t.Fatal("expected seek settle to skip once settle window expires")
@@ -156,66 +166,78 @@ func TestShouldApplySeekSettleSkipsAfterWindowExpires(t *testing.T) {
 
 func TestClearSeekSettleTargetToleranceAndTimeout(t *testing.T) {
 	m := model{
-		seekSentTarget: 10000,
-		seekSentAt:     time.Now(),
+		transport: transportModel{
+			seekSentTarget: 10000,
+			seekSentAt:     time.Now(),
+		},
 	}
 	m.clearSeekSettleTarget(10850)
-	if m.seekSentTarget != -1 {
-		t.Fatalf("expected settle target to clear within tolerance, got %d", m.seekSentTarget)
+	if m.transport.seekSentTarget != -1 {
+		t.Fatalf("expected settle target to clear within tolerance, got %d", m.transport.seekSentTarget)
 	}
 
 	m = model{
-		seekSentTarget: 10000,
-		seekSentAt:     time.Now(),
+		transport: transportModel{
+			seekSentTarget: 10000,
+			seekSentAt:     time.Now(),
+		},
 	}
 	m.clearSeekSettleTarget(11000)
-	if m.seekSentTarget != 10000 {
-		t.Fatalf("expected settle target to remain when outside tolerance, got %d", m.seekSentTarget)
+	if m.transport.seekSentTarget != 10000 {
+		t.Fatalf("expected settle target to remain when outside tolerance, got %d", m.transport.seekSentTarget)
 	}
 
-	m.seekSentAt = time.Now().Add(-seekSettleWindow - 10*time.Millisecond)
+	m.transport.seekSentAt = time.Now().Add(-seekSettleWindow - 10*time.Millisecond)
 	m.clearSeekSettleTarget(0)
-	if m.seekSentTarget != -1 {
-		t.Fatalf("expected settle target to clear after timeout, got %d", m.seekSentTarget)
+	if m.transport.seekSentTarget != -1 {
+		t.Fatalf("expected settle target to clear after timeout, got %d", m.transport.seekSentTarget)
 	}
 }
 
 func TestShouldApplyIncomingQueueClearsPendingContextQueue(t *testing.T) {
 	m := model{
-		pendingContextFrom:   "track-a",
-		pendingContextFromAt: time.Now(),
-		queue:                []spotify.QueueItem{{ID: "old"}},
-		stableQueueLen:       1,
-		queueHasMore:         true,
+		transport: transportModel{
+			pendingContextFrom:   "track-a",
+			pendingContextFromAt: time.Now(),
+			queue:                []spotify.QueueItem{{ID: "old"}},
+			stableQueueLen:       1,
+			queueHasMore:         true,
+		},
 	}
 	if m.shouldApplyIncomingQueue("track-a") {
 		t.Fatal("expected queue update to be gated for matching pending context")
 	}
-	if m.queue != nil || m.stableQueueLen != 0 || m.queueHasMore {
-		t.Fatalf("expected queue state reset while waiting for context switch, got queue=%v stable=%d hasMore=%t", m.queue, m.stableQueueLen, m.queueHasMore)
+	if m.transport.queue != nil || m.transport.stableQueueLen != 0 || m.transport.queueHasMore {
+		t.Fatalf("expected queue state reset while waiting for context switch, got queue=%v stable=%d hasMore=%t", m.transport.queue, m.transport.stableQueueLen, m.transport.queueHasMore)
 	}
 }
 
 func TestShouldApplyIncomingQueueTimeoutAllowsApply(t *testing.T) {
 	m := model{
-		pendingContextFrom:   "track-a",
-		pendingContextFromAt: time.Now().Add(-(pendingContextTimeout + time.Second)),
-		queue:                []spotify.QueueItem{{ID: "old"}},
+		transport: transportModel{
+			pendingContextFrom:   "track-a",
+			pendingContextFromAt: time.Now().Add(-(pendingContextTimeout + time.Second)),
+			queue:                []spotify.QueueItem{{ID: "old"}},
+		},
 	}
 	if !m.shouldApplyIncomingQueue("track-a") {
 		t.Fatal("expected timeout to override pending context guard and allow queue apply")
 	}
-	if m.pendingContextFrom != "" {
+	if m.transport.pendingContextFrom != "" {
 		t.Fatal("expected pendingContextFrom to be cleared after timeout")
 	}
 }
 
 func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 	m := model{
-		status:           &spotify.PlaybackStatus{},
-		queue:            []spotify.QueueItem{{ID: "spotify:track:7GhIk7Il098yCjg4BQjzvb"}},
-		preloadedItemIDs: map[string]struct{}{"7GhIk7Il098yCjg4BQjzvb": {}, "ghost": {}},
-		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
+		transport: transportModel{
+			status: &spotify.PlaybackStatus{},
+			queue:  []spotify.QueueItem{{ID: "spotify:track:7GhIk7Il098yCjg4BQjzvb"}},
+		},
+		browse: browseModel{
+			preloadedItemIDs: map[string]struct{}{"7GhIk7Il098yCjg4BQjzvb": {}, "ghost": {}},
+			trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
+		},
 	}
 	m.applyMergedQueue(
 		[]spotify.QueueItem{
@@ -227,17 +249,17 @@ func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
 		true,
 	)
 
-	if _, ok := m.preloadedItemIDs["2WfaOiMkCvy7F5fcp2zZ8L"]; !ok {
+	if _, ok := m.browse.preloadedItemIDs["2WfaOiMkCvy7F5fcp2zZ8L"]; !ok {
 		t.Fatal("expected normalized spotify id to be preloaded")
 	}
-	if _, ok := m.preloadedItemIDs["plain-2"]; !ok {
+	if _, ok := m.browse.preloadedItemIDs["plain-2"]; !ok {
 		t.Fatal("expected plain id to be preloaded")
 	}
-	if _, ok := m.preloadedItemIDs["7GhIk7Il098yCjg4BQjzvb"]; ok {
+	if _, ok := m.browse.preloadedItemIDs["7GhIk7Il098yCjg4BQjzvb"]; ok {
 		t.Fatal("expected stale preloaded ids to be removed")
 	}
-	if len(m.preloadedItemIDs) != 2 {
-		t.Fatalf("expected preloaded id set to rebuild from merged queue, got %d entries", len(m.preloadedItemIDs))
+	if len(m.browse.preloadedItemIDs) != 2 {
+		t.Fatalf("expected preloaded id set to rebuild from merged queue, got %d entries", len(m.browse.preloadedItemIDs))
 	}
 }
 
@@ -251,14 +273,18 @@ func TestApplyMergedQueueReplacesQueueWithoutTailPreservation(t *testing.T) {
 		{ID: "next-b"},
 	}
 	m := model{
-		status:           &spotify.PlaybackStatus{ShuffleState: false},
-		queue:            prev,
-		preloadedItemIDs: make(map[string]struct{}),
-		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
+		transport: transportModel{
+			status: &spotify.PlaybackStatus{ShuffleState: false},
+			queue:  prev,
+		},
+		browse: browseModel{
+			preloadedItemIDs: make(map[string]struct{}),
+			trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
+		},
 	}
 	m.applyMergedQueue(next, false, true, true)
-	if len(m.queue) != len(next) {
-		t.Fatalf("expected queue to be replaced by incoming entries, got %d queue entries", len(m.queue))
+	if len(m.transport.queue) != len(next) {
+		t.Fatalf("expected queue to be replaced by incoming entries, got %d queue entries", len(m.transport.queue))
 	}
 }
 
@@ -269,14 +295,18 @@ func TestApplyMergedQueueDoesNotPreserveTailWhenShuffleTurnsOff(t *testing.T) {
 	}
 	next := prev[:3]
 	m := model{
-		status:           &spotify.PlaybackStatus{ShuffleState: true},
-		queue:            prev,
-		preloadedItemIDs: make(map[string]struct{}),
-		trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
+		transport: transportModel{
+			status: &spotify.PlaybackStatus{ShuffleState: true},
+			queue:  prev,
+		},
+		browse: browseModel{
+			preloadedItemIDs: make(map[string]struct{}),
+			trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
+		},
 	}
 	m.applyMergedQueue(next, false, true, true)
-	if len(m.queue) != len(next) {
-		t.Fatalf("expected queue to match incoming length after shuffle toggle, got %d queue entries", len(m.queue))
+	if len(m.transport.queue) != len(next) {
+		t.Fatalf("expected queue to match incoming length after shuffle toggle, got %d queue entries", len(m.transport.queue))
 	}
 }
 
@@ -326,7 +356,7 @@ func TestShouldEnsureAlbumImageLoadWhenCoverNotCached(t *testing.T) {
 		t.Fatal("expected load when current track cover is not cached")
 	}
 
-	m.imgs.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)), 0, 0)
+	m.ui.imgs.setImage("u1", image.NewRGBA(image.Rect(0, 0, 2, 2)), 0, 0)
 	if m.shouldEnsureAlbumImageLoad(prev, next) {
 		t.Fatal("expected no load when current track cover is already cached")
 	}
@@ -334,36 +364,36 @@ func TestShouldEnsureAlbumImageLoadWhenCoverNotCached(t *testing.T) {
 
 func TestAdvancePlayerCoverEpochOnQueueHeadChange(t *testing.T) {
 	m := NewLoaderModel()
-	m.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.protocol = imageProtocolKitty
 	prev := &spotify.PlaybackStatus{AlbumImageURL: "u1", ProgressMS: 10000}
 	next := &spotify.PlaybackStatus{AlbumImageURL: "u1", ProgressMS: 2000}
 
 	m.advancePlayerCoverEpochIfNeeded(prev, next, "q1", "q2")
-	if m.playerCoverEpoch == 0 {
+	if m.transport.playerCoverEpoch == 0 {
 		t.Fatal("expected player cover epoch to advance when queue head changes")
 	}
-	if !m.imgs.kittyForceRedraw {
+	if !m.ui.imgs.kittyForceRedraw {
 		t.Fatal("expected kitty redraw to be forced when epoch advances")
 	}
 }
 
 func TestAdvancePlayerCoverEpochNoChangeWhenSignalsMissing(t *testing.T) {
 	m := NewLoaderModel()
-	m.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.protocol = imageProtocolKitty
 	prev := &spotify.PlaybackStatus{AlbumImageURL: "u1", TrackID: "t1", ProgressMS: 10000}
 	next := &spotify.PlaybackStatus{AlbumImageURL: "u1", TrackID: "t1", ProgressMS: 10200}
 
 	m.advancePlayerCoverEpochIfNeeded(prev, next, "q1", "q1")
-	if m.playerCoverEpoch != 0 {
+	if m.transport.playerCoverEpoch != 0 {
 		t.Fatal("expected player cover epoch to remain unchanged")
 	}
-	if m.imgs.kittyForceRedraw {
+	if m.ui.imgs.kittyForceRedraw {
 		t.Fatal("expected no kitty redraw force when transition signals are absent")
 	}
 }
 
 func TestTransportTransitionBlocksTransportKeys(t *testing.T) {
-	m := model{keys: newKeys()}
+	m := model{ui: uiModel{keys: newKeys()}}
 	m.beginTransportTransition()
 	if !m.shouldBlockTransportInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}) {
 		t.Fatal("expected transport key to be blocked while transition pending")
@@ -375,31 +405,31 @@ func TestTransportTransitionBlocksTransportKeys(t *testing.T) {
 
 func TestHandlePlaybackKeyQueuesSkipWhenBlocked(t *testing.T) {
 	ch := make(chan librespot.TUICommand, 1)
-	m := model{keys: newKeys(), tuiCmdCh: ch}
+	m := model{ui: uiModel{keys: newKeys()}, tuiCmdCh: ch}
 	m.beginTransportTransition()
 	next, _ := m.handlePlaybackKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	got := next.(model)
-	if len(got.inputQueue) != 1 || got.inputQueue[0].kind != playbackInputNext {
-		t.Fatalf("expected one queued next input action, got %+v", got.inputQueue)
+	if len(got.transport.inputQueue) != 1 || got.transport.inputQueue[0].kind != playbackInputNext {
+		t.Fatalf("expected one queued next input action, got %+v", got.transport.inputQueue)
 	}
 }
 
 func TestExecutorStateTracksInFlightFlags(t *testing.T) {
 	m := model{}
 	m.syncExecutorState()
-	if m.executorState != executorStateIdle {
-		t.Fatalf("expected idle executor, got %s", m.executorState)
+	if m.transport.executorState != executorStateIdle {
+		t.Fatalf("expected idle executor, got %s", m.transport.executorState)
 	}
-	m.actionInFlight = true
+	m.transport.actionInFlight = true
 	m.syncExecutorState()
-	if m.executorState != executorStateAwaitingAction {
-		t.Fatalf("expected awaiting-action, got %s", m.executorState)
+	if m.transport.executorState != executorStateAwaitingAction {
+		t.Fatalf("expected awaiting-action, got %s", m.transport.executorState)
 	}
-	m.actionInFlight = false
-	m.transportTransitionPending = true
+	m.transport.actionInFlight = false
+	m.transport.transition.Begin(time.Now(), "")
 	m.syncExecutorState()
-	if m.executorState != executorStateAwaitingTransport {
-		t.Fatalf("expected awaiting-transport, got %s", m.executorState)
+	if m.transport.executorState != executorStateAwaitingTransport {
+		t.Fatalf("expected awaiting-transport, got %s", m.transport.executorState)
 	}
 }
 
@@ -411,8 +441,8 @@ func TestInputQueueCoalescesSeekAndVolumeAndDedupsToggle(t *testing.T) {
 	m.enqueuePlaybackInput(playbackInputSeekFwd)
 	m.enqueuePlaybackInput(playbackInputShuffle)
 	m.enqueuePlaybackInput(playbackInputShuffle)
-	kinds := make([]playbackInputKind, 0, len(m.inputQueue))
-	for _, it := range m.inputQueue {
+	kinds := make([]playbackInputKind, 0, len(m.transport.inputQueue))
+	for _, it := range m.transport.inputQueue {
 		kinds = append(kinds, it.kind)
 	}
 	if len(kinds) != 3 || kinds[0] != playbackInputVolDown || kinds[1] != playbackInputSeekFwd || kinds[2] != playbackInputShuffle {
@@ -424,8 +454,8 @@ func TestInputQueueDoesNotDedupLoopCycle(t *testing.T) {
 	m := model{}
 	m.enqueuePlaybackInput(playbackInputLoop)
 	m.enqueuePlaybackInput(playbackInputLoop)
-	if len(m.inputQueue) != 2 || m.inputQueue[0].kind != playbackInputLoop || m.inputQueue[1].kind != playbackInputLoop {
-		t.Fatalf("expected loop presses to be preserved for repeat cycling, got %+v", m.inputQueue)
+	if len(m.transport.inputQueue) != 2 || m.transport.inputQueue[0].kind != playbackInputLoop || m.transport.inputQueue[1].kind != playbackInputLoop {
+		t.Fatalf("expected loop presses to be preserved for repeat cycling, got %+v", m.transport.inputQueue)
 	}
 }
 
@@ -441,23 +471,23 @@ func TestInputPriorityPrefersTransport(t *testing.T) {
 func TestStuckTransportTransitionSetsRecovery(t *testing.T) {
 	m := model{}
 	m.beginTransportTransition()
-	m.transportTransitionStartedAt = time.Now().Add(-5 * time.Second)
-	m.maybeClearTransportTransition(&spotify.PlaybackStatus{TrackID: m.transportTransitionFromTrack})
-	if m.transportTransitionPending {
+	m.transport.transition.startedAt = time.Now().Add(-5 * time.Second)
+	m.maybeClearTransportTransition(&spotify.PlaybackStatus{TrackID: m.transport.transition.FromTrack()})
+	if m.transport.transition.Pending() {
 		t.Fatal("expected transition to clear on timeout")
 	}
-	if !m.transportRecoveryPending {
+	if !m.transport.transition.RecoveryPending() {
 		t.Fatal("expected recovery pending after stuck transition")
 	}
-	if m.transportStuckCount != 1 {
-		t.Fatalf("expected stuck count to increment, got %d", m.transportStuckCount)
+	if m.transport.transition.StuckCount() != 1 {
+		t.Fatalf("expected stuck count to increment, got %d", m.transport.transition.StuckCount())
 	}
 }
 
 func TestHandlePollMsgIgnoresStaleToken(t *testing.T) {
 	m := NewLoaderModel()
-	m.stateFetchToken = 3
-	m.playbackErr = nil
+	m.ui.stateFetchToken = 3
+	m.transport.playbackErr = nil
 	msg := pollMsg{
 		token: 2,
 		status: &spotify.PlaybackStatus{
@@ -466,15 +496,15 @@ func TestHandlePollMsgIgnoresStaleToken(t *testing.T) {
 	}
 	next, _ := m.handlePollMsg(msg)
 	got := next.(model)
-	if got.status != nil {
+	if got.transport.status != nil {
 		t.Fatal("expected stale poll message to be ignored")
 	}
 }
 
 func TestHandleActionReconcileMsgIgnoresStaleToken(t *testing.T) {
 	m := NewLoaderModel()
-	m.stateFetchToken = 5
-	m.status = &spotify.PlaybackStatus{TrackID: "current"}
+	m.ui.stateFetchToken = 5
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "current"}
 	msg := actionReconcileMsg{
 		token: 4,
 		status: &spotify.PlaybackStatus{
@@ -483,15 +513,15 @@ func TestHandleActionReconcileMsgIgnoresStaleToken(t *testing.T) {
 	}
 	next, _ := m.handleActionReconcileMsg(msg)
 	got := next.(model)
-	if got.status == nil || got.status.TrackID != "current" {
+	if got.transport.status == nil || got.transport.status.TrackID != "current" {
 		t.Fatal("expected stale reconcile message to be ignored")
 	}
 }
 
 func TestHandleActionMsgIgnoresStaleToken(t *testing.T) {
 	m := NewLoaderModel()
-	m.stateFetchToken = 7
-	m.status = &spotify.PlaybackStatus{TrackID: "current"}
+	m.ui.stateFetchToken = 7
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "current"}
 	msg := actionMsg{
 		token:    6,
 		action:   "play-from-browser",
@@ -500,35 +530,35 @@ func TestHandleActionMsgIgnoresStaleToken(t *testing.T) {
 	}
 	next, _ := m.handleActionMsg(msg)
 	got := next.(model)
-	if got.activeTab == tabPlayer {
+	if got.ui.activeTab == tabPlayer {
 		t.Fatal("expected stale action message to be ignored")
 	}
-	if got.status == nil || got.status.TrackID != "current" {
+	if got.transport.status == nil || got.transport.status.TrackID != "current" {
 		t.Fatal("expected stale action message to leave state untouched")
 	}
 }
 
 func TestHandlePlaybackStateMsgIgnoresOutOfOrderSeq(t *testing.T) {
 	m := NewLoaderModel()
-	m.lastPlaybackStateSeq = 10
+	m.ui.lastPlaybackStateSeq = 10
 	msg := playbackStateMsg{
 		seq:    9,
 		status: &spotify.PlaybackStatus{TrackID: "old"},
 	}
 	next, _ := m.handlePlaybackStateMsg(msg)
 	got := next.(model)
-	if got.status != nil {
+	if got.transport.status != nil {
 		t.Fatal("expected out-of-order playback state message to be ignored")
 	}
 }
 
 func TestHandlePollMsgClearsQueueOnTrackChangeWithoutQueueFetch(t *testing.T) {
 	m := NewLoaderModel()
-	m.stateFetchToken = 1
-	m.status = &spotify.PlaybackStatus{TrackID: "track-a"}
-	m.queue = []spotify.QueueItem{{ID: "track-a"}, {ID: "track-b"}}
-	m.stableQueueLen = len(m.queue)
-	m.queueHasMore = true
+	m.ui.stateFetchToken = 1
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "track-a"}
+	m.transport.queue = []spotify.QueueItem{{ID: "track-a"}, {ID: "track-b"}}
+	m.transport.stableQueueLen = len(m.transport.queue)
+	m.transport.queueHasMore = true
 
 	msg := pollMsg{
 		token:        1,
@@ -537,18 +567,18 @@ func TestHandlePollMsgClearsQueueOnTrackChangeWithoutQueueFetch(t *testing.T) {
 	}
 	next, _ := m.handlePollMsg(msg)
 	got := next.(model)
-	if got.queue != nil || got.stableQueueLen != 0 || got.queueHasMore {
-		t.Fatalf("expected stale queue to clear on track change without queue fetch, got queue=%v stable=%d hasMore=%t", got.queue, got.stableQueueLen, got.queueHasMore)
+	if got.transport.queue != nil || got.transport.stableQueueLen != 0 || got.transport.queueHasMore {
+		t.Fatalf("expected stale queue to clear on track change without queue fetch, got queue=%v stable=%d hasMore=%t", got.transport.queue, got.transport.stableQueueLen, got.transport.queueHasMore)
 	}
 }
 
 func TestStatusQueueCacheScopedPerModel(t *testing.T) {
 	m1 := NewLoaderModel()
 	m2 := NewLoaderModel()
-	if m1.statusQueueCache == nil || m2.statusQueueCache == nil {
+	if m1.ui.statusQueueCache == nil || m2.ui.statusQueueCache == nil {
 		t.Fatal("expected status queue cache to be initialized")
 	}
-	if m1.statusQueueCache == m2.statusQueueCache {
+	if m1.ui.statusQueueCache == m2.ui.statusQueueCache {
 		t.Fatal("expected each model to own an isolated status queue cache")
 	}
 }

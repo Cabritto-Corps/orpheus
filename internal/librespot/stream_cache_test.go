@@ -15,8 +15,12 @@ func mustID(uri string) golibrespot.SpotifyId {
 	return *id
 }
 
+func newTestAppPlayer() *AppPlayer {
+	return &AppPlayer{transitionCache: newTransitionCache()}
+}
+
 func TestPutAndHasTransitionCachedStream(t *testing.T) {
-	p := &AppPlayer{}
+	p := newTestAppPlayer()
 	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
 	stream := &player.Stream{}
 
@@ -29,7 +33,7 @@ func TestPutAndHasTransitionCachedStream(t *testing.T) {
 }
 
 func TestPutDuplicateReturnsFalse(t *testing.T) {
-	p := &AppPlayer{}
+	p := newTestAppPlayer()
 	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
 	p.putTransitionCachedStream(id, &player.Stream{})
 
@@ -39,7 +43,7 @@ func TestPutDuplicateReturnsFalse(t *testing.T) {
 }
 
 func TestPutNilStreamReturnsFalse(t *testing.T) {
-	p := &AppPlayer{}
+	p := newTestAppPlayer()
 	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
 	if p.putTransitionCachedStream(id, nil) {
 		t.Fatal("expected put nil to return false")
@@ -47,7 +51,7 @@ func TestPutNilStreamReturnsFalse(t *testing.T) {
 }
 
 func TestTakeRemovesAndReturns(t *testing.T) {
-	p := &AppPlayer{}
+	p := newTestAppPlayer()
 	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
 	stream := &player.Stream{}
 	p.putTransitionCachedStream(id, stream)
@@ -62,9 +66,7 @@ func TestTakeRemovesAndReturns(t *testing.T) {
 }
 
 func TestTakeNonexistentReturnsNil(t *testing.T) {
-	p := &AppPlayer{}
-	p.transitionStreamCache = make(map[string]*player.Stream)
-	p.transitionStreamOrder = nil
+	p := newTestAppPlayer()
 	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
 	if p.takeTransitionCachedStream(id) != nil {
 		t.Fatal("expected nil for nonexistent")
@@ -72,7 +74,7 @@ func TestTakeNonexistentReturnsNil(t *testing.T) {
 }
 
 func TestEvictionRespectsCacheSize(t *testing.T) {
-	p := &AppPlayer{}
+	p := newTestAppPlayer()
 
 	ids := []string{
 		"spotify:track:7GhIk7Il098yCjg4BQjzvb",
@@ -86,16 +88,28 @@ func TestEvictionRespectsCacheSize(t *testing.T) {
 		p.putTransitionCachedStream(mustID(uri), &player.Stream{})
 	}
 
-	if len(p.transitionStreamCache) > transitionStreamCacheMax {
-		t.Fatalf("cache should not exceed max %d, got %d", transitionStreamCacheMax, len(p.transitionStreamCache))
+	for _, uri := range ids {
+		if !p.hasTransitionCachedStream(mustID(uri)) {
+			t.Fatalf("expected %s to remain cached (under cap)", uri)
+		}
 	}
-	if len(p.transitionStreamOrder) > transitionStreamCacheMax {
-		t.Fatalf("order should not exceed max %d, got %d", transitionStreamCacheMax, len(p.transitionStreamOrder))
+
+	var gid [16]byte
+	for i := range transitionStreamCacheMax + 1 {
+		gid[0] = byte(i + 1)
+		gid[1] = byte(i >> 8)
+		sid := golibrespot.SpotifyIdFromGid(golibrespot.SpotifyIdTypeTrack, gid[:])
+		p.putTransitionCachedStream(sid, &player.Stream{})
+	}
+
+	firstURI := ids[0]
+	if p.hasTransitionCachedStream(mustID(firstURI)) {
+		t.Fatalf("expected %s to be evicted after filling past cap", firstURI)
 	}
 }
 
 func TestClearTransitionStreamCache(t *testing.T) {
-	p := &AppPlayer{}
+	p := newTestAppPlayer()
 	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
 	p.putTransitionCachedStream(id, &player.Stream{})
 
@@ -103,13 +117,21 @@ func TestClearTransitionStreamCache(t *testing.T) {
 	if p.hasTransitionCachedStream(id) {
 		t.Fatal("expected cache to be empty after clear")
 	}
-	if len(p.transitionStreamCache) != 0 {
-		t.Fatal("expected empty cache map")
+}
+
+func TestClearTransitionStreamCacheAlsoClearsPending(t *testing.T) {
+	p := newTestAppPlayer()
+	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
+	p.markPrefetchPending(id)
+
+	p.clearTransitionStreamCache()
+	if p.hasPrefetchPending(id) {
+		t.Fatal("expected clear to also reset prefetch pending set")
 	}
 }
 
 func TestBumpPrefetchGeneration(t *testing.T) {
-	p := &AppPlayer{}
+	p := newTestAppPlayer()
 	g1 := p.bumpPrefetchGeneration()
 	g2 := p.bumpPrefetchGeneration()
 	if g2 <= g1 {
@@ -117,8 +139,19 @@ func TestBumpPrefetchGeneration(t *testing.T) {
 	}
 }
 
+func TestBumpPrefetchGenerationResetsPending(t *testing.T) {
+	p := newTestAppPlayer()
+	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
+	p.markPrefetchPending(id)
+
+	p.bumpPrefetchGeneration()
+	if p.hasPrefetchPending(id) {
+		t.Fatal("expected bump to reset prefetch pending set")
+	}
+}
+
 func TestMarkAndHasPrefetchPending(t *testing.T) {
-	p := &AppPlayer{}
+	p := newTestAppPlayer()
 	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
 
 	if !p.markPrefetchPending(id) {
@@ -133,7 +166,7 @@ func TestMarkAndHasPrefetchPending(t *testing.T) {
 }
 
 func TestClearPrefetchPending(t *testing.T) {
-	p := &AppPlayer{}
+	p := newTestAppPlayer()
 	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
 	p.markPrefetchPending(id)
 

@@ -33,6 +33,7 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 	p.prefetchTimer.Stop()
 	p.shuffleRefreshTimer = time.NewTimer(math.MaxInt64)
 	p.shuffleRefreshTimer.Stop()
+	p.transitionCache = newTransitionCache()
 
 	p.initState()
 

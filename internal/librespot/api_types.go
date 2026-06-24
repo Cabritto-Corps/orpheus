@@ -1,18 +1,5 @@
 package librespot
 
-import (
-	"errors"
-)
-
-var (
-	ErrNoSession        = errors.New("no session")
-	ErrBadRequest       = errors.New("bad request")
-	ErrForbidden        = errors.New("forbidden")
-	ErrNotFound         = errors.New("not found")
-	ErrMethodNotAllowed = errors.New("method not allowed")
-	ErrTooManyRequests  = errors.New("the app has exceeded its rate limits")
-)
-
 type ApiEventType string
 
 const (

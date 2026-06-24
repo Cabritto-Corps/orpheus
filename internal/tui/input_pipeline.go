@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"orpheus/internal/librespot"
+	"orpheus/internal/playbackdomain"
 )
 
 type commandExecutorState string
@@ -50,24 +51,24 @@ const (
 
 func (m *model) syncExecutorState() {
 	switch {
-	case m.actionInFlight:
-		m.executorState = executorStateAwaitingAction
-	case m.transportTransitionPending:
-		m.executorState = executorStateAwaitingTransport
+	case m.transport.actionInFlight:
+		m.transport.executorState = executorStateAwaitingAction
+	case m.transport.transition.Pending():
+		m.transport.executorState = executorStateAwaitingTransport
 	default:
-		m.executorState = executorStateIdle
+		m.transport.executorState = executorStateIdle
 	}
 }
 
 func (m *model) enqueuePlaybackInput(action playbackInputKind) {
-	if len(m.inputQueue) >= maxInputQueueSize {
-		m.inputQueue = m.inputQueue[1:]
+	if len(m.transport.inputQueue) >= maxInputQueueSize {
+		m.transport.inputQueue = m.transport.inputQueue[1:]
 	}
 	if isVolumeAction(action) {
-		m.dropQueuedByPredicate(func(kind playbackInputKind) bool { return isVolumeAction(kind) })
+		m.dropQueuedByPredicate(isVolumeAction)
 	}
 	if isSeekAction(action) {
-		m.dropQueuedByPredicate(func(kind playbackInputKind) bool { return isSeekAction(kind) })
+		m.dropQueuedByPredicate(isSeekAction)
 	}
 	if shouldDedupQueuedAction(action) && m.hasQueuedAction(action) {
 		return
@@ -75,41 +76,41 @@ func (m *model) enqueuePlaybackInput(action playbackInputKind) {
 	if action == playbackInputRefresh && m.hasQueuedAction(action) {
 		return
 	}
-	if action == playbackInputRefresh && m.executorState != executorStateIdle {
+	if action == playbackInputRefresh && m.transport.executorState != executorStateIdle {
 		return
 	}
-	m.inputQueue = append(m.inputQueue, playbackInput{
+	m.transport.inputQueue = append(m.transport.inputQueue, playbackInput{
 		kind:     action,
 		priority: inputPriorityOf(action),
 	})
 }
 
 func (m *model) requeueFront(action playbackInputKind) {
-	if len(m.inputQueue) >= maxInputQueueSize {
-		m.inputQueue = m.inputQueue[:maxInputQueueSize-1]
+	if len(m.transport.inputQueue) >= maxInputQueueSize {
+		m.transport.inputQueue = m.transport.inputQueue[:maxInputQueueSize-1]
 	}
 	retries := 0
-	if len(m.inputQueue) > 0 && m.inputQueue[0].kind == action {
-		retries = m.inputQueue[0].retryCount + 1
+	if len(m.transport.inputQueue) > 0 && m.transport.inputQueue[0].kind == action {
+		retries = m.transport.inputQueue[0].retryCount + 1
 	}
 	if retries >= maxRequeueRetries {
 		return
 	}
-	m.inputQueue = append([]playbackInput{{kind: action, priority: inputPriorityOf(action), retryCount: retries}}, m.inputQueue...)
+	m.transport.inputQueue = append([]playbackInput{{kind: action, priority: inputPriorityOf(action), retryCount: retries}}, m.transport.inputQueue...)
 }
 
 func (m *model) pumpInputExecutor() tea.Cmd {
 	for range maxInputActionsPerTick {
 		m.syncExecutorState()
-		if m.executorState != executorStateIdle || len(m.inputQueue) == 0 {
+		if m.transport.executorState != executorStateIdle || len(m.transport.inputQueue) == 0 {
 			return nil
 		}
 		idx := m.dequeueNextInputIndex()
-		if len(m.inputQueue) == 0 {
+		if len(m.transport.inputQueue) == 0 {
 			return nil
 		}
-		action := m.inputQueue[idx].kind
-		m.inputQueue = append(m.inputQueue[:idx], m.inputQueue[idx+1:]...)
+		action := m.transport.inputQueue[idx].kind
+		m.transport.inputQueue = append(m.transport.inputQueue[:idx], m.transport.inputQueue[idx+1:]...)
 		if cmd := m.executePlaybackInput(action); cmd != nil {
 			return cmd
 		}
@@ -118,10 +119,12 @@ func (m *model) pumpInputExecutor() tea.Cmd {
 }
 
 func (m *model) consumeTransportRecoveryCmd() tea.Cmd {
-	if !m.transportRecoveryPending || m.actionInFlight {
+	if m.transport.actionInFlight || !m.transport.transition.RecoveryPending() {
 		return nil
 	}
-	m.transportRecoveryPending = false
+	if !m.transport.transition.ConsumeRecovery() {
+		return nil
+	}
 	if m.tuiCmdCh != nil || m.service == nil {
 		return nil
 	}
@@ -138,7 +141,7 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 	case playbackInputPlayPause:
 		if m.tuiCmdCh != nil {
 			kind := librespot.TUICommandResume
-			if m.status != nil && m.status.Playing {
+			if m.transport.status != nil && m.transport.status.Playing {
 				kind = librespot.TUICommandPause
 			}
 			select {
@@ -149,10 +152,10 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 				return nil
 			}
 		}
-		rollback := cloneStatus(m.status)
+		rollback := cloneStatus(m.transport.status)
 		shouldPlay := rollback == nil || !rollback.Playing
-		if m.status != nil {
-			m.status.Playing = shouldPlay
+		if m.transport.status != nil {
+			m.transport.status.Playing = shouldPlay
 		}
 		m.beginReconcileAction(reconcileActionWindow)
 		return m.actionWithReconcileCmd(func(ctx context.Context) error {
@@ -168,10 +171,10 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 				return nil
 			}
 			m.beginTransportTransition()
-			m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
+			m.ui.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
 			return nil
 		}
-		rollback := cloneStatus(m.status)
+		rollback := cloneStatus(m.transport.status)
 		m.applyOptimisticSkip(true)
 		m.beginTransportTransition()
 		m.beginReconcileAction(reconcileActionWindow)
@@ -185,10 +188,10 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 				return nil
 			}
 			m.beginTransportTransition()
-			m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
+			m.ui.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
 			return nil
 		}
-		rollback := cloneStatus(m.status)
+		rollback := cloneStatus(m.transport.status)
 		m.applyOptimisticSkip(false)
 		m.beginTransportTransition()
 		m.beginReconcileAction(reconcileActionWindow)
@@ -206,26 +209,28 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 			m.clearPreloadedTracks()
 			return nil
 		}
-		rollback := cloneStatus(m.status)
+		rollback := cloneStatus(m.transport.status)
 		nextShuffle := true
-		if m.status != nil {
-			nextShuffle = !m.status.ShuffleState
-			m.status.ShuffleState = nextShuffle
+		if m.transport.status != nil {
+			nextShuffle = !m.transport.status.ShuffleState
+			m.transport.status.ShuffleState = nextShuffle
 		}
 		m.clearPreloadedTracks()
-		m.stableQueueLen = len(m.queue)
+		m.transport.stableQueueLen = len(m.transport.queue)
 		m.beginReconcileAction(0)
 		return m.actionWithReconcileCmd(func(ctx context.Context) error {
 			return m.service.Shuffle(ctx, m.deviceName, nextShuffle)
 		}, rollback)
 	case playbackInputLoop:
-		if m.status == nil {
+		if m.transport.status == nil {
 			return nil
 		}
 		if m.tuiCmdCh != nil {
 			select {
 			case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandCycleRepeat}:
-				m.status.RepeatContext, m.status.RepeatTrack = nextRepeatMode(m.status.RepeatContext, m.status.RepeatTrack)
+				next := playbackdomain.NextRepeatTraversalOptions(playbackdomain.TraversalOptions{RepeatContext: m.transport.status.RepeatContext, RepeatTrack: m.transport.status.RepeatTrack})
+				m.transport.status.RepeatContext = next.RepeatContext
+				m.transport.status.RepeatTrack = next.RepeatTrack
 			default:
 				m.requeueFront(action)
 			}
@@ -234,43 +239,45 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 		if m.service == nil {
 			return nil
 		}
-		rollback := cloneStatus(m.status)
-		m.status.RepeatContext, m.status.RepeatTrack = nextRepeatMode(m.status.RepeatContext, m.status.RepeatTrack)
+		rollback := cloneStatus(m.transport.status)
+		next := playbackdomain.NextRepeatTraversalOptions(playbackdomain.TraversalOptions{RepeatContext: m.transport.status.RepeatContext, RepeatTrack: m.transport.status.RepeatTrack})
+		m.transport.status.RepeatContext = next.RepeatContext
+		m.transport.status.RepeatTrack = next.RepeatTrack
 		m.beginReconcileAction(reconcileActionWindow)
-		state := repeatModeString(m.status.RepeatContext, m.status.RepeatTrack)
+		state := repeatModeString(m.transport.status.RepeatContext, m.transport.status.RepeatTrack)
 		return m.actionWithReconcileCmd(func(ctx context.Context) error {
 			return m.service.SetRepeat(ctx, m.deviceName, state)
 		}, rollback)
 	case playbackInputVolUp:
-		if m.status == nil {
+		if m.transport.status == nil {
 			return nil
 		}
 		var target int
-		if m.volDebouncePending >= 0 {
-			target = clampInt(m.volDebouncePending+5, 0, 100)
+		if m.transport.volDebouncePending >= 0 {
+			target = clampInt(m.transport.volDebouncePending+5, 0, 100)
 		} else {
-			target = clampInt(m.status.Volume+5, 0, 100)
+			target = clampInt(m.transport.status.Volume+5, 0, 100)
 		}
-		m.status.Volume = target
-		m.volDebouncePending = target
-		m.volDebounceToken++
-		return m.volDebounceCmd(m.volDebounceToken)
+		m.transport.status.Volume = target
+		m.transport.volDebouncePending = target
+		m.transport.volDebounceToken++
+		return m.volDebounceCmd(m.transport.volDebounceToken)
 	case playbackInputVolDown:
-		if m.status == nil {
+		if m.transport.status == nil {
 			return nil
 		}
 		var target int
-		if m.volDebouncePending >= 0 {
-			target = clampInt(m.volDebouncePending-5, 0, 100)
+		if m.transport.volDebouncePending >= 0 {
+			target = clampInt(m.transport.volDebouncePending-5, 0, 100)
 		} else {
-			target = clampInt(m.status.Volume-5, 0, 100)
+			target = clampInt(m.transport.status.Volume-5, 0, 100)
 		}
-		m.status.Volume = target
-		m.volDebouncePending = target
-		m.volDebounceToken++
-		return m.volDebounceCmd(m.volDebounceToken)
+		m.transport.status.Volume = target
+		m.transport.volDebouncePending = target
+		m.transport.volDebounceToken++
+		return m.volDebounceCmd(m.transport.volDebounceToken)
 	case playbackInputSeekBack:
-		if m.status == nil {
+		if m.transport.status == nil {
 			return nil
 		}
 		current := m.seekSettleProgress()
@@ -278,12 +285,12 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 		if target == current {
 			return nil
 		}
-		m.status.ProgressMS = target
-		m.seekDebouncePending = target
-		m.seekDebounceToken++
-		return m.seekDebounceCmd(m.seekDebounceToken)
+		m.transport.status.ProgressMS = target
+		m.transport.seekDebouncePending = target
+		m.transport.seekDebounceToken++
+		return m.seekDebounceCmd(m.transport.seekDebounceToken)
 	case playbackInputSeekFwd:
-		if m.status == nil {
+		if m.transport.status == nil {
 			return nil
 		}
 		current := m.seekSettleProgress()
@@ -291,10 +298,10 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 		if target == current {
 			return nil
 		}
-		m.status.ProgressMS = target
-		m.seekDebouncePending = target
-		m.seekDebounceToken++
-		return m.seekDebounceCmd(m.seekDebounceToken)
+		m.transport.status.ProgressMS = target
+		m.transport.seekDebouncePending = target
+		m.transport.seekDebounceToken++
+		return m.seekDebounceCmd(m.transport.seekDebounceToken)
 	default:
 		return nil
 	}
@@ -328,14 +335,14 @@ func inputPriorityOf(action playbackInputKind) inputPriority {
 }
 
 func (m *model) dequeueNextInputIndex() int {
-	if len(m.inputQueue) == 0 {
+	if len(m.transport.inputQueue) == 0 {
 		return 0
 	}
 	bestIdx := 0
-	bestPriority := m.inputQueue[0].priority
-	for i := 1; i < len(m.inputQueue); i++ {
-		if m.inputQueue[i].priority > bestPriority {
-			bestPriority = m.inputQueue[i].priority
+	bestPriority := m.transport.inputQueue[0].priority
+	for i := 1; i < len(m.transport.inputQueue); i++ {
+		if m.transport.inputQueue[i].priority > bestPriority {
+			bestPriority = m.transport.inputQueue[i].priority
 			bestIdx = i
 		}
 	}
@@ -343,21 +350,21 @@ func (m *model) dequeueNextInputIndex() int {
 }
 
 func (m *model) dropQueuedByPredicate(drop func(playbackInputKind) bool) {
-	if len(m.inputQueue) == 0 {
+	if len(m.transport.inputQueue) == 0 {
 		return
 	}
-	dst := m.inputQueue[:0]
-	for _, item := range m.inputQueue {
+	dst := m.transport.inputQueue[:0]
+	for _, item := range m.transport.inputQueue {
 		if drop(item.kind) {
 			continue
 		}
 		dst = append(dst, item)
 	}
-	m.inputQueue = dst
+	m.transport.inputQueue = dst
 }
 
 func (m *model) hasQueuedAction(action playbackInputKind) bool {
-	for _, item := range m.inputQueue {
+	for _, item := range m.transport.inputQueue {
 		if item.kind == action {
 			return true
 		}

@@ -63,12 +63,10 @@ func waitForAPIRetry(ctx context.Context, err error, attempt int) error {
 	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < wait {
 		return err
 	}
-	select {
-	case <-ctx.Done():
+	if sleepErr := sleepWithContext(ctx, wait); sleepErr != nil {
 		return err
-	case <-time.After(wait):
-		return nil
 	}
+	return nil
 }
 
 func apiCallWithRetry[T any](ctx context.Context, fn func() (T, error)) (T, error) {

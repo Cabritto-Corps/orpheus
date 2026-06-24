@@ -14,31 +14,31 @@ import (
 )
 
 func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
-	m.width = msg.Width
-	m.height = msg.Height
+	m.ui.width = msg.Width
+	m.ui.height = msg.Height
 
-	m.imgs.invalidateCovers()
-	m.cachedBodyLayoutValid = false
+	m.ui.imgs.invalidateCovers()
+	m.ui.cachedBodyLayoutValid = false
 
 	layout := m.getBodyLayout()
 	listInnerW := layout.rightW - 1
 	listInnerH := layout.bodyH - 4
 
-	m.playlistList.SetSize(listInnerW, listInnerH)
-	m.albumList.SetSize(listInnerW, listInnerH)
+	m.browse.playlistList.SetSize(listInnerW, listInnerH)
+	m.browse.albumList.SetSize(listInnerW, listInnerH)
 	m.normalizeLibraryPagination()
 
-	if m.trackPopupOpen {
-		modalW := min(m.width-8, 60)
-		popupBodyH := m.height - headerH - tabBarH - 2
+	if m.ui.trackPopupOpen {
+		modalW := min(m.ui.width-8, 60)
+		popupBodyH := m.ui.height - headerH - tabBarH - 2
 		popupInnerH := max(popupBodyH-4, 10)
-		m.trackPopupList.SetSize(modalW-2, popupInnerH-4)
-		m.trackPopupWidth = modalW - 4
+		m.ui.trackPopupList.SetSize(modalW-2, popupInnerH-4)
+		m.ui.trackPopupWidth = modalW - 4
 	}
 
 	return m, tea.Batch(
 		m.loadVisiblePlaylistCoversCmd(),
-		m.maybeLoadMorePlaylistsCmd(m.playlistList),
+		m.maybeLoadMorePlaylistsCmd(m.browse.playlistList),
 	)
 }
 
@@ -46,39 +46,39 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	m.interpolatePlaybackProgress(uiTickInterval)
 	inputCmd := m.pumpInputExecutor()
 	var startupCoverCmd tea.Cmd
-	if m.startupCoverBoostTicks > 0 {
-		m.startupCoverBoostTicks--
+	if m.ui.startupCoverBoostTicks > 0 {
+		m.ui.startupCoverBoostTicks--
 		startupCoverCmd = m.drainCoverQueueCmd(coverQueueDrainBatch * 8)
 	}
 
-	m.coverRefreshTick++
-	m.playerCoverRefreshTick++
-	m.libraryCoverRefreshTick++
-	m.libraryMetaRefreshTick++
+	m.ui.coverRefreshTick++
+	m.ui.playerCoverRefreshTick++
+	m.ui.libraryCoverRefreshTick++
+	m.ui.libraryMetaRefreshTick++
 	var coverCmd tea.Cmd
 	var playerCoverCmd tea.Cmd
 	var libraryCoverCmd tea.Cmd
 	var metadataCmd tea.Cmd
-	if m.activeTab != tabPlayer && m.coverRefreshTick >= coverRefreshEvery {
-		m.coverRefreshTick = 0
+	if m.ui.activeTab != tabPlayer && m.ui.coverRefreshTick >= coverRefreshEvery {
+		m.ui.coverRefreshTick = 0
 		coverCmd = m.loadVisiblePlaylistCoversCmd()
 	}
-	if m.activeTab == tabPlayer && m.status != nil {
-		url := strings.TrimSpace(m.status.AlbumImageURL)
-		if url != "" && m.imgs.shouldQueuePriorityLoad(url) {
+	if m.ui.activeTab == tabPlayer && m.transport.status != nil {
+		url := strings.TrimSpace(m.transport.status.AlbumImageURL)
+		if url != "" && m.ui.imgs.shouldQueuePriorityLoad(url) {
 			playerCoverCmd = m.loadImageCmd(url, true)
-			m.playerCoverRefreshTick = 0
-		} else if m.playerCoverRefreshTick >= playerCoverRefreshEvery {
-			m.playerCoverRefreshTick = 0
+			m.ui.playerCoverRefreshTick = 0
+		} else if m.ui.playerCoverRefreshTick >= playerCoverRefreshEvery {
+			m.ui.playerCoverRefreshTick = 0
 			playerCoverCmd = m.loadImageCmd(url, true)
 		}
 	}
-	if m.libraryCoverRefreshTick >= libraryCoverRefreshEvery {
-		m.libraryCoverRefreshTick = 0
+	if m.ui.libraryCoverRefreshTick >= libraryCoverRefreshEvery {
+		m.ui.libraryCoverRefreshTick = 0
 		libraryCoverCmd = m.loadLibraryCoversCmd(libraryCoverRefreshBatch)
 	}
-	if m.libraryMetaRefreshTick >= libraryMetaRefreshEvery {
-		m.libraryMetaRefreshTick = 0
+	if m.ui.libraryMetaRefreshTick >= libraryMetaRefreshEvery {
+		m.ui.libraryMetaRefreshTick = 0
 		if m.hasMissingLibraryImageURLs() {
 			metadataCmd = m.queueMissingLibraryImageResolvesCmd(libraryCoverRefreshBatch)
 		}
@@ -104,7 +104,7 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	}
-	if m.activeTab != tabPlayer {
+	if m.ui.activeTab != tabPlayer {
 		cmds := make([]tea.Cmd, 0, 6)
 		cmds = append(cmds, m.tickCmd(), inputCmd)
 		if startupCoverCmd != nil {
@@ -124,16 +124,16 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	}
-	interval := m.pollInterval
+	interval := m.ui.pollInterval
 	if interval <= 0 {
 		interval = uiTickInterval
 	}
-	if !m.actionFastPollUntil.IsZero() && time.Now().Before(m.actionFastPollUntil) {
+	if !m.ui.actionFastPollUntil.IsZero() && time.Now().Before(m.ui.actionFastPollUntil) {
 		interval = uiTickInterval
-	} else if m.status == nil || !m.status.Playing {
+	} else if m.transport.status == nil || !m.transport.status.Playing {
 		interval = min(interval*2, idlePollBackoffMax)
 	}
-	if time.Since(m.lastPollTime) < interval {
+	if time.Since(m.ui.lastPollTime) < interval {
 		cmds := make([]tea.Cmd, 0, 5)
 		cmds = append(cmds, m.tickCmd(), inputCmd)
 		if startupCoverCmd != nil {
@@ -150,9 +150,9 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	}
-	m.lastPollTime = time.Now()
-	m.pollTick++
-	pollQueue := m.pollTick%queuePollEvery == 0
+	m.ui.lastPollTime = time.Now()
+	m.ui.pollTick++
+	pollQueue := m.ui.pollTick%queuePollEvery == 0
 	cmds := make([]tea.Cmd, 0, 6)
 	cmds = append(cmds, m.pollCmd(pollQueue), m.tickCmd(), inputCmd)
 	if startupCoverCmd != nil {
@@ -171,30 +171,30 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 }
 
 func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
-	m.playlistsLoading = false
+	m.browse.playlistsLoading = false
 	if msg.err != nil {
-		m.playlistsErr = msg.err
+		m.browse.playlistsErr = msg.err
 		slog.Error("fetch playlists failed", "error", msg.err)
-		if spotify.IsTransientAPIError(msg.err) && !spotify.IsRateLimitError(msg.err) && m.playlistsRetryCount < 2 {
-			m.playlistsRetryCount++
-			m.playlistsLoading = true
+		if spotify.IsTransientAPIError(msg.err) && !spotify.IsRateLimitError(msg.err) && m.browse.playlistsRetryCount < 2 {
+			m.browse.playlistsRetryCount++
+			m.browse.playlistsLoading = true
 			return m, m.loadPlaylistsCmd(msg.offset, msg.limit)
 		}
 		return m, nil
 	}
-	m.playlistsErr = nil
-	m.playlistsRetryCount = 0
+	m.browse.playlistsErr = nil
+	m.browse.playlistsRetryCount = 0
 	if msg.offset == 0 {
-		m.albumsForbidden = msg.albumsForbidden
+		m.browse.albumsForbidden = msg.albumsForbidden
 	} else {
-		m.albumsForbidden = m.albumsForbidden || msg.albumsForbidden
+		m.browse.albumsForbidden = m.browse.albumsForbidden || msg.albumsForbidden
 	}
 
-	prevPlaylistIndex := m.playlistList.GlobalIndex()
-	prevAlbumIndex := m.albumList.GlobalIndex()
+	prevPlaylistIndex := m.browse.playlistList.GlobalIndex()
+	prevAlbumIndex := m.browse.albumList.GlobalIndex()
 
-	plItems := m.playlistList.Items()
-	alItems := m.albumList.Items()
+	plItems := m.browse.playlistList.Items()
+	alItems := m.browse.albumList.Items()
 	if msg.offset == 0 {
 		plItems = make([]list.Item, 0, len(msg.items)+1)
 		plItems = append(plItems, playlistItem{summary: spotify.PlaylistSummary{
@@ -262,27 +262,27 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if m.playlistList.FilterState() == list.Unfiltered {
-		m.playlistList.SetItems(plItems)
+	if m.browse.playlistList.FilterState() == list.Unfiltered {
+		m.browse.playlistList.SetItems(plItems)
 		if len(plItems) > 0 {
 			idx := clampInt(prevPlaylistIndex, 0, len(plItems)-1)
-			m.playlistList.Select(idx)
+			m.browse.playlistList.Select(idx)
 		}
 	}
-	if m.albumList.FilterState() == list.Unfiltered {
-		m.albumList.SetItems(alItems)
+	if m.browse.albumList.FilterState() == list.Unfiltered {
+		m.browse.albumList.SetItems(alItems)
 		if len(alItems) > 0 {
 			idx := clampInt(prevAlbumIndex, 0, len(alItems)-1)
-			m.albumList.Select(idx)
+			m.browse.albumList.Select(idx)
 		}
 	}
-	playlistPreviewURL := selectedImageURLFromList(m.playlistList)
+	playlistPreviewURL := selectedImageURLFromList(m.browse.playlistList)
 	if playlistPreviewURL == "" && len(plItems) > 0 {
 		if first, ok := plItems[0].(playlistItem); ok {
 			playlistPreviewURL = strings.TrimSpace(first.summary.ImageURL)
 		}
 	}
-	albumPreviewURL := selectedImageURLFromList(m.albumList)
+	albumPreviewURL := selectedImageURLFromList(m.browse.albumList)
 	if albumPreviewURL == "" && len(alItems) > 0 {
 		if first, ok := alItems[0].(playlistItem); ok {
 			albumPreviewURL = strings.TrimSpace(first.summary.ImageURL)
@@ -290,7 +290,7 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if len(msg.items) == 0 || !msg.hasMore {
-		m.playlistsExhausted = true
+		m.browse.playlistsExhausted = true
 	}
 	slog.Info("library items loaded", "playlists", len(plItems), "albums", len(alItems), "missing_image_urls", missingImageURLs)
 	return m, tea.Batch(
@@ -298,47 +298,47 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 		m.loadImageCmd(albumPreviewURL, true),
 		m.loadLibraryCoversCmd(len(plItems)+len(alItems)),
 		m.queueMissingLibraryImageResolvesCmd(missingImageURLs),
-		m.maybeLoadMorePlaylistsCmd(m.playlistList),
+		m.maybeLoadMorePlaylistsCmd(m.browse.playlistList),
 	)
 }
 
 func (m model) handleCurrentUserIDMsg(msg currentUserIDMsg) (tea.Model, tea.Cmd) {
 	if msg.err == nil && msg.userID != "" {
-		m.currentUserID = msg.userID
-		if m.shouldLoadPlaylistItems() && m.activePlaylistID != "" && !m.activePlaylistItemLoading &&
-			(m.activePlaylistOwnerID == msg.userID || m.activePlaylistCollaborative) {
-			m.activePlaylistItemHasMore = true
-			m.activePlaylistItemLoading = true
-			m.activePlaylistLoadToken++
-			return m, m.loadPlaylistItemsCmd(m.activePlaylistID, 0, m.activePlaylistLoadToken)
+		m.browse.currentUserID = msg.userID
+		if m.shouldLoadPlaylistItems() && m.browse.activePlaylistID != "" && !m.browse.activePlaylistItemLoading &&
+			(m.browse.activePlaylistOwnerID == msg.userID || m.browse.activePlaylistCollaborative) {
+			m.browse.activePlaylistItemHasMore = true
+			m.browse.activePlaylistItemLoading = true
+			m.browse.activePlaylistLoadToken++
+			return m, m.loadPlaylistItemsCmd(m.browse.activePlaylistID, 0, m.browse.activePlaylistLoadToken)
 		}
 	}
 	return m, m.loadPlaylistsCmd(0, playlistLoadBatchSize)
 }
 
 func (m model) handlePlaylistItemsMsg(msg playlistItemsMsg) (tea.Model, tea.Cmd) {
-	if msg.playlistID == "" || msg.playlistID != m.activePlaylistID || msg.token != m.activePlaylistLoadToken {
+	if msg.playlistID == "" || msg.playlistID != m.browse.activePlaylistID || msg.token != m.browse.activePlaylistLoadToken {
 		return m, nil
 	}
-	m.activePlaylistItemLoading = false
+	m.browse.activePlaylistItemLoading = false
 	if msg.err != nil {
-		m.activePlaylistItemHasMore = false
+		m.browse.activePlaylistItemHasMore = false
 		if !m.shouldLoadPlaylistItems() || spotify.IsForbidden(msg.err) {
 			slog.Warn("optional playlist-track fetch skipped", "playlist_id", msg.playlistID, "error", msg.err)
 			return m, nil
 		}
-		m.playbackErr = msg.err
+		m.transport.playbackErr = msg.err
 		slog.Error("fetch playlist items failed", "playlist_id", msg.playlistID, "error", msg.err)
-		if spotify.IsTransientAPIError(msg.err) && !spotify.IsRateLimitError(msg.err) && m.playlistItemRetryCount < 2 {
-			m.playlistItemRetryCount++
-			m.activePlaylistItemLoading = true
-			return m, m.loadPlaylistItemsCmd(msg.playlistID, m.activePlaylistItemNextOffset, m.activePlaylistLoadToken)
+		if spotify.IsTransientAPIError(msg.err) && !spotify.IsRateLimitError(msg.err) && m.browse.playlistItemRetryCount < 2 {
+			m.browse.playlistItemRetryCount++
+			m.browse.activePlaylistItemLoading = true
+			return m, m.loadPlaylistItemsCmd(msg.playlistID, m.browse.activePlaylistItemNextOffset, m.browse.activePlaylistLoadToken)
 		}
 		return m, nil
 	}
-	m.playlistItemRetryCount = 0
-	seen := make(map[string]struct{}, len(m.activePlaylistItemIDs)+len(msg.itemIDs))
-	for _, trackID := range m.activePlaylistItemIDs {
+	m.browse.playlistItemRetryCount = 0
+	seen := make(map[string]struct{}, len(m.browse.activePlaylistItemIDs)+len(msg.itemIDs))
+	for _, trackID := range m.browse.activePlaylistItemIDs {
 		if trackID == "" {
 			continue
 		}
@@ -352,15 +352,15 @@ func (m model) handlePlaylistItemsMsg(msg playlistItemsMsg) (tea.Model, tea.Cmd)
 			continue
 		}
 		seen[trackID] = struct{}{}
-		m.activePlaylistItemIDs = append(m.activePlaylistItemIDs, trackID)
+		m.browse.activePlaylistItemIDs = append(m.browse.activePlaylistItemIDs, trackID)
 		if i < len(msg.itemInfos) {
 			if info := msg.itemInfos[i]; info.Name != "" {
-				m.trackCache.Set(trackID, info)
+				m.browse.trackCache.Set(trackID, info)
 			}
 		}
 	}
-	m.activePlaylistItemNextOffset = msg.nextOffset
-	m.activePlaylistItemHasMore = msg.hasMore
+	m.browse.activePlaylistItemNextOffset = msg.nextOffset
+	m.browse.activePlaylistItemHasMore = msg.hasMore
 	cmds := make([]tea.Cmd, 0, 2)
 	if cmd := m.maybeLoadMorePlaylistItemsCmd(playlistItemPreloadMax); cmd != nil {
 		cmds = append(cmds, cmd)
@@ -369,16 +369,16 @@ func (m model) handlePlaylistItemsMsg(msg playlistItemsMsg) (tea.Model, tea.Cmd)
 }
 
 func (m model) handleNavDebounceMsg(msg navDebounceMsg) (tea.Model, tea.Cmd) {
-	if msg.token != m.navToken {
+	if msg.token != m.ui.navToken {
 		return m, nil
 	}
-	if m.activeTab == tabPlayer {
+	if m.ui.activeTab == tabPlayer {
 		return m, nil
 	}
 	return m, tea.Batch(
 		m.loadVisiblePlaylistCoversCmd(),
 		m.drainCoverQueueCmd(coverQueueDrainBatch),
-		m.maybeLoadMorePlaylistsCmd(m.playlistList),
+		m.maybeLoadMorePlaylistsCmd(m.browse.playlistList),
 	)
 }
 
@@ -388,30 +388,30 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.err == nil {
 		if m.shouldForceKittyRedrawForLoadedURL(msg.url) {
-			m.imgs.forceKittyRedraw()
+			m.ui.imgs.forceKittyRedraw()
 		}
-		if m.status != nil && strings.TrimSpace(m.status.AlbumImageURL) == strings.TrimSpace(msg.url) {
-			m.cover.playerCoverFailStreak = 0
+		if m.transport.status != nil && strings.TrimSpace(m.transport.status.AlbumImageURL) == strings.TrimSpace(msg.url) {
+			m.ui.cover.playerCoverFailStreak = 0
 		}
-		m.cover.clearRetry(msg.url)
+		m.ui.cover.clearRetry(msg.url)
 		return m, nil
 	}
-	if m.status != nil && strings.TrimSpace(m.status.AlbumImageURL) == strings.TrimSpace(msg.url) {
-		m.cover.playerCoverFailStreak++
+	if m.transport.status != nil && strings.TrimSpace(m.transport.status.AlbumImageURL) == strings.TrimSpace(msg.url) {
+		m.ui.cover.playerCoverFailStreak++
 		m.maybeFallbackFromKittyOnPlayerFailures(msg.url)
 	}
 
-	attempt := m.cover.imageRetryCount[msg.url] + 1
+	attempt := m.ui.cover.imageRetryCount[msg.url] + 1
 	if attempt > imageLoadRetryMax {
-		m.cover.clearRetry(msg.url)
-		m.imgs.markFailed(msg.url)
+		m.ui.cover.clearRetry(msg.url)
+		m.ui.imgs.markFailed(msg.url)
 		slog.Warn("image load retries exhausted", "url", msg.url, "error", msg.err)
 		if m.libraryHasImageURL(msg.url) {
 			return m, m.queueResolvesForImageURLCmd(msg.url, libraryCoverRefreshBatch)
 		}
 		return m, nil
 	}
-	_, token := m.cover.nextRetry(msg.url)
+	_, token := m.ui.cover.nextRetry(msg.url)
 	return m, m.imageRetryCmd(msg.url, attempt, token)
 }
 
@@ -419,11 +419,11 @@ func (m model) handleImageRetryMsg(msg imageRetryMsg) (tea.Model, tea.Cmd) {
 	if msg.url == "" {
 		return m, nil
 	}
-	if current := m.cover.retryToken(msg.url); current != msg.token {
+	if current := m.ui.cover.retryToken(msg.url); current != msg.token {
 		return m, nil
 	}
 	if !m.needsImageURL(msg.url) {
-		m.cover.clearRetry(msg.url)
+		m.ui.cover.clearRetry(msg.url)
 		return m, nil
 	}
 	return m, m.loadImageCmd(msg.url, false)
@@ -431,7 +431,7 @@ func (m model) handleImageRetryMsg(msg imageRetryMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleCoverImageResolvedMsg(msg coverImageResolvedMsg) (tea.Model, tea.Cmd) {
 	key := coverResolveKey(msg.kind, msg.id)
-	delete(m.cover.resolveInFlight, key)
+	delete(m.ui.cover.resolveInFlight, key)
 	if msg.err != nil {
 		slog.Warn("resolve context image URL failed", "kind", msg.kind, "id", msg.id, "error", msg.err)
 		return m, nil
@@ -449,22 +449,22 @@ func (m model) handleActionMsg(msg actionMsg) (tea.Model, tea.Cmd) {
 	if m.isStaleStateFetchToken(msg.token) {
 		return m, nil
 	}
-	m.actionInFlight = false
+	m.transport.actionInFlight = false
 	m.syncExecutorState()
 	if msg.err != nil {
-		m.transportTransitionPending = false
+		m.transport.transition.Clear()
 		m.syncExecutorState()
-		m.playbackErr = msg.err
+		m.transport.playbackErr = msg.err
 		slog.Error("playback action failed", "error", msg.err)
 		if msg.rollback != nil {
-			m.status = msg.rollback
+			m.transport.status = msg.rollback
 		}
 		return m, m.pumpInputExecutor()
 	}
-	m.playbackErr = nil
+	m.transport.playbackErr = nil
 	switch msg.action {
 	case "play-from-browser":
-		m.activeTab = tabPlayer
+		m.ui.activeTab = tabPlayer
 	}
 	cmds := []tea.Cmd{m.pollCmd(true)}
 	if cmd := m.pumpInputExecutor(); cmd != nil {
@@ -474,31 +474,31 @@ func (m model) handleActionMsg(msg actionMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleVolDebounceMsg(msg volDebounceMsg) (tea.Model, tea.Cmd) {
-	if msg.token != m.volDebounceToken || m.volDebouncePending < 0 {
+	if msg.token != m.transport.volDebounceToken || m.transport.volDebouncePending < 0 {
 		return m, nil
 	}
-	target := m.volDebouncePending
+	target := m.transport.volDebouncePending
 	if m.tuiCmdCh != nil {
 		select {
 		case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandSetVolume, Volume: target}:
-			m.volDebouncePending = -1
-			m.volSentTarget = target
-			m.volSentAt = time.Now()
-			m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
+			m.transport.volDebouncePending = -1
+			m.transport.volSentTarget = target
+			m.transport.volSentAt = time.Now()
+			m.ui.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
 		default:
-			m.volDebouncePending = target
-			m.volDebounceToken++
-			return m, m.volDebounceCmd(m.volDebounceToken)
+			m.transport.volDebouncePending = target
+			m.transport.volDebounceToken++
+			return m, m.volDebounceCmd(m.transport.volDebounceToken)
 		}
 		return m, m.pumpInputExecutor()
 	}
-	m.volDebouncePending = -1
-	m.volSentTarget = target
-	m.volSentAt = time.Now()
-	m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
-	rollback := cloneStatus(m.status)
-	if m.status != nil {
-		m.status.Volume = target
+	m.transport.volDebouncePending = -1
+	m.transport.volSentTarget = target
+	m.transport.volSentAt = time.Now()
+	m.ui.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
+	rollback := cloneStatus(m.transport.status)
+	if m.transport.status != nil {
+		m.transport.status.Volume = target
 	}
 	m.beginReconcileAction(0)
 	v := target
@@ -511,30 +511,30 @@ func (m model) handleVolDebounceMsg(msg volDebounceMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleSeekDebounceMsg(msg seekDebounceMsg) (tea.Model, tea.Cmd) {
-	if msg.token != m.seekDebounceToken || m.seekDebouncePending < 0 {
+	if msg.token != m.transport.seekDebounceToken || m.transport.seekDebouncePending < 0 {
 		return m, nil
 	}
-	target := m.clampSeekTarget(m.seekDebouncePending)
-	m.seekDebouncePending = -1
-	m.seekSentTarget = target
-	m.seekSentAt = time.Now()
-	if m.status != nil {
-		m.status.ProgressMS = target
+	target := m.clampSeekTarget(m.transport.seekDebouncePending)
+	m.transport.seekDebouncePending = -1
+	m.transport.seekSentTarget = target
+	m.transport.seekSentAt = time.Now()
+	if m.transport.status != nil {
+		m.transport.status.ProgressMS = target
 		m.resetInterpolationBaseline()
 	}
 	if m.tuiCmdCh != nil {
 		select {
 		case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandSeek, Position: int64(target)}:
 		default:
-			m.seekDebouncePending = target
-			m.seekDebounceToken++
-			return m, m.seekDebounceCmd(m.seekDebounceToken)
+			m.transport.seekDebouncePending = target
+			m.transport.seekDebounceToken++
+			return m, m.seekDebounceCmd(m.transport.seekDebounceToken)
 		}
 		return m, m.pumpInputExecutor()
 	}
-	rollback := cloneStatus(m.status)
-	if m.status != nil {
-		m.status.ProgressMS = target
+	rollback := cloneStatus(m.transport.status)
+	if m.transport.status != nil {
+		m.transport.status.ProgressMS = target
 		m.resetInterpolationBaseline()
 	}
 	m.beginReconcileAction(0)
@@ -549,31 +549,31 @@ func (m model) handleSeekDebounceMsg(msg seekDebounceMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleFilterMatchesMsg(msg list.FilterMatchesMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	if m.trackPopupOpen {
-		m.trackPopupList, cmd = m.trackPopupList.Update(msg)
+	if m.ui.trackPopupOpen {
+		m.ui.trackPopupList, cmd = m.ui.trackPopupList.Update(msg)
 		return m, cmd
 	}
-	switch m.activeTab {
+	switch m.ui.activeTab {
 	case tabPlaylists:
-		m.playlistList, cmd = m.playlistList.Update(msg)
+		m.browse.playlistList, cmd = m.browse.playlistList.Update(msg)
 	case tabAlbums:
-		m.albumList, cmd = m.albumList.Update(msg)
+		m.browse.albumList, cmd = m.browse.albumList.Update(msg)
 	}
 	return m, cmd
 }
 
 func (m model) handleTrackPopupItemsMsg(msg trackPopupItemsMsg) (tea.Model, tea.Cmd) {
-	if !m.trackPopupOpen {
+	if !m.ui.trackPopupOpen {
 		return m, nil
 	}
-	m.trackPopupItems = msg.items
-	maxTitleW := max(m.trackPopupWidth-6, 10)
+	m.ui.trackPopupItems = msg.items
+	maxTitleW := max(m.ui.trackPopupWidth-6, 10)
 	items := make([]list.Item, 0, len(msg.items))
 	for _, qi := range msg.items {
 		qi.Name = truncate(qi.Name, maxTitleW)
 		items = append(items, trackItem{item: qi})
 	}
-	m.trackPopupList.SetItems(items)
+	m.ui.trackPopupList.SetItems(items)
 	return m, nil
 }
 
@@ -581,7 +581,7 @@ func (m model) handleCoverImageURLsBatchResolvedMsg(msg coverImageURLsBatchResol
 	var cmds []tea.Cmd
 	for _, r := range msg.results {
 		key := coverResolveKey(r.kind, r.id)
-		delete(m.cover.resolveInFlight, key)
+		delete(m.ui.cover.resolveInFlight, key)
 		if r.err != nil || strings.TrimSpace(r.url) == "" {
 			continue
 		}
@@ -599,14 +599,14 @@ func (m model) handleCoverImageURLsBatchResolvedMsg(msg coverImageURLsBatchResol
 func (m model) handleImagesBatchLoadedMsg(msg imagesBatchLoadedMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	for _, r := range msg.results {
-		m.imgs.finishLoad(r.url)
+		m.ui.imgs.finishLoad(r.url)
 		if r.err != nil {
-			m.imgs.markFailed(r.url)
+			m.ui.imgs.markFailed(r.url)
 			continue
 		}
-		m.imgs.clearFailed(r.url)
+		m.ui.imgs.clearFailed(r.url)
 		if m.shouldForceKittyRedrawForLoadedURL(r.url) {
-			m.imgs.forceKittyRedraw()
+			m.ui.imgs.forceKittyRedraw()
 		}
 	}
 	if cmd := m.drainCoverQueueCmd(coverQueueDrainBatch); cmd != nil {

@@ -397,7 +397,6 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 	if url == "" || cols <= 0 || rows <= 0 {
 		return "", true
 	}
-
 	key := coverKey{url: url, cols: cols, rows: rows}
 	for {
 		c.mu.Lock()
@@ -419,29 +418,29 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 		ch := make(chan struct{})
 		c.rendering[key] = ch
 		c.mu.Unlock()
+		return c.renderAndCache(key, url, img, encoded, cols, rows, ch)
+	}
+}
 
-		defer func() {
-			c.mu.Lock()
-			delete(c.rendering, key)
-			c.mu.Unlock()
-			close(ch)
-		}()
+func (c *imgCache) renderAndCache(key coverKey, url string, img image.Image, encoded string, cols, rows int, ch chan struct{}) (string, bool) {
+	s := renderCover(c.protocol, img, encoded, cols, rows)
 
-		s := renderCover(c.protocol, img, encoded, cols, rows)
-
-		c.mu.Lock()
-		if existing, ok := c.covers.Get(key); ok {
-			c.mu.Unlock()
-			return existing, true
-		}
+	c.mu.Lock()
+	var result string
+	if existing, ok := c.covers.Get(key); ok {
+		result = existing
+	} else {
 		c.covers.Set(key, s)
 		if _, ok := c.coverKeysByURL[url]; !ok {
 			c.coverKeysByURL[url] = make(map[coverKey]struct{})
 		}
 		c.coverKeysByURL[url][key] = struct{}{}
-		c.mu.Unlock()
-		return s, true
+		result = s
 	}
+	delete(c.rendering, key)
+	c.mu.Unlock()
+	close(ch)
+	return result, true
 }
 
 const (

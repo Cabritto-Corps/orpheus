@@ -68,9 +68,9 @@ func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.
 	progressRewind := sameURL && prevProgress >= 0 && nextProgress >= 0 && prevProgress > nextProgress+progressRewindThresholdMS
 	shouldAdvance := nextURL != "" && (subjectChanged || trackChanged || queueHeadChanged || progressRewind)
 	if shouldAdvance {
-		m.playerCoverEpoch++
-		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
-			m.imgs.forceKittyRedraw()
+		m.transport.playerCoverEpoch++
+		if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
+			m.ui.imgs.forceKittyRedraw()
 		}
 	}
 }
@@ -97,54 +97,36 @@ func shouldQueueAlbumImageLoad(prev, next *spotify.PlaybackStatus) bool {
 }
 
 func (m *model) beginTransportTransition() {
-	m.transportTransitionPending = true
-	m.transportTransitionStartedAt = time.Now()
-	m.transportTransitionFromTrack = ""
-	if m.status != nil {
-		m.transportTransitionFromTrack = golibrespot.NormalizeSpotifyId(m.status.TrackID)
+	fromTrack := ""
+	if m.transport.status != nil {
+		fromTrack = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
 	}
-	if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
-		m.imgs.forceKittyRedraw()
+	m.transport.transition.Begin(time.Now(), fromTrack)
+	if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
+		m.ui.imgs.forceKittyRedraw()
 	}
 	m.syncExecutorState()
 }
 
 func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
-	if !m.transportTransitionPending || next == nil {
+	event := m.transport.transition.MaybeClear(next, time.Now())
+	if event == transportEventNone {
 		return
 	}
-	nextTrack := golibrespot.NormalizeSpotifyId(next.TrackID)
-	if nextTrack != "" && nextTrack != m.transportTransitionFromTrack {
-		m.transportTransitionPending = false
-		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
-			m.imgs.forceKittyRedraw()
-		}
-		m.syncExecutorState()
-		return
+	if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
+		m.ui.imgs.forceKittyRedraw()
 	}
-	if nextTrack == m.transportTransitionFromTrack && next.ProgressMS < transportTransitionProgressMaxMS &&
-		time.Since(m.transportTransitionStartedAt) < 4*time.Second {
-		m.transportTransitionPending = false
-		if m.imgs != nil && m.imgs.protocol == imageProtocolKitty {
-			m.imgs.forceKittyRedraw()
-		}
-		m.syncExecutorState()
-		return
+	if event == transportEventStuck {
+		m.ui.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
 	}
-	if time.Since(m.transportTransitionStartedAt) > 4*time.Second {
-		m.transportTransitionPending = false
-		m.transportRecoveryPending = true
-		m.transportStuckCount++
-		m.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
-		m.syncExecutorState()
-	}
+	m.syncExecutorState()
 }
 
 func (m *model) shouldBlockTransportInput(msg tea.KeyMsg) bool {
-	if !m.transportTransitionPending {
+	if !m.transport.transition.Pending() {
 		return false
 	}
-	k := m.keys
+	k := m.ui.keys
 	return keyMatches(msg, k.PlayPause) ||
 		keyMatches(msg, k.Next) ||
 		keyMatches(msg, k.Prev) ||
@@ -153,111 +135,110 @@ func (m *model) shouldBlockTransportInput(msg tea.KeyMsg) bool {
 }
 
 func (m *model) beginReconcileAction(window time.Duration) {
-	m.actionInFlight = true
+	m.transport.actionInFlight = true
 	m.syncExecutorState()
 	if window > 0 {
-		m.actionFastPollUntil = time.Now().Add(window)
+		m.ui.actionFastPollUntil = time.Now().Add(window)
 	}
 }
 
 func (m *model) clearPreloadedTracks() {
-	for id := range m.preloadedItemIDs {
-		delete(m.preloadedItemIDs, id)
+	for id := range m.browse.preloadedItemIDs {
+		delete(m.browse.preloadedItemIDs, id)
 	}
 }
 
 func (m *model) applyOptimisticSkip(next bool) {
-	if m.status == nil {
+	if m.transport.status == nil {
 		return
 	}
-	m.status.ProgressMS = 0
-	m.status.Playing = true
-	m.interpolationSyncAt = time.Time{}
-	m.interpolationProgressMS = 0
-	if next && len(m.queue) > 0 {
-		m.status.TrackID = m.queue[0].ID
-		m.status.TrackName = m.queue[0].Name
-		m.status.ArtistName = m.queue[0].Artist
-		m.status.DurationMS = m.queue[0].DurationMS
+	m.transport.status.ProgressMS = 0
+	m.transport.status.Playing = true
+	m.transport.interpolationSyncAt = time.Time{}
+	m.transport.interpolationProgressMS = 0
+	if next && len(m.transport.queue) > 0 {
+		m.transport.status.TrackID = m.transport.queue[0].ID
+		m.transport.status.TrackName = m.transport.queue[0].Name
+		m.transport.status.ArtistName = m.transport.queue[0].Artist
+		m.transport.status.DurationMS = m.transport.queue[0].DurationMS
 	}
 	m.resetInterpolationBaseline()
 }
 
 func (m *model) interpolatePlaybackProgress(_ time.Duration) {
-	if m.status == nil || !m.status.Playing || m.status.DurationMS <= 0 || m.transportTransitionPending {
+	if m.transport.status == nil || !m.transport.status.Playing || m.transport.status.DurationMS <= 0 || m.transport.transition.Pending() {
 		return
 	}
-	if m.interpolationSyncAt.IsZero() {
-		m.interpolationSyncAt = time.Now()
-		m.interpolationProgressMS = m.status.ProgressMS
+	if m.transport.interpolationSyncAt.IsZero() {
+		m.transport.interpolationSyncAt = time.Now()
+		m.transport.interpolationProgressMS = m.transport.status.ProgressMS
 		return
 	}
-	elapsed := time.Since(m.interpolationSyncAt)
-	expected := m.interpolationProgressMS + int(elapsed/time.Millisecond)
-	m.status.ProgressMS = min(expected, m.status.DurationMS)
+	elapsed := time.Since(m.transport.interpolationSyncAt)
+	expected := m.transport.interpolationProgressMS + int(elapsed/time.Millisecond)
+	m.transport.status.ProgressMS = min(expected, m.transport.status.DurationMS)
 }
 
 func (m *model) resetInterpolationBaseline() {
-	m.interpolationSyncAt = time.Now()
-	if m.status != nil {
-		m.interpolationProgressMS = m.status.ProgressMS
+	m.transport.interpolationSyncAt = time.Now()
+	if m.transport.status != nil {
+		m.transport.interpolationProgressMS = m.transport.status.ProgressMS
 	} else {
-		m.interpolationProgressMS = 0
+		m.transport.interpolationProgressMS = 0
 	}
 }
 
 const progressSyncThresholdMS = 300
 
 func (m *model) smoothApplyProgress(incomingProgress int) {
-	if m.status == nil {
+	if m.transport.status == nil {
 		return
 	}
-	if m.transportTransitionPending || m.interpolationSyncAt.IsZero() {
-		m.status.ProgressMS = incomingProgress
+	if m.transport.transition.Pending() || m.transport.interpolationSyncAt.IsZero() {
+		m.transport.status.ProgressMS = incomingProgress
 		m.resetInterpolationBaseline()
 		return
 	}
-	elapsed := time.Since(m.interpolationSyncAt)
-	interpolated := m.interpolationProgressMS + int(elapsed/time.Millisecond)
-	if m.status.DurationMS > 0 && interpolated > m.status.DurationMS {
-		interpolated = m.status.DurationMS
+	elapsed := time.Since(m.transport.interpolationSyncAt)
+	interpolated := m.transport.interpolationProgressMS + int(elapsed/time.Millisecond)
+	if m.transport.status.DurationMS > 0 && interpolated > m.transport.status.DurationMS {
+		interpolated = m.transport.status.DurationMS
 	}
 	delta := absInt(interpolated - incomingProgress)
 	if delta <= progressSyncThresholdMS {
 		return
 	}
-	m.status.ProgressMS = incomingProgress
+	m.transport.status.ProgressMS = incomingProgress
 	m.resetInterpolationBaseline()
 }
 
 func (m *model) clearVolumeSettleTarget(observed int) {
-	if m.volSentTarget < 0 {
+	if m.transport.volSentTarget < 0 {
 		return
 	}
-	if observed >= 0 && observed == m.volSentTarget {
-		m.volSentTarget = -1
+	if observed >= 0 && observed == m.transport.volSentTarget {
+		m.transport.volSentTarget = -1
 		return
 	}
-	if time.Since(m.volSentAt) >= volSettleWindow {
-		m.volSentTarget = -1
+	if time.Since(m.transport.volSentAt) >= volSettleWindow {
+		m.transport.volSentTarget = -1
 	}
 }
 
 const (
-	seekSettleToleranceMS            = 900
-	seekBarEndBufferMS               = 250
-	progressRewindThresholdMS        = 5000
-	transportTransitionProgressMaxMS = 2000
+	seekSettleToleranceMS     = 900
+	seekBarEndBufferMS        = 250
+	progressRewindThresholdMS = 5000
 )
 
 func (m *model) clampSeekTarget(target int) int {
 	if target < 0 {
 		target = 0
 	}
-	if m.status == nil || m.status.DurationMS <= 0 {
+	if m.transport.status == nil || m.transport.status.DurationMS <= 0 {
 		return target
 	}
-	maxTarget := max(m.status.DurationMS-seekBarEndBufferMS, 0)
+	maxTarget := max(m.transport.status.DurationMS-seekBarEndBufferMS, 0)
 	if target > maxTarget {
 		return maxTarget
 	}
@@ -265,18 +246,18 @@ func (m *model) clampSeekTarget(target int) int {
 }
 
 func (m *model) seekSettleProgress() int {
-	if m.seekDebouncePending >= 0 {
-		return m.clampSeekTarget(m.seekDebouncePending)
+	if m.transport.seekDebouncePending >= 0 {
+		return m.clampSeekTarget(m.transport.seekDebouncePending)
 	}
-	if m.seekSentTarget < 0 || time.Since(m.seekSentAt) >= seekSettleWindow {
-		if m.status == nil {
+	if m.transport.seekSentTarget < 0 || time.Since(m.transport.seekSentAt) >= seekSettleWindow {
+		if m.transport.status == nil {
 			return 0
 		}
-		return m.clampSeekTarget(m.status.ProgressMS)
+		return m.clampSeekTarget(m.transport.status.ProgressMS)
 	}
-	progress := m.seekSentTarget
-	if m.status != nil && m.status.Playing {
-		progress += int(time.Since(m.seekSentAt) / time.Millisecond)
+	progress := m.transport.seekSentTarget
+	if m.transport.status != nil && m.transport.status.Playing {
+		progress += int(time.Since(m.transport.seekSentAt) / time.Millisecond)
 	}
 	return m.clampSeekTarget(progress)
 }
@@ -289,13 +270,13 @@ func (m *model) shouldApplySeekSettle(incoming *spotify.PlaybackStatus) bool {
 	if !incoming.Playing {
 		return false
 	}
-	if m.seekDebouncePending < 0 && (m.seekSentTarget < 0 || time.Since(m.seekSentAt) >= seekSettleWindow) {
+	if m.transport.seekDebouncePending < 0 && (m.transport.seekSentTarget < 0 || time.Since(m.transport.seekSentAt) >= seekSettleWindow) {
 		return false
 	}
-	if m.status == nil {
+	if m.transport.status == nil {
 		return true
 	}
-	prevTrack := golibrespot.NormalizeSpotifyId(m.status.TrackID)
+	prevTrack := golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
 	nextTrack := golibrespot.NormalizeSpotifyId(incoming.TrackID)
 	if prevTrack == "" || nextTrack == "" {
 		return true
@@ -304,23 +285,23 @@ func (m *model) shouldApplySeekSettle(incoming *spotify.PlaybackStatus) bool {
 }
 
 func (m *model) clearSeekSettleTarget(observed int) {
-	if m.seekSentTarget < 0 {
+	if m.transport.seekSentTarget < 0 {
 		return
 	}
-	if observed >= 0 && absInt(observed-m.seekSentTarget) <= seekSettleToleranceMS {
-		m.seekSentTarget = -1
+	if observed >= 0 && absInt(observed-m.transport.seekSentTarget) <= seekSettleToleranceMS {
+		m.transport.seekSentTarget = -1
 		return
 	}
-	if time.Since(m.seekSentAt) >= seekSettleWindow {
-		m.seekSentTarget = -1
+	if time.Since(m.transport.seekSentAt) >= seekSettleWindow {
+		m.transport.seekSentTarget = -1
 	}
 }
 
 func (m *model) applyStatusSettleOverrides(status *spotify.PlaybackStatus, observedVol int) {
-	inVolSettle := m.volDebouncePending >= 0 ||
-		(m.volSentTarget >= 0 && time.Since(m.volSentAt) < volSettleWindow)
-	if inVolSettle && status != nil && m.volSentTarget >= 0 {
-		status.Volume = m.volSentTarget
+	inVolSettle := m.transport.volDebouncePending >= 0 ||
+		(m.transport.volSentTarget >= 0 && time.Since(m.transport.volSentAt) < volSettleWindow)
+	if inVolSettle && status != nil && m.transport.volSentTarget >= 0 {
+		status.Volume = m.transport.volSentTarget
 	}
 	incomingProgress := -1
 	if status != nil {
@@ -355,30 +336,30 @@ func absInt(v int) int {
 const pendingContextTimeout = 8 * time.Second
 
 func (m *model) shouldApplyIncomingQueue(incomingTrack string) bool {
-	if m.pendingContextFrom == "" {
+	if m.transport.pendingContextFrom == "" {
 		return true
 	}
-	if time.Since(m.pendingContextFromAt) > pendingContextTimeout {
-		m.pendingContextFrom = ""
+	if time.Since(m.transport.pendingContextFromAt) > pendingContextTimeout {
+		m.transport.pendingContextFrom = ""
 		return true
 	}
-	if incomingTrack == m.pendingContextFrom {
-		m.queue = nil
-		m.stableQueueLen = 0
-		m.queueHasMore = false
+	if incomingTrack == m.transport.pendingContextFrom {
+		m.transport.queue = nil
+		m.transport.stableQueueLen = 0
+		m.transport.queueHasMore = false
 		return false
 	}
-	m.pendingContextFrom = ""
+	m.transport.pendingContextFrom = ""
 	return true
 }
 
 func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool) {
-	m.queue = mergeQueueNames(m.queue, incoming, m.trackCache)
+	m.transport.queue = mergeQueueNames(m.transport.queue, incoming, m.browse.trackCache)
 	if updateStable {
-		m.stableQueueLen = len(m.queue)
+		m.transport.stableQueueLen = len(m.transport.queue)
 	}
 	if updateHasMore {
-		m.queueHasMore = queueHasMore
+		m.transport.queueHasMore = queueHasMore
 	}
 	m.rebuildPreloadedFromQueue()
 }
@@ -490,21 +471,21 @@ func mergeQueueNames(prev, next []spotify.QueueItem, cache *cache.TTL[string, sp
 }
 
 func (m *model) rebuildPreloadedFromQueue() {
-	if m.preloadedItemIDs == nil {
-		m.preloadedItemIDs = make(map[string]struct{}, len(m.queue))
+	if m.browse.preloadedItemIDs == nil {
+		m.browse.preloadedItemIDs = make(map[string]struct{}, len(m.transport.queue))
 	}
-	newIDs := make(map[string]struct{}, len(m.queue))
-	for _, q := range m.queue {
+	newIDs := make(map[string]struct{}, len(m.transport.queue))
+	for _, q := range m.transport.queue {
 		if q.ID != "" {
 			newIDs[golibrespot.NormalizeSpotifyId(q.ID)] = struct{}{}
 		}
 	}
-	for k := range m.preloadedItemIDs {
+	for k := range m.browse.preloadedItemIDs {
 		if _, ok := newIDs[k]; !ok {
-			delete(m.preloadedItemIDs, k)
+			delete(m.browse.preloadedItemIDs, k)
 		}
 	}
 	for k := range newIDs {
-		m.preloadedItemIDs[k] = struct{}{}
+		m.browse.preloadedItemIDs[k] = struct{}{}
 	}
 }

@@ -349,10 +349,8 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 		t.mu.Unlock()
 
 		if d := time.Until(waitUntil); d > 0 {
-			select {
-			case <-req.Context().Done():
-				return nil, req.Context().Err()
-			case <-time.After(d):
+			if err := sleepWithContext(req.Context(), d); err != nil {
+				return nil, err
 			}
 		}
 
@@ -385,10 +383,8 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 		}
 		t.mu.Unlock()
 
-		select {
-		case <-req.Context().Done():
-			return nil, req.Context().Err()
-		case <-time.After(delay):
+		if err := sleepWithContext(req.Context(), delay); err != nil {
+			return nil, err
 		}
 	}
 }

@@ -238,7 +238,7 @@ func (p *AppPlayer) runPrefetchWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case job := <-p.prefetchJobs:
-			jobCtx, cancel := context.WithTimeout(p.ownerContext(), 30*time.Second)
+			jobCtx, cancel := context.WithTimeout(p.ownerContext(), prefetchJobTimeout)
 			stream, err := p.player.NewStream(jobCtx, p.runtime.Client, job.target, p.runtime.Cfg.Bitrate, 0)
 			cancel()
 			if ctx.Err() != nil {
@@ -342,7 +342,7 @@ func (p *AppPlayer) runAdvanceNextTransition(source string, forceNext, dropTrans
 	}
 	p.advanceInFlight.Store(true)
 	defer p.advanceInFlight.Store(false)
-	transitionCtx, transitionCancel := context.WithTimeout(p.ownerContext(), 30*time.Second)
+	transitionCtx, transitionCancel := context.WithTimeout(p.ownerContext(), trackTransitionTimeout)
 	hasNextTrack, err := p.advanceNext(transitionCtx, forceNext, dropTransition)
 	transitionCancel()
 	if err != nil {
@@ -374,7 +374,7 @@ func (p *AppPlayer) maybeAdvanceOnTrackEndGuard() {
 }
 
 func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, loadCurrentTrackTimeout)
 	defer cancel()
 	switch ev.Type {
 	case player.EventTypePlay:
@@ -479,7 +479,7 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 	p.syncPlayerTrackState(ctx, ctxTracks, nil)
 	allTracks := ctxTracks.AllTracks(ctx)
 	go func() {
-		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), 15*time.Second)
+		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
 		defer metaCancel()
 		p.resolveContextQueueMetadata(metaCtx, allTracks)
 	}()
@@ -937,7 +937,7 @@ func (p *AppPlayer) updateVolume(newVal uint32) {
 }
 
 func (p *AppPlayer) volumeUpdated(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, shuffleContextTimeout)
 	defer cancel()
 	if err := p.putConnectState(ctx, connectpb.PutStateReason_VOLUME_CHANGED); err != nil {
 		p.runtime.Log.WithError(err).Error("failed put state after volume change")

@@ -33,7 +33,7 @@ func (c *playlistCatalog) CurrentUserID(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("webapi me: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return "", fmt.Errorf("webapi me: %d %s", resp.StatusCode, string(body))
 	}
@@ -64,7 +64,7 @@ func (c *playlistCatalog) ListUserPlaylistsPage(ctx context.Context, offset, lim
 		return nil, fmt.Errorf("webapi playlists: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("webapi playlists: %d %s", resp.StatusCode, string(body))
 	}
@@ -125,7 +125,7 @@ func (c *playlistCatalog) ListSavedAlbumsPage(ctx context.Context, offset, limit
 		return nil, fmt.Errorf("webapi albums: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("webapi albums: %d %s", resp.StatusCode, string(body))
 	}
@@ -207,7 +207,7 @@ func (c *playlistCatalog) ResolveContextImageURL(ctx context.Context, kind, id s
 			return "", fmt.Errorf("webapi playlist images: %w", err)
 		}
 		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != 200 {
+		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			return "", fmt.Errorf("webapi playlist images: %d %s", resp.StatusCode, string(body))
 		}
@@ -225,7 +225,7 @@ func (c *playlistCatalog) ResolveContextImageURL(ctx context.Context, kind, id s
 			return "", fmt.Errorf("webapi album details: %w", err)
 		}
 		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != 200 {
+		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			return "", fmt.Errorf("webapi album details: %d %s", resp.StatusCode, string(body))
 		}
@@ -325,7 +325,7 @@ func (c *playlistCatalog) ListAlbumTracksPage(ctx context.Context, albumID strin
 		return nil, fmt.Errorf("webapi album tracks: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("webapi album tracks: %d %s", resp.StatusCode, string(body))
 	}

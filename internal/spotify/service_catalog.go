@@ -332,7 +332,7 @@ func (s *Service) ListAlbumTracksPage(ctx context.Context, albumID string, offse
 		return nil, fmt.Errorf("webapi album tracks: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("webapi album tracks: %d %s", resp.StatusCode, string(body))
 	}
