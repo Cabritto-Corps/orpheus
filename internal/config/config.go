@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -26,11 +27,7 @@ type Config struct {
 }
 
 func LoadFromEnv() (Config, error) {
-	if err := godotenv.Load(); err != nil {
-		if _, statErr := os.Stat(".env"); statErr == nil {
-			slog.Warn("failed to parse .env file", "error", err)
-		}
-	}
+	loadEnvFile()
 
 	cfg := Config{
 		SpotifyClientID:      envAny("spotify_client_id", "SPOTIFY_CLIENT_ID"),
@@ -138,6 +135,36 @@ func splitCSV(input string) []string {
 		out = append(out, t)
 	}
 	return out
+}
+
+func DefaultConfigDir() (string, error) {
+	if v := strings.TrimSpace(os.Getenv("ORPHEUS_CONFIG_DIR")); v != "" {
+		return v, nil
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "orpheus"), nil
+}
+
+func loadEnvFile() {
+	if _, err := os.Stat(".env"); err == nil {
+		if loadErr := godotenv.Load(); loadErr != nil {
+			slog.Warn("failed to parse .env file", "error", loadErr)
+		}
+		return
+	}
+	dir, err := DefaultConfigDir()
+	if err != nil {
+		return
+	}
+	path := filepath.Join(dir, ".env")
+	if _, err := os.Stat(path); err == nil {
+		if loadErr := godotenv.Load(path); loadErr != nil {
+			slog.Warn("failed to parse .env file", "path", path, "error", loadErr)
+		}
+	}
 }
 
 func defaultTokenPath() string {

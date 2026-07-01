@@ -267,13 +267,9 @@ func runCheck(ctx context.Context, authManager *auth.Manager, token *oauth2.Toke
 }
 
 func runLibrespotTUI() error {
-	configDir := os.Getenv("ORPHEUS_CONFIG_DIR")
-	if configDir == "" {
-		dir, err := os.UserConfigDir()
-		if err != nil {
-			return fmt.Errorf("config dir: %w", err)
-		}
-		configDir = filepath.Join(dir, "orpheus")
+	configDir, err := config.DefaultConfigDir()
+	if err != nil {
+		return fmt.Errorf("config dir: %w", err)
 	}
 
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
