@@ -349,7 +349,6 @@ func (p *AppPlayer) runAdvanceNextTransition(source string, forceNext, dropTrans
 		p.runtime.Log.WithError(err).WithField("source", source).Error("failed advancing to next track")
 	}
 	if !hasNextTrack {
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeStopped, Data: ApiEventDataStopped{PlayOrigin: golibrespot.PlayOrigin(p.state.player)}})
 	}
 	p.emitPlaybackState()
 }
@@ -383,7 +382,6 @@ func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
 		p.state.player.IsBuffering = false
 		p.updateState(ctx)
 		p.sess.Events().OnPlayerPlay(p.primaryStream, p.state.player.ContextUri, p.state.player.Options.ShufflingContext, p.state.player.PlayOrigin, p.state.tracks.CurrentTrack(), golibrespot.TrackPosition(p.state.player, 0))
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypePlaying, Data: ApiEventDataPlaying{ContextUri: p.state.player.ContextUri, Uri: p.state.player.Track.Uri, Resume: false, PlayOrigin: golibrespot.PlayOrigin(p.state.player)}})
 		p.emitPlaybackState()
 	case player.EventTypeResume:
 		p.state.player.IsPlaying = true
@@ -391,7 +389,6 @@ func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
 		p.state.player.IsBuffering = false
 		p.updateState(ctx)
 		p.sess.Events().OnPlayerResume(p.primaryStream, golibrespot.TrackPosition(p.state.player, 0))
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypePlaying, Data: ApiEventDataPlaying{ContextUri: p.state.player.ContextUri, Uri: p.state.player.Track.Uri, Resume: true, PlayOrigin: golibrespot.PlayOrigin(p.state.player)}})
 		p.emitPlaybackState()
 	case player.EventTypePause:
 		p.state.player.IsPlaying = true
@@ -399,7 +396,6 @@ func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
 		p.state.player.IsBuffering = false
 		p.updateState(ctx)
 		p.sess.Events().OnPlayerPause(p.primaryStream, p.state.player.ContextUri, p.state.player.Options.ShufflingContext, p.state.player.PlayOrigin, p.state.tracks.CurrentTrack(), golibrespot.TrackPosition(p.state.player, 0))
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypePaused, Data: ApiEventDataPaused{ContextUri: p.state.player.ContextUri, Uri: p.state.player.Track.Uri, PlayOrigin: golibrespot.PlayOrigin(p.state.player)}})
 		p.emitPlaybackState()
 	case player.EventTypeNotPlaying:
 		if p.primaryStream != nil {
@@ -409,7 +405,6 @@ func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
 			}
 		}
 		p.sess.Events().OnPlayerEnd(p.primaryStream, golibrespot.TrackPosition(p.state.player, 0))
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeNotPlaying, Data: ApiEventDataNotPlaying{ContextUri: p.state.player.ContextUri, Uri: p.state.player.Track.Uri, PlayOrigin: golibrespot.PlayOrigin(p.state.player)}})
 		p.logEndOfTrackInvariant()
 		dropTransition := p.state != nil &&
 			p.state.player != nil &&
@@ -417,7 +412,6 @@ func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
 			p.state.player.Options.RepeatingTrack
 		p.runAdvanceNextTransition("player_not_playing", false, dropTransition)
 	case player.EventTypeStop:
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeStopped, Data: ApiEventDataStopped{PlayOrigin: golibrespot.PlayOrigin(p.state.player)}})
 		p.emitPlaybackState()
 	default:
 		p.runtime.Log.WithField("event_type", ev.Type).Error("received unhandled player event")
@@ -474,7 +468,7 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 		}
 	}
 	p.state.tracks = ctxTracks
-	p.resetQueueMetaForContext(strings.TrimSpace(spotCtx.Uri))
+	p.resetQueueMetaForContext()
 	p.resetPlaybackCaches(true)
 	p.syncPlayerTrackState(ctx, ctxTracks, nil)
 	allTracks := ctxTracks.AllTracks(ctx)
@@ -534,7 +528,6 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	}
 	p.setPlayerTransportState(true, true, paused)
 	p.state.player.PlaybackSpeed = 0
-	p.runtime.Emit(&ApiEvent{Type: ApiEventTypeWillPlay, Data: ApiEventDataWillPlay{ContextUri: p.state.player.ContextUri, Uri: spotId.Uri(), PlayOrigin: golibrespot.PlayOrigin(p.state.player)}})
 	var prefetched bool
 	if p.secondaryStream != nil && p.secondaryStream.Is(*spotId) {
 		p.primaryStream = p.secondaryStream
@@ -576,7 +569,6 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	p.setPlayerTransportState(true, false, paused)
 	p.updateState(ctx)
 	p.schedulePrefetchNext()
-	p.runtime.Emit(&ApiEvent{Type: ApiEventTypeMetadata, Data: ApiEventDataMetadata(*p.newApiResponseStatusTrack(p.primaryStream.Media, trackPosition))})
 	p.emitPlaybackState()
 	return nil
 }
@@ -605,13 +597,11 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 		if next.Shuffle {
 			p.scheduleShuffleCacheRefresh()
 		}
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeShuffleContext, Data: ApiEventDataShuffleContext{Value: next.Shuffle}})
 	}
 
 	var requiresUpdate bool
 	if next.RepeatContext != curr.RepeatContext {
 		p.state.player.Options.RepeatingContext = next.RepeatContext
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeRepeatContext, Data: ApiEventDataRepeatContext{Value: next.RepeatContext}})
 		requiresUpdate = true
 	}
 	if next.RepeatTrack != curr.RepeatTrack {
@@ -620,7 +610,6 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 		if next.RepeatTrack {
 			p.clearSecondaryStream()
 		}
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeRepeatTrack, Data: ApiEventDataRepeatTrack{Value: next.RepeatTrack}})
 		requiresUpdate = true
 	}
 	if next.Shuffle != curr.Shuffle {
@@ -725,7 +714,6 @@ func (p *AppPlayer) seek(ctx context.Context, position int64) error {
 	p.updateState(ctx)
 	p.schedulePrefetchNext()
 	p.sess.Events().OnPlayerSeek(p.primaryStream, oldPosition, position)
-	p.runtime.Emit(&ApiEvent{Type: ApiEventTypeSeek, Data: ApiEventDataSeek{ContextUri: p.state.player.ContextUri, Uri: p.state.player.Track.Uri, Position: int(position), Duration: int(p.primaryStream.Media.Duration()), PlayOrigin: golibrespot.PlayOrigin(p.state.player)}})
 	p.emitPlaybackState()
 	return nil
 }
@@ -766,7 +754,6 @@ func (p *AppPlayer) skipNext(ctx context.Context, track *connectpb.ContextTrack)
 		return fmt.Errorf("failed skipping to next track: %w", err)
 	}
 	if !hasNextTrack {
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeStopped, Data: ApiEventDataStopped{PlayOrigin: golibrespot.PlayOrigin(p.state.player)}})
 	}
 	p.emitPlaybackState()
 	return nil
@@ -942,7 +929,6 @@ func (p *AppPlayer) volumeUpdated(ctx context.Context) {
 	if err := p.putConnectState(ctx, connectpb.PutStateReason_VOLUME_CHANGED); err != nil {
 		p.runtime.Log.WithError(err).Error("failed put state after volume change")
 	}
-	p.runtime.Emit(&ApiEvent{Type: ApiEventTypeVolume, Data: ApiEventDataVolume{Value: p.apiVolume(), Max: p.runtime.Cfg.VolumeSteps}})
 	p.emitPlaybackState()
 }
 
@@ -955,13 +941,6 @@ func (p *AppPlayer) stopPlayback(ctx context.Context) error {
 	if err := p.putConnectState(ctx, connectpb.PutStateReason_BECAME_INACTIVE); err != nil {
 		return fmt.Errorf("failed inactive state put: %w", err)
 	}
-	if p.runtime.Cfg.ZeroconfEnabled {
-		select {
-		case p.logout <- p:
-		default:
-		}
-	}
-	p.runtime.Emit(&ApiEvent{Type: ApiEventTypeInactive})
 	p.emitPlaybackState()
 	return nil
 }

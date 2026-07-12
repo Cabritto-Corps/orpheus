@@ -47,7 +47,7 @@ func DefaultConfig() *Config {
 	}
 }
 
-func NewRuntime(cfg *Config, appState *golibrespot.AppState, log golibrespot.Logger, stateCh chan<- *ApiEvent, playbackStateCh chan<- *PlaybackStateUpdate) (*Runtime, error) {
+func NewRuntime(cfg *Config, appState *golibrespot.AppState, log golibrespot.Logger, playbackStateCh chan<- *PlaybackStateUpdate) (*Runtime, error) {
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
@@ -66,7 +66,6 @@ func NewRuntime(cfg *Config, appState *golibrespot.AppState, log golibrespot.Log
 		DeviceId:        deviceID,
 		DeviceType:      deviceType,
 		State:           appState,
-		StateCh:         stateCh,
 		PlaybackStateCh: playbackStateCh,
 	}, nil
 }

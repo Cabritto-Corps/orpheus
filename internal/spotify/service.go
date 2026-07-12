@@ -64,7 +64,6 @@ const (
 	apiRetryMaxAttempts                     = 4
 	apiRetryExponentCap                     = 5
 	rateLimitRetryDelay                     = 5 * time.Second
-	pollStatusBackoffMax                    = 10 * time.Second
 )
 
 type Options struct {
@@ -163,15 +162,6 @@ const (
 	ContextKindAlbum      = "album"
 	ContextKindLikedSongs = "liked-songs"
 )
-
-type DeviceDoctorReport struct {
-	TargetDevice string
-	Mode         DeviceMode
-	MatchedBy    string
-	MatchedName  string
-	Discovered   []string
-	Notes        []string
-}
 
 func DiagnoseError(err error) ErrorDiagnosis {
 	if err == nil {
@@ -486,34 +476,4 @@ func (s *Service) playerStateWithRetry(ctx context.Context) (*spotifyapi.PlayerS
 	})
 }
 
-func PollStatus(ctx context.Context, interval time.Duration, fetch func(context.Context) (*PlaybackStatus, error), onStatus func(*PlaybackStatus), onError func(error)) {
-	timer := time.NewTimer(0)
-	defer timer.Stop()
 
-	backoff := interval
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			status, err := fetch(ctx)
-			if err != nil {
-				onError(err)
-				if IsTransientAPIError(err) {
-					backoff *= 2
-					if backoff > pollStatusBackoffMax {
-						backoff = pollStatusBackoffMax
-					}
-					timer.Reset(backoff)
-					continue
-				}
-				backoff = interval
-				timer.Reset(interval)
-				continue
-			}
-			backoff = interval
-			onStatus(status)
-			timer.Reset(interval)
-		}
-	}
-}

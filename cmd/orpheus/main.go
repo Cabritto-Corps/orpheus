@@ -320,7 +320,7 @@ func runLibrespotTUI() error {
 	}
 
 	playbackStateCh := make(chan *librespot.PlaybackStateUpdate, 32)
-	runtime, err := librespot.NewRuntime(librespotCfg, appState, logger, nil, playbackStateCh)
+	runtime, err := librespot.NewRuntime(librespotCfg, appState, logger, playbackStateCh)
 	if err != nil {
 		return err
 	}

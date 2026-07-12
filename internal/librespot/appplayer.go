@@ -35,7 +35,6 @@ type AppPlayer struct {
 	baseCtx context.Context
 
 	stop      chan struct{}
-	logout    chan *AppPlayer
 	runDone   chan struct{}
 	closeOnce sync.Once
 
@@ -66,12 +65,6 @@ type AppPlayer struct {
 
 	queueMetaCache *cache.LRU[string, PlaybackStateQueueEntry]
 	queueMetaMu    sync.RWMutex
-
-	queueResolveMu       sync.Mutex
-	queueResolveInFlight bool
-	namePreloadContext   string
-	namePreloadToken     uint64
-	namePreloadDone      bool
 
 	advanceInFlight atomic.Bool
 }
@@ -195,12 +188,6 @@ func (p *AppPlayer) handleDealerMessage(ctx context.Context, msg dealer.Message)
 			return fmt.Errorf("failed unmarshalling SetVolumeCommand: %w", err)
 		}
 		p.updateVolume(uint32(setVolCmd.Volume))
-	} else if strings.HasPrefix(msg.Uri, "hm://connect-state/v1/connect/logout") {
-		p.runtime.Log.WithField("username", golibrespot.ObfuscateUsername(p.sess.Username())).Debugf("requested logout")
-		select {
-		case p.logout <- p:
-		default:
-		}
 	} else if strings.HasPrefix(msg.Uri, "hm://connect-state/v1/cluster") {
 		var clusterUpdate connectpb.ClusterUpdate
 		if err := proto.Unmarshal(msg.Payload, &clusterUpdate); err != nil {
@@ -225,7 +212,6 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 	switch req.Command.Endpoint {
 	case "transfer":
 		if len(req.Command.Data) == 0 {
-			p.runtime.Emit(&ApiEvent{Type: ApiEventTypeActive})
 			return nil
 		}
 		var transferState connectpb.TransferState
@@ -288,11 +274,10 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		ctxTracks.SetPlayingQueue(transferState.Queue.IsPlayingQueue)
 		p.state.tracks = ctxTracks
 		p.syncPlayerTrackState(ctx, ctxTracks, nil)
-		p.resetQueueMetaForContext(strings.TrimSpace(p.state.player.ContextUri))
+		p.resetQueueMetaForContext()
 		if err := p.loadCurrentTrack(ctx, pause, true); err != nil {
 			return fmt.Errorf("failed loading current track (transfer): %w", err)
 		}
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeActive})
 		return nil
 	case "play":
 		p.state.setActive(true)
