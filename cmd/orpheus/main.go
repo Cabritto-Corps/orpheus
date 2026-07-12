@@ -275,7 +275,16 @@ func runLibrespotTUI() error {
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		return fmt.Errorf("config dir: %w", err)
 	}
+
+	cfg, cfgErr := config.LoadFromEnv()
+	if cfgErr != nil {
+		slog.Warn("spotify config not fully loaded", "error", cfgErr)
+	}
+
 	logPath := os.Getenv("ORPHEUS_LOG_FILE")
+	if logPath == "" {
+		logPath = cfg.LogFile
+	}
 	if logPath == "" {
 		logPath = filepath.Join(configDir, "orpheus.log")
 	}
@@ -306,7 +315,9 @@ func runLibrespotTUI() error {
 	defer sess.Close()
 
 	librespotCfg := librespot.DefaultConfig()
-	librespotCfg.DeviceName = "orpheus"
+	if cfg.DeviceName != "" {
+		librespotCfg.DeviceName = cfg.DeviceName
+	}
 
 	playbackStateCh := make(chan *librespot.PlaybackStateUpdate, 32)
 	runtime, err := librespot.NewRuntime(librespotCfg, appState, logger, nil, playbackStateCh)
@@ -324,13 +335,21 @@ func runLibrespotTUI() error {
 	go appPlayer.Run(ctx, tuiCmdCh)
 
 	tuiCfg := config.Config{
-		DeviceName:   librespotCfg.DeviceName,
-		PollInterval: 1500 * time.Millisecond,
-		NerdFonts:    false,
+		SpotifyClientID:      cfg.SpotifyClientID,
+		RedirectURI:          cfg.RedirectURI,
+		Scopes:               cfg.Scopes,
+		DeviceName:           librespotCfg.DeviceName,
+		DeviceResolutionMode: cfg.DeviceResolutionMode,
+		AllowActiveFallback:  cfg.AllowActiveFallback,
+		TokenPath:            cfg.TokenPath,
+		PollInterval:         cfg.PollInterval,
+		NerdFonts:            cfg.NerdFonts,
+		OnSongChange:         cfg.OnSongChange,
+		LogFile:              cfg.LogFile,
 	}
 
 	var catalog spotify.PlaylistCatalog
-	if cfg, cfgErr := config.LoadFromEnv(); cfgErr != nil {
+	if cfgErr != nil {
 		slog.Warn("spotify config not available, using librespot catalog", "error", cfgErr)
 	} else if authMgr, authErr := auth.NewPKCEManager(cfg, auth.NewFileTokenStore(cfg.TokenPath)); authErr != nil {
 		slog.Warn("spotify auth init failed, using librespot catalog", "error", authErr)

@@ -168,17 +168,17 @@ func loadEnvFile() {
 }
 
 func defaultTokenPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
+	dir, err := DefaultConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
 		return ".orpheus-token.json"
 	}
-	return home + "/.config/orpheus/token.json"
+	return filepath.Join(dir, "token.json")
 }
 
 func defaultLogPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
+	dir, err := DefaultConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
 		return ""
 	}
-	return home + "/.config/orpheus/orpheus.log"
+	return filepath.Join(dir, "orpheus.log")
 }
