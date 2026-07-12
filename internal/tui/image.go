@@ -73,8 +73,8 @@ func newImgCache() *imgCache {
 }
 
 func (c *imgCache) getImage(url string) (image.Image, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.imgs.Get(url)
 }
 
@@ -225,7 +225,7 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 	evictedURL, evictedImg, evicted := c.imgs.Set(url, img)
 	if encoded != "" {
 		c.encoded[url] = encoded
-		delete(c.kittyChunks, url)
+		c.deleteKittyChunksLocked(url)
 	}
 	if evicted {
 		if _, pinned := c.pinned[evictedURL]; pinned {
@@ -233,7 +233,7 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 		} else {
 			c.deleteCoversForURLLocked(evictedURL)
 			delete(c.encoded, evictedURL)
-			delete(c.kittyChunks, evictedURL)
+			c.deleteKittyChunksLocked(evictedURL)
 		}
 	}
 }
@@ -269,7 +269,9 @@ func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
 		}
 		s := renderCover(c.protocol, img, encoded, cols, rows)
 		if _, exists := c.covers.Peek(key); !exists {
-			c.covers.Set(key, s)
+			if evictedKey, _, evicted := c.covers.Set(key, s); evicted {
+				c.removeCoverKeyFromURLMap(evictedKey)
+			}
 			if _, ok := c.coverKeysByURL[url]; !ok {
 				c.coverKeysByURL[url] = make(map[coverKey]struct{})
 			}
@@ -296,8 +298,8 @@ func (c *imgCache) beginLoad(url string) bool {
 }
 
 func (c *imgCache) shouldQueueLoad(url string) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if url == "" {
 		return false
 	}
@@ -307,15 +309,18 @@ func (c *imgCache) shouldQueueLoad(url string) bool {
 	if _, ok := c.inflight[url]; ok {
 		return false
 	}
-	if t, ok := c.failedAt[url]; ok && time.Since(t) < imageFetchFailCooldown {
-		return false
+	if t, ok := c.failedAt[url]; ok {
+		if time.Since(t) < imageFetchFailCooldown {
+			return false
+		}
+		delete(c.failedAt, url)
 	}
 	return true
 }
 
 func (c *imgCache) shouldQueuePriorityLoad(url string) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if url == "" {
 		return false
 	}
@@ -325,8 +330,11 @@ func (c *imgCache) shouldQueuePriorityLoad(url string) bool {
 	if _, ok := c.inflight[url]; ok {
 		return false
 	}
-	if t, ok := c.failedAt[url]; ok && time.Since(t) < imageFetchPriorityFailCooldown {
-		return false
+	if t, ok := c.failedAt[url]; ok {
+		if time.Since(t) < imageFetchPriorityFailCooldown {
+			return false
+		}
+		delete(c.failedAt, url)
 	}
 	return true
 }
@@ -433,7 +441,9 @@ func (c *imgCache) renderAndCache(key coverKey, url string, img image.Image, enc
 	if existing, ok := c.covers.Get(key); ok {
 		result = existing
 	} else {
-		c.covers.Set(key, s)
+		if evictedKey, _, evicted := c.covers.Set(key, s); evicted {
+			c.removeCoverKeyFromURLMap(evictedKey)
+		}
 		if _, ok := c.coverKeysByURL[url]; !ok {
 			c.coverKeysByURL[url] = make(map[coverKey]struct{})
 		}
@@ -462,6 +472,27 @@ func (c *imgCache) deleteCoversForURLLocked(url string) {
 			c.covers.Delete(key)
 		}
 		delete(c.coverKeysByURL, url)
+	}
+}
+
+func (c *imgCache) removeCoverKeyFromURLMap(key coverKey) {
+	if keys, ok := c.coverKeysByURL[key.url]; ok {
+		delete(keys, key)
+		if len(keys) == 0 {
+			delete(c.coverKeysByURL, key.url)
+		}
+	}
+}
+
+func (c *imgCache) deleteKittyChunksLocked(url string) {
+	if _, exists := c.kittyChunks[url]; exists {
+		delete(c.kittyChunks, url)
+		for i, u := range c.kittyChunkOrder {
+			if u == url {
+				c.kittyChunkOrder = append(c.kittyChunkOrder[:i], c.kittyChunkOrder[i+1:]...)
+				break
+			}
+		}
 	}
 }
 
