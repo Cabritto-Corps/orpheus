@@ -23,7 +23,7 @@ import (
 	"orpheus/internal/playbackdomain"
 )
 
-func (p *AppPlayer) prefetchCandidateIDs(ctx context.Context) []golibrespot.SpotifyId {
+func (p *AppPlayer) prefetchCandidateIDs() []golibrespot.SpotifyId {
 	if p.state == nil || p.state.tracks == nil || p.state.player == nil {
 		return nil
 	}
@@ -46,7 +46,7 @@ func (p *AppPlayer) prefetchCandidateIDs(ctx context.Context) []golibrespot.Spot
 	if repeatTrack && p.state.player.Track != nil {
 		appendCandidate(p.state.player.Track.Uri)
 	}
-	if next := p.state.tracks.PeekNext(ctx); next != nil {
+	if next := p.state.tracks.PeekNextLoaded(); next != nil {
 		appendCandidate(next.Uri)
 	}
 	for i := 0; i < len(p.state.player.NextTracks) && len(candidates) < transitionStreamCacheMax; i++ {
@@ -183,7 +183,7 @@ func (p *AppPlayer) handleShuffleCacheRefresh(ctx context.Context) {
 }
 
 func (p *AppPlayer) prefetchNext(ctx context.Context) {
-	candidates := p.prefetchCandidateIDs(ctx)
+	candidates := p.prefetchCandidateIDs()
 	if len(candidates) == 0 {
 		return
 	}
@@ -217,6 +217,38 @@ func (p *AppPlayer) prefetchNext(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// scheduleQueueTopUp arms the deferred queue-extension tick. The Run
+// goroutine emits queue state from already-loaded pages only (B3); this
+// schedules the single bounded extending fetch that keeps the full queue
+// visible in the TUI and in connect state, without stalling emits.
+func (p *AppPlayer) scheduleQueueTopUp() {
+	if p == nil || p.queueTopUpInFlight {
+		return
+	}
+	p.queueTopUpInFlight = true
+	stopAndResetTimer(p.queueTopUpTimer, queueTopUpDelay)
+}
+
+// topUpQueue performs the deferred extending fetch on the Run goroutine.
+// The fetch mutates the tracks list (pagedList is single-goroutine by
+// design), so it must run here; the timer keeps it out of the dealer-reply
+// critical path and the bounded timeout caps the block.
+func (p *AppPlayer) topUpQueue(ctx context.Context) {
+	p.queueTopUpInFlight = false
+	if p.state == nil || p.state.tracks == nil || p.primaryStream == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, stateAdapterBatchTimeout)
+	defer cancel()
+	full := p.state.tracks.UpcomingTracks(ctx, queueOverrideMaxTracks)
+	if ctx.Err() != nil || len(full) == 0 {
+		return
+	}
+	p.syncPlayerTrackState(p.state.tracks, nil)
+	p.updateState(ctx)
+	p.emitPlaybackState()
 }
 
 func (p *AppPlayer) schedulePrefetchNext() {
@@ -308,13 +340,13 @@ func (p *AppPlayer) handlePrefetchResult(res prefetchResult) {
 	}
 }
 
-func (p *AppPlayer) syncPlayerTrackState(ctx context.Context, trackList *tracks.List, nextHint []*connectpb.ContextTrack) {
+func (p *AppPlayer) syncPlayerTrackState(trackList *tracks.List, nextHint []*connectpb.ContextTrack) {
 	if p.state == nil || p.state.player == nil || trackList == nil {
 		return
 	}
 	p.state.player.Track = trackList.CurrentTrack()
 	p.state.player.PrevTracks = trackList.PrevTracks()
-	p.state.player.NextTracks = trackList.NextTracks(ctx, nextHint)
+	p.state.player.NextTracks = trackList.NextTracksLoaded(nextHint)
 	p.state.player.Index = trackList.Index()
 }
 
@@ -506,8 +538,9 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 	p.state.tracks = ctxTracks
 	p.resetQueueMetaForContext()
 	p.resetPlaybackCaches(true)
-	p.syncPlayerTrackState(ctx, ctxTracks, nil)
+	p.syncPlayerTrackState(ctxTracks, nil)
 	allTracks := ctxTracks.AllTracks(ctx)
+	p.scheduleQueueTopUp()
 	go func() {
 		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
 		defer metaCancel()
@@ -611,6 +644,7 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 }
 
 func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repeatingTrack *bool, shufflingContext *bool) error {
+	var scheduleQueueTopUp bool
 	if p == nil || p.state == nil || p.state.player == nil || p.state.player.Options == nil {
 		return nil
 	}
@@ -630,10 +664,11 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 		}
 		p.state.player.Options.ShufflingContext = next.Shuffle
 		p.resetPlaybackCaches(true)
-		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
+		p.syncPlayerTrackState(p.state.tracks, nil)
 		if next.Shuffle {
 			p.scheduleShuffleCacheRefresh()
 		}
+		scheduleQueueTopUp = true
 	}
 
 	var requiresUpdate bool
@@ -657,6 +692,9 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 		p.updateState(ctx)
 		p.emitPlaybackState()
 	}
+	if scheduleQueueTopUp {
+		p.scheduleQueueTopUp()
+	}
 	return nil
 }
 
@@ -670,7 +708,7 @@ func (p *AppPlayer) addToQueue(ctx context.Context, track *connectpb.ContextTrac
 		track.Uid = fmt.Sprintf("q%d", p.state.queueID)
 	}
 	p.state.tracks.AddToQueue(track)
-	p.syncPlayerTrackState(ctx, p.state.tracks, nil)
+	p.syncPlayerTrackState(p.state.tracks, nil)
 	p.updateState(ctx)
 	p.schedulePrefetchNext()
 	p.emitPlaybackState()
@@ -682,7 +720,7 @@ func (p *AppPlayer) setQueue(ctx context.Context, prev []*connectpb.ContextTrack
 		return
 	}
 	p.state.tracks.SetQueue(prev, next)
-	p.syncPlayerTrackState(ctx, p.state.tracks, next)
+	p.syncPlayerTrackState(p.state.tracks, next)
 	p.updateState(ctx)
 	p.schedulePrefetchNext()
 	p.emitPlaybackState()
@@ -762,7 +800,7 @@ func (p *AppPlayer) skipPrev(ctx context.Context, allowSeeking bool) error {
 	p.sess.Events().OnPlayerSkipBackward(p.primaryStream, p.currentPositionMs())
 	if p.state.tracks != nil {
 		p.state.tracks.GoPrev()
-		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
+		p.syncPlayerTrackState(p.state.tracks, nil)
 	}
 	if err := p.loadCurrentTrackFromTransition(ctx, p.state.player.IsPaused, true, "skip prev"); err != nil {
 		return err
@@ -778,7 +816,7 @@ func (p *AppPlayer) skipNext(ctx context.Context, track *connectpb.ContextTrack)
 			return err
 		}
 		p.bumpPrefetchGeneration()
-		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
+		p.syncPlayerTrackState(p.state.tracks, nil)
 		if err := p.loadCurrentTrackFromTransition(ctx, p.state.player.IsPaused, true, "skip next"); err != nil {
 			return err
 		}
@@ -826,7 +864,7 @@ func (p *AppPlayer) applyAdvanceNextSelection(ctx context.Context, selection adv
 		return
 	}
 	if selection.trackChanged && p.state.tracks != nil {
-		p.syncPlayerTrackState(ctx, p.state.tracks, nil)
+		p.syncPlayerTrackState(p.state.tracks, nil)
 	}
 	if !forceNext && p.state.player.Options != nil && p.state.player.Options.RepeatingTrack && !selection.trackChanged && selection.hasNextTrack {
 		p.clearSecondaryStream()

@@ -31,6 +31,10 @@ const (
 	volumeUpdateDebounce = 100 * time.Millisecond
 	connectStateDebounce = 75 * time.Millisecond
 
+	// queueTopUpDelay keeps the bounded extending fetch off the same Run
+	// iteration as the dealer reply that triggered the emit.
+	queueTopUpDelay = 250 * time.Millisecond
+
 	// endGuardMaxFailures bounds the end-of-track guard's retry loop before
 	// it surfaces the stuck state instead of retrying forever.
 	endGuardMaxFailures = 3
@@ -66,6 +70,8 @@ type AppPlayer struct {
 	prefetchTimer       *time.Timer
 	shuffleRefreshTimer *time.Timer
 	connectStateTimer   *time.Timer
+	queueTopUpTimer     *time.Timer
+	queueTopUpInFlight  bool
 	prefetchJobs        chan prefetchJob
 	prefetchDone        chan prefetchResult
 
@@ -297,12 +303,13 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 			ctxTracks.SetPlayingQueue(transferState.Queue.IsPlayingQueue)
 		}
 		p.state.tracks = ctxTracks
-		p.syncPlayerTrackState(ctx, ctxTracks, nil)
+		p.syncPlayerTrackState(ctxTracks, nil)
 		p.resetQueueMetaForContext()
 		p.resetPlaybackCaches(true)
 		if err := p.loadCurrentTrack(ctx, pause, true); err != nil {
 			return fmt.Errorf("failed loading current track (transfer): %w", err)
 		}
+		p.scheduleQueueTopUp()
 		return nil
 	case "play":
 		if req.Command.Context == nil {
@@ -478,6 +485,7 @@ func (p *AppPlayer) Close() {
 		p.prefetchTimer.Stop()
 		p.shuffleRefreshTimer.Stop()
 		p.connectStateTimer.Stop()
+		p.queueTopUpTimer.Stop()
 		p.player.Close()
 	})
 }
@@ -578,6 +586,8 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			p.volumeUpdated(ctx)
 		case <-p.connectStateTimer.C:
 			p.flushConnectState()
+		case <-p.queueTopUpTimer.C:
+			p.topUpQueue(ctx)
 		case <-endTransitionGuardTicker.C:
 			p.maybeAdvanceOnTrackEndGuard()
 		case <-reconcileTicker.C:

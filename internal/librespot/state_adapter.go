@@ -1,7 +1,6 @@
 package librespot
 
 import (
-	"context"
 	"strconv"
 	"strings"
 
@@ -38,11 +37,15 @@ func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUp
 	if includeQueue {
 		out.QueueIncluded = true
 		if p.state.tracks != nil {
-			ctx, cancel := context.WithTimeout(p.ownerContext(), stateAdapterBatchTimeout)
-			defer cancel()
-			upcoming := p.state.tracks.UpcomingTracks(ctx, queueOverrideMaxTracks)
+			// Loaded-only read: this runs on the Run goroutine where a page
+			// fetch would stall the select loop (B3). The queue top-up timer
+			// extends the loaded pages off the emit path.
+			upcoming := p.state.tracks.UpcomingTracksLoaded(queueOverrideMaxTracks)
 			out.Queue = providedTracksToQueueEntries(p, upcoming)
 			out.QueueHasMore = len(upcoming) >= queueOverrideMaxTracks
+			if out.QueueHasMore {
+				p.scheduleQueueTopUp()
+			}
 		} else {
 			out.Queue = nil
 			out.QueueHasMore = false

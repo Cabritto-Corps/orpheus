@@ -60,7 +60,7 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 				}
 			}
 			p.state.tracks.WrapPlaybackFromCurrent()
-			p.syncPlayerTrackState(ctx, p.state.tracks, nil)
+			p.syncPlayerTrackState(p.state.tracks, nil)
 			p.emitPlaybackState()
 		}
 		return true, nil
