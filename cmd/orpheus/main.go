@@ -178,7 +178,9 @@ func runCheck(ctx context.Context, authManager *auth.Manager, token *oauth2.Toke
 	notifyingSource := auth.NewNotifyingTokenSourceWithInitial(
 		baseTokenSource,
 		func(newToken *oauth2.Token) {
-			_ = authManager.SaveToken(newToken)
+			if saveErr := authManager.SaveToken(newToken); saveErr != nil {
+				slog.Warn("failed saving refreshed spotify token", "error", saveErr)
+			}
 		},
 		token.AccessToken,
 	)
@@ -355,11 +357,14 @@ func runLibrespotTUI() error {
 		slog.Warn("spotify auth init failed, using librespot catalog", "error", authErr)
 	} else if token, tokenErr := authMgr.LoadToken(); tokenErr != nil || token == nil {
 		slog.Info("no spotify token found, using librespot catalog")
+		slog.Warn("library browsing limited to the session's Web API proxy; run 'orpheus auth login' to browse your full library")
 	} else {
 		oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, oauthHTTPClient())
 		baseTS := authMgr.TokenSource(oauthCtx, token)
 		ts := auth.NewNotifyingTokenSourceWithInitial(baseTS, func(t *oauth2.Token) {
-			_ = authMgr.SaveToken(t)
+			if saveErr := authMgr.SaveToken(t); saveErr != nil {
+				slog.Warn("failed saving refreshed spotify token", "error", saveErr)
+			}
 		}, token.AccessToken)
 		spotifyClient := spotify.NewClient(oauthCtx, ts)
 		catalog = spotify.NewService(spotifyClient, spotify.Options{

@@ -39,11 +39,20 @@ func (m model) headerView() string {
 		if trackName == "" {
 			trackName = "Unknown track"
 		}
+		if m.transport.transition.Pending() {
+			// The pushed status still describes the outgoing track while a
+			// transition is pending; mark it so it never reads as "paused".
+			trackName = truncate(trackName, max(availCenterW-1, 1)) + "…"
+		}
 		centerL1 = styleHeaderCenter.Render(truncate(trackName, availCenterW))
 	} else {
 		statusStr = styleHeaderPaused.Render("Orpheus")
 		centerL1 = styleHeaderSub.Render("no active playback")
-		rightL1 = styleHeaderStatus.Render(m.icon(iconDevice, iconDeviceNF) + " " + m.deviceName)
+		device := m.icon(iconDevice, iconDeviceNF) + " " + m.deviceName
+		// Line 1 also carries the volume/status side only in the playing
+		// state; here the device string must fit the full width or it wraps
+		// and corrupts the chrome height.
+		rightL1 = styleHeaderStatus.Render(truncate(device, max(1, w-lipgloss.Width(statusStr)-2)))
 	}
 
 	line1 := layoutThreeZone(w, statusStr, centerL1, rightL1)
@@ -121,7 +130,10 @@ func (m model) playerBarView() string {
 	sep := sectionDivider(barW)
 
 	if m.transport.status == nil {
-		return sep
+		// Always render the full bar height: the idle placeholder must
+		// occupy the same number of lines as the playing bar or the bottom
+		// gutter shifts between idle and playing frames.
+		return sep + "\n"
 	}
 
 	playIcon := m.icon(iconPlay, iconPlayNF)

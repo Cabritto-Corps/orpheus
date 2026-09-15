@@ -23,12 +23,18 @@ import (
 	"orpheus/internal/playbackdomain"
 )
 
+// prefetchFanOutMax bounds how many streams one prefetch pass may warm.
+// The transition cache holds 16, but warming all of them hammers spclient
+// with metadata/storage requests for tracks the user will likely never
+// reach before the next context change; the next few tracks cover skips.
+const prefetchFanOutMax = 3
+
 func (p *AppPlayer) prefetchCandidateIDs() []golibrespot.SpotifyId {
 	if p.state == nil || p.state.tracks == nil || p.state.player == nil {
 		return nil
 	}
-	candidates := make([]golibrespot.SpotifyId, 0, transitionStreamCacheMax)
-	seen := make(map[string]struct{}, transitionStreamCacheMax)
+	candidates := make([]golibrespot.SpotifyId, 0, prefetchFanOutMax)
+	seen := make(map[string]struct{}, prefetchFanOutMax)
 	repeatTrack := p.state.player.Options != nil && p.state.player.Options.RepeatingTrack
 	appendCandidate := func(uri string) {
 		id, err := golibrespot.SpotifyIdFromUri(strings.TrimSpace(uri))
@@ -49,10 +55,10 @@ func (p *AppPlayer) prefetchCandidateIDs() []golibrespot.SpotifyId {
 	if next := p.state.tracks.PeekNextLoaded(); next != nil {
 		appendCandidate(next.Uri)
 	}
-	for i := 0; i < len(p.state.player.NextTracks) && len(candidates) < transitionStreamCacheMax; i++ {
+	for i := 0; i < len(p.state.player.NextTracks) && len(candidates) < prefetchFanOutMax; i++ {
 		appendCandidate(p.state.player.NextTracks[i].Uri)
 	}
-	if n := len(p.state.player.PrevTracks); n > 0 && len(candidates) < transitionStreamCacheMax {
+	if n := len(p.state.player.PrevTracks); n > 0 && len(candidates) < prefetchFanOutMax {
 		appendCandidate(p.state.player.PrevTracks[n-1].Uri)
 	}
 	return candidates
@@ -247,7 +253,7 @@ func (p *AppPlayer) topUpQueue(ctx context.Context) {
 		return
 	}
 	p.syncPlayerTrackState(p.state.tracks, nil)
-	p.updateState(ctx)
+	p.updateState()
 	p.emitPlaybackState()
 }
 
@@ -430,7 +436,7 @@ func (p *AppPlayer) maybeAdvanceOnTrackEndGuard() {
 }
 
 func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
-	ctx, cancel := context.WithTimeout(ctx, loadCurrentTrackTimeout)
+	ctx, cancel := context.WithTimeout(ctx, playerEventTimeout)
 	defer cancel()
 	if p.state.player.Options == nil {
 		p.state.player.Options = &connectpb.ContextPlayerOptions{}
@@ -440,7 +446,7 @@ func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
 		p.state.player.IsPlaying = true
 		golibrespot.SetPaused(p.state.player, false)
 		p.state.player.IsBuffering = false
-		p.updateState(ctx)
+		p.updateState()
 		var currentTrack *connectpb.ProvidedTrack
 		if p.state.tracks != nil {
 			currentTrack = p.state.tracks.CurrentTrack()
@@ -451,14 +457,14 @@ func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
 		p.state.player.IsPlaying = true
 		golibrespot.SetPaused(p.state.player, false)
 		p.state.player.IsBuffering = false
-		p.updateState(ctx)
+		p.updateState()
 		p.sess.Events().OnPlayerResume(p.primaryStream, golibrespot.TrackPosition(p.state.player, 0))
 		p.emitPlaybackStateLight()
 	case player.EventTypePause:
 		p.state.player.IsPlaying = true
 		golibrespot.SetPaused(p.state.player, true)
 		p.state.player.IsBuffering = false
-		p.updateState(ctx)
+		p.updateState()
 		var currentTrack *connectpb.ProvidedTrack
 		if p.state.tracks != nil {
 			currentTrack = p.state.tracks.CurrentTrack()
@@ -637,7 +643,7 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 		p.state.player.PositionAsOfTimestamp = p.state.player.Duration
 	}
 	p.setPlayerTransportState(true, false, paused)
-	p.updateState(ctx)
+	p.updateState()
 	p.schedulePrefetchNext()
 	p.emitPlaybackState()
 	return nil
@@ -689,7 +695,7 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 	}
 	if requiresUpdate {
 		p.logRepeatShuffleInvariant("set_options")
-		p.updateState(ctx)
+		p.updateState()
 		p.emitPlaybackState()
 	}
 	if scheduleQueueTopUp {
@@ -709,7 +715,7 @@ func (p *AppPlayer) addToQueue(ctx context.Context, track *connectpb.ContextTrac
 	}
 	p.state.tracks.AddToQueue(track)
 	p.syncPlayerTrackState(p.state.tracks, nil)
-	p.updateState(ctx)
+	p.updateState()
 	p.schedulePrefetchNext()
 	p.emitPlaybackState()
 }
@@ -721,7 +727,7 @@ func (p *AppPlayer) setQueue(ctx context.Context, prev []*connectpb.ContextTrack
 	}
 	p.state.tracks.SetQueue(prev, next)
 	p.syncPlayerTrackState(p.state.tracks, next)
-	p.updateState(ctx)
+	p.updateState()
 	p.schedulePrefetchNext()
 	p.emitPlaybackState()
 }
@@ -741,7 +747,7 @@ func (p *AppPlayer) play(ctx context.Context) error {
 	streamPos := p.currentPositionMs()
 	p.setPlayerPositionAtNow(streamPos)
 	p.setPlayerTransportState(true, false, false)
-	p.updateState(ctx)
+	p.updateState()
 	p.schedulePrefetchNext()
 	p.emitPlaybackStateLight()
 	return nil
@@ -757,7 +763,7 @@ func (p *AppPlayer) pause(ctx context.Context) error {
 	}
 	p.setPlayerPositionAtNow(streamPos)
 	p.setPlayerTransportState(true, false, true)
-	p.updateState(ctx)
+	p.updateState()
 	p.emitPlaybackStateLight()
 	return nil
 }
@@ -786,7 +792,7 @@ func (p *AppPlayer) seek(ctx context.Context, position int64) error {
 		return err
 	}
 	p.setPlayerPositionAtNow(position)
-	p.updateState(ctx)
+	p.updateState()
 	p.schedulePrefetchNext()
 	p.sess.Events().OnPlayerSeek(p.primaryStream, oldPosition, position)
 	p.emitPlaybackStateLight()

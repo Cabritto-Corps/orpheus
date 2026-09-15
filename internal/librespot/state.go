@@ -59,8 +59,7 @@ func (p *AppPlayer) initState() {
 	p.state.reset()
 }
 
-func (p *AppPlayer) updateState(ctx context.Context) {
-	_ = ctx
+func (p *AppPlayer) updateState() {
 	p.scheduleConnectState(connectpb.PutStateReason_PLAYER_STATE_CHANGED)
 }
 

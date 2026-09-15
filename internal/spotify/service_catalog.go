@@ -120,7 +120,7 @@ func (s *Service) ListSavedAlbumsPage(ctx context.Context, offset, limit int) (*
 		})
 	}
 	out.NextOffset = offset + len(out.Items)
-	out.HasMore = len(out.Items) >= limit
+	out.HasMore = page.Next != ""
 	return out, nil
 }
 

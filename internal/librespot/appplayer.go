@@ -60,8 +60,7 @@ type AppPlayer struct {
 
 	suppressEmit bool
 
-	prodInfo    *ap.ProductInfo
-	countryCode *string
+	prodInfo *ap.ProductInfo
 
 	state           *State
 	primaryStream   *player.Stream
@@ -180,7 +179,10 @@ func (p *AppPlayer) handleAccesspointPacket(pktType ap.PacketType, payload []byt
 		p.prodInfo = &prod
 		return nil
 	case ap.PacketTypeCountryCode:
-		*p.countryCode = string(payload)
+		// The fork's player reads the country code from its own goroutines;
+		// route the update through its atomic setter instead of writing the
+		// shared pointer here.
+		p.player.SetCountryCode(string(payload))
 		return nil
 	default:
 		return nil
@@ -385,7 +387,7 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 			p.state.player.ContextMetadata = map[string]string{}
 		}
 		maps.Copy(p.state.player.ContextMetadata, req.Command.Context.Metadata)
-		p.updateState(ctx)
+		p.updateState()
 		return nil
 	case "set_repeating_context":
 		val, ok := req.Command.Value.(bool)

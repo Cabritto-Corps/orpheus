@@ -182,23 +182,7 @@ func (c *imgCache) buildKittyPayload(url, encoded string, cols, rows int, imageI
 	}
 	localChunks := append([]string(nil), chunks...)
 	c.mu.Unlock()
-	var sb strings.Builder
-	for i, part := range localChunks {
-		more := 0
-		if i < len(localChunks)-1 {
-			more = 1
-		}
-		if i == 0 {
-			if imageID > 0 {
-				fmt.Fprintf(&sb, "\x1b_Ga=T,f=100,i=%d,c=%d,r=%d,q=2,m=%d;%s\x1b\\", imageID, cols, rows, more, part)
-			} else {
-				fmt.Fprintf(&sb, "\x1b_Ga=T,f=100,c=%d,r=%d,q=2,m=%d;%s\x1b\\", cols, rows, more, part)
-			}
-		} else {
-			fmt.Fprintf(&sb, "\x1b_Gm=%d;%s\x1b\\", more, part)
-		}
-	}
-	return sb.String()
+	return encodeKittyChunks(localChunks, cols, rows, imageID)
 }
 
 func chunkBase64(encoded string, size int) []string {
@@ -628,26 +612,25 @@ func renderKittyImageRawWithID(encoded string, cols, rows int, imageID uint64) s
 	if encoded == "" || cols <= 0 || rows <= 0 {
 		return ""
 	}
-	const chunkSize = 4096
+	return encodeKittyChunks(chunkBase64(encoded, 4096), cols, rows, imageID)
+}
+
+func encodeKittyChunks(chunks []string, cols, rows int, imageID uint64) string {
 	var sb strings.Builder
-	first := true
-	for off := 0; off < len(encoded); off += chunkSize {
-		end := min(off+chunkSize, len(encoded))
-		part := encoded[off:end]
+	for i, part := range chunks {
 		more := 0
-		if end < len(encoded) {
+		if i < len(chunks)-1 {
 			more = 1
 		}
-		if first {
+		if i == 0 {
 			if imageID > 0 {
 				fmt.Fprintf(&sb, "\x1b_Ga=T,f=100,i=%d,c=%d,r=%d,q=2,m=%d;%s\x1b\\", imageID, cols, rows, more, part)
 			} else {
 				fmt.Fprintf(&sb, "\x1b_Ga=T,f=100,c=%d,r=%d,q=2,m=%d;%s\x1b\\", cols, rows, more, part)
 			}
-			first = false
-			continue
+		} else {
+			fmt.Fprintf(&sb, "\x1b_Gm=%d;%s\x1b\\", more, part)
 		}
-		fmt.Fprintf(&sb, "\x1b_Gm=%d;%s\x1b\\", more, part)
 	}
 	return sb.String()
 }

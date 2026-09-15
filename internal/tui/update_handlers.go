@@ -35,6 +35,7 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 		popupInnerH := max(popupBodyH-4, 10)
 		m.ui.trackPopupList.SetSize(modalW-2, popupInnerH-4)
 		m.ui.trackPopupWidth = modalW - 4
+		m.retruncateTrackPopupTitles()
 	}
 
 	return m, tea.Batch(
@@ -593,14 +594,18 @@ func (m model) handleTrackPopupItemsMsg(msg trackPopupItemsMsg) (tea.Model, tea.
 	}
 	m.ui.trackPopupWaitTicks = 0
 	m.ui.trackPopupItems = msg.items
+	m.retruncateTrackPopupTitles()
+	return m, nil
+}
+
+func (m *model) retruncateTrackPopupTitles() {
 	maxTitleW := max(m.ui.trackPopupWidth-6, 10)
-	items := make([]list.Item, 0, len(msg.items))
-	for _, qi := range msg.items {
+	items := make([]list.Item, 0, len(m.ui.trackPopupItems))
+	for _, qi := range m.ui.trackPopupItems {
 		qi.Name = truncate(qi.Name, maxTitleW)
 		items = append(items, trackItem{item: qi})
 	}
 	m.ui.trackPopupList.SetItems(items)
-	return m, nil
 }
 
 // tickTrackPopupWait closes the popup with an error when a pending
