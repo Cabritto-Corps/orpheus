@@ -4,12 +4,16 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"time"
 
+	golibrespotcache "github.com/elxgy/go-librespot/cache"
 	"github.com/elxgy/go-librespot/player"
 	"github.com/elxgy/go-librespot/session"
 
 	"orpheus/internal/cache"
+	"orpheus/internal/config"
 )
 
 func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) (*AppPlayer, error) {
@@ -26,6 +30,24 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 		prefetchDone:   make(chan prefetchResult, 16),
 		queueMetaCache: cache.NewLRU[string, PlaybackStateQueueEntry](8192),
 	}
+	var audioCache *golibrespotcache.Cache
+	if runtime.Cfg.AudioCacheEnabled {
+		dir := runtime.Cfg.AudioCacheDir
+		if dir == "" {
+			if base, err := os.UserCacheDir(); err == nil {
+				dir = filepath.Join(base, "orpheus", "audio-cache")
+			} else if fallback, err := config.DefaultConfigDir(); err == nil {
+				dir = filepath.Join(fallback, "cache", "audio")
+			}
+		}
+		ac, err := golibrespotcache.New(runtime.Log, dir, runtime.Cfg.AudioCacheSizeMB*1024*1024)
+		if err != nil {
+			runtime.Log.WithError(err).Warn("audio cache disabled")
+		} else {
+			audioCache = ac
+		}
+	}
+
 	p.prefetchTimer = time.NewTimer(math.MaxInt64)
 	p.prefetchTimer.Stop()
 	p.shuffleRefreshTimer = time.NewTimer(math.MaxInt64)
@@ -44,6 +66,7 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 		Events:                    sess.Events(),
 		Log:                       runtime.Log,
 		FlacEnabled:               runtime.Cfg.FlacEnabled,
+		Cache:                     audioCache,
 		NormalisationEnabled:      true,
 		NormalisationUseAlbumGain: false,
 		NormalisationPregain:      0,

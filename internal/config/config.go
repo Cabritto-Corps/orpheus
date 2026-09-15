@@ -26,6 +26,9 @@ type Config struct {
 	NerdFonts            bool
 	OnSongChange         string
 	LogFile              string
+	AudioCacheEnabled    bool
+	AudioCacheSizeMB     int64
+	AudioCacheDir        string
 }
 
 func LoadFromEnv() (Config, error) {
@@ -43,6 +46,9 @@ func LoadFromEnv() (Config, error) {
 		NerdFonts:            resolveNerdFonts(os.Getenv("orpheus_nerd_fonts")),
 		OnSongChange:         envDefault("orpheus_on_song_change", ""),
 		LogFile:              envDefault("orpheus_log_file", defaultLogPath()),
+		AudioCacheEnabled:    envBool("orpheus_audio_cache_enabled", false),
+		AudioCacheSizeMB:     envInt64("orpheus_audio_cache_size_mb", 1024),
+		AudioCacheDir:        envDefault("orpheus_audio_cache_dir", ""),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -143,6 +149,19 @@ func detectNerdFontsInstalled() bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(string(out)), "nerd font")
+}
+
+func envInt64(key string, fallback int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v <= 0 {
+		slog.Warn("invalid integer value, using default", "key", key, "value", raw, "default", fallback)
+		return fallback
+	}
+	return v
 }
 
 func envDuration(key string, fallback time.Duration) time.Duration {

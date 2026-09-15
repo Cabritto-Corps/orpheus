@@ -211,3 +211,52 @@ func TestDefaultConfigDirRespectsEnv(t *testing.T) {
 		t.Fatalf("expected /custom/orpheus, got %q err=%v", got, err)
 	}
 }
+
+func TestAudioCacheEnvParsing(t *testing.T) {
+	t.Setenv("orpheus_audio_cache_enabled", "true")
+	t.Setenv("orpheus_audio_cache_size_mb", "2048")
+	t.Setenv("orpheus_audio_cache_dir", "/tmp/orpheus-cache-test")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if !cfg.AudioCacheEnabled {
+		t.Fatal("expected audio cache enabled")
+	}
+	if cfg.AudioCacheSizeMB != 2048 {
+		t.Fatalf("AudioCacheSizeMB = %d, want 2048", cfg.AudioCacheSizeMB)
+	}
+	if cfg.AudioCacheDir != "/tmp/orpheus-cache-test" {
+		t.Fatalf("AudioCacheDir = %q", cfg.AudioCacheDir)
+	}
+}
+
+func TestAudioCacheEnvDefaults(t *testing.T) {
+	os.Unsetenv("orpheus_audio_cache_enabled")
+	os.Unsetenv("orpheus_audio_cache_size_mb")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.AudioCacheEnabled {
+		t.Fatal("audio cache must default to disabled")
+	}
+	if cfg.AudioCacheSizeMB != 1024 {
+		t.Fatalf("AudioCacheSizeMB default = %d, want 1024", cfg.AudioCacheSizeMB)
+	}
+}
+
+func TestAudioCacheEnvMalformedFallsBack(t *testing.T) {
+	t.Setenv("orpheus_audio_cache_enabled", "true")
+	t.Setenv("orpheus_audio_cache_size_mb", "lots")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.AudioCacheSizeMB != 1024 {
+		t.Fatalf("malformed size should fall back to default, got %d", cfg.AudioCacheSizeMB)
+	}
+}

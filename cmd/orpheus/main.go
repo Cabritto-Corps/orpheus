@@ -320,6 +320,9 @@ func runLibrespotTUI() error {
 	if cfg.DeviceName != "" {
 		librespotCfg.DeviceName = cfg.DeviceName
 	}
+	librespotCfg.AudioCacheEnabled = cfg.AudioCacheEnabled
+	librespotCfg.AudioCacheSizeMB = cfg.AudioCacheSizeMB
+	librespotCfg.AudioCacheDir = cfg.AudioCacheDir
 
 	playbackStateCh := make(chan *librespot.PlaybackStateUpdate, 32)
 	runtime, err := librespot.NewRuntime(librespotCfg, appState, logger, playbackStateCh)
