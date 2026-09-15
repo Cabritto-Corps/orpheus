@@ -23,6 +23,7 @@ type keyMap struct {
 	Select        key.Binding
 	CloseModal    key.Binding
 	Quit          key.Binding
+	Settings      key.Binding
 	QueueUp       key.Binding
 	QueueDown     key.Binding
 	QueueJump     key.Binding
@@ -55,11 +56,12 @@ func newKeys() keyMap {
 		QueueRemove:   key.NewBinding(key.WithKeys("x", "d"), key.WithHelp("x", "remove from queue")),
 		QueueMoveUp:   key.NewBinding(key.WithKeys("["), key.WithHelp("[", "move queue entry up")),
 		QueueMoveDown: key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "move queue entry down")),
+		Settings:      key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "settings")),
 	}
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Tab, k.Select, k.PlayPause, k.Next, k.Prev, k.Shuffle, k.Loop, k.Filter, k.ToggleHelp, k.Quit}
+	return []key.Binding{k.Tab, k.Select, k.PlayPause, k.Next, k.Prev, k.Shuffle, k.Loop, k.Filter, k.ToggleHelp, k.Settings, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
@@ -67,7 +69,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Tab, k.Select, k.CloseModal, k.Refresh, k.Filter},
 		{k.PlayPause, k.Next, k.Prev, k.Shuffle, k.Loop, k.VolUp, k.VolDown},
 		{k.QueueUp, k.QueueDown, k.QueueJump, k.QueueRemove, k.QueueMoveUp, k.QueueMoveDown},
-		{k.SeekBack, k.SeekFwd, k.ToggleHelp, k.Quit},
+		{k.SeekBack, k.SeekFwd, k.ToggleHelp, k.Settings, k.Quit},
 	}
 }
 

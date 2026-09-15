@@ -25,6 +25,7 @@ type Config struct {
 	KeysPath             string
 	Theme                string
 	ThemePath            string
+	EnvPath              string
 	PollInterval         time.Duration
 	NerdFonts            bool
 	OnSongChange         string
@@ -50,6 +51,7 @@ func LoadFromEnv() (Config, error) {
 		KeysPath:             envDefault("orpheus_keys_file", defaultKeysPath()),
 		Theme:                envDefault("orpheus_theme", "default"),
 		ThemePath:            envDefault("orpheus_theme_file", defaultThemePath()),
+		EnvPath:              resolveEnvFilePath(),
 		PollInterval:         envDuration("orpheus_poll_interval", 1500*time.Millisecond),
 		NerdFonts:            resolveNerdFonts(os.Getenv("orpheus_nerd_fonts")),
 		OnSongChange:         envDefault("orpheus_on_song_change", ""),
@@ -225,22 +227,28 @@ func DefaultConfigDir() (string, error) {
 }
 
 func loadEnvFile() {
-	if _, err := os.Stat(".env"); err == nil {
-		if loadErr := godotenv.Load(); loadErr != nil {
-			slog.Warn("failed to parse .env file", "error", loadErr)
-		}
-		return
-	}
-	dir, err := DefaultConfigDir()
-	if err != nil {
-		return
-	}
-	path := filepath.Join(dir, ".env")
-	if _, err := os.Stat(path); err == nil {
+	if path := resolveEnvFilePath(); path != "" {
 		if loadErr := godotenv.Load(path); loadErr != nil {
 			slog.Warn("failed to parse .env file", "path", path, "error", loadErr)
 		}
 	}
+}
+
+// resolveEnvFilePath mirrors loadEnvFile precedence: cwd .env wins over the
+// config-dir .env. Empty when neither exists.
+func resolveEnvFilePath() string {
+	if _, err := os.Stat(".env"); err == nil {
+		return ".env"
+	}
+	dir, err := DefaultConfigDir()
+	if err != nil {
+		return ""
+	}
+	path := filepath.Join(dir, ".env")
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	return ""
 }
 
 func defaultTokenPath() string {

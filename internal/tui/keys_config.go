@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -16,7 +17,7 @@ var validKeyActions = map[string]struct{}{
 	"loop": {}, "vol_up": {}, "vol_down": {}, "seek_back": {}, "seek_fwd": {},
 	"refresh": {}, "filter": {}, "toggle_help": {}, "select": {}, "close_modal": {},
 	"quit": {}, "queue_up": {}, "queue_down": {}, "queue_jump": {},
-	"queue_remove": {}, "queue_move_up": {}, "queue_move_down": {},
+	"queue_remove": {}, "queue_move_up": {}, "queue_move_down": {}, "settings": {},
 }
 
 // LoadKeyOverrides reads a keys.json file mapping action names to one or more
@@ -163,6 +164,8 @@ func applyKeyOverrides(m keyMap, overrides map[string][]string) keyMap {
 			m.QueueMoveUp = overrideBinding(m.QueueMoveUp, keys)
 		case "queue_move_down":
 			m.QueueMoveDown = overrideBinding(m.QueueMoveDown, keys)
+		case "settings":
+			m.Settings = overrideBinding(m.Settings, keys)
 		}
 	}
 	return m
@@ -200,6 +203,92 @@ func keysContainList(keys []string, want string) bool {
 
 func newKeysFromConfig(overrides map[string][]string) keyMap {
 	return applyKeyOverrides(newKeys(), overrides)
+}
+
+// actionForBinding maps a keyMap field back to its keys.json action name.
+func defaultKeysForAction(k keyMap, action string) ([]string, bool) {
+	switch action {
+	case "tab":
+		return k.Tab.Keys(), true
+	case "play_pause":
+		return k.PlayPause.Keys(), true
+	case "next":
+		return k.Next.Keys(), true
+	case "prev":
+		return k.Prev.Keys(), true
+	case "shuffle":
+		return k.Shuffle.Keys(), true
+	case "loop":
+		return k.Loop.Keys(), true
+	case "vol_up":
+		return k.VolUp.Keys(), true
+	case "vol_down":
+		return k.VolDown.Keys(), true
+	case "seek_back":
+		return k.SeekBack.Keys(), true
+	case "seek_fwd":
+		return k.SeekFwd.Keys(), true
+	case "refresh":
+		return k.Refresh.Keys(), true
+	case "filter":
+		return k.Filter.Keys(), true
+	case "toggle_help":
+		return k.ToggleHelp.Keys(), true
+	case "select":
+		return k.Select.Keys(), true
+	case "close_modal":
+		return k.CloseModal.Keys(), true
+	case "quit":
+		return k.Quit.Keys(), true
+	case "settings":
+		return k.Settings.Keys(), true
+	case "queue_up":
+		return k.QueueUp.Keys(), true
+	case "queue_down":
+		return k.QueueDown.Keys(), true
+	case "queue_jump":
+		return k.QueueJump.Keys(), true
+	case "queue_remove":
+		return k.QueueRemove.Keys(), true
+	case "queue_move_up":
+		return k.QueueMoveUp.Keys(), true
+	case "queue_move_down":
+		return k.QueueMoveDown.Keys(), true
+	default:
+		return nil, false
+	}
+}
+
+// SaveKeys writes the full override map back to keys.json. Values that equal
+// the default bindings are omitted so the file only carries actual user
+// customizations.
+func SaveKeys(path string, overrides map[string][]string) error {
+	defaults := newKeys()
+	out := make(map[string][]string, len(overrides))
+	for action, keys := range overrides {
+		if len(keys) == 0 {
+			continue
+		}
+		if def, ok := defaultKeysForAction(defaults, action); ok && stringSlicesEqual(def, keys) {
+			continue
+		}
+		out[action] = keys
+	}
+	body, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return err
+	}
+	body = append(body, '\n')
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, body, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // LoadKeys reads the user's keys.json (or defaults when absent/malformed).

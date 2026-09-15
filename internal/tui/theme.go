@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -78,8 +79,34 @@ func LoadTheme(preset, path string) themeColors {
 		slog.Warn("malformed theme file, using preset", "path", path, "error", err)
 		return colors
 	}
+	if p, ok := raw["preset"].(string); ok {
+		colors = themePreset(p)
+		delete(raw, "preset")
+	}
 	applyThemeOverrides(&colors, raw)
 	return colors
+}
+
+// SaveThemePreset persists the chosen preset as a marker in theme.json.
+// Per-color overrides present in the file are dropped: they would otherwise
+// fight the preset. The write is atomic.
+func SaveThemePreset(path, preset string) error {
+	name := themePresetName(preset)
+	body, err := json.MarshalIndent(map[string]string{"preset": name}, "", "  ")
+	if err != nil {
+		return err
+	}
+	body = append(body, '\n')
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, body, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func applyThemeOverrides(colors *themeColors, raw map[string]any) {
@@ -127,8 +154,20 @@ func themePreset(name string) themeColors {
 	case "high_contrast", "high-contrast":
 		return themePresets["high_contrast"]
 	default:
-		slog.Warn("unknown orpheus_theme, using default theme", "theme", name)
+		slog.Warn("unknown theme preset, using default theme", "theme", name)
 		return themePresets["default"]
+	}
+}
+
+// themePresetName normalizes a preset name for round-tripping.
+func themePresetName(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "minimal":
+		return "minimal"
+	case "high_contrast", "high-contrast":
+		return "high_contrast"
+	default:
+		return "default"
 	}
 }
 

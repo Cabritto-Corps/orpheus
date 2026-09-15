@@ -49,6 +49,10 @@ func (m model) View() string {
 		return header + "\n" + m.helpModalView() + m.kittyOverlay()
 	}
 
+	if m.ui.settings.open {
+		return header + "\n" + m.settingsModalView() + m.kittyOverlay()
+	}
+
 	if m.ui.trackPopupOpen {
 		return header + "\n" + m.trackPopupView() + m.kittyOverlay()
 	}

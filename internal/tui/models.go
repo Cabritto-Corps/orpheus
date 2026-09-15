@@ -101,6 +101,7 @@ type uiModel struct {
 	imgs                    *imgCache
 	statusQueueCache        *statusQueueSnapshotCache
 	cover                   coverManager
+	settings                settingsModel
 }
 
 type model struct {
@@ -116,3 +117,62 @@ type model struct {
 	browse    browseModel
 	ui        uiModel
 }
+
+type settingsMode int
+
+const (
+	settingsModeRoot settingsMode = iota
+	settingsModeKeys
+	settingsModeCapture
+)
+
+type settingsModel struct {
+	open        bool
+	mode        settingsMode
+	cursor      int
+	keysCursor  int
+	captureKey  string
+	themePreset string
+	keysPath    string
+	themePath   string
+	envPath     string
+
+	crossfadeEnabled bool
+	crossfadeSeconds float64
+	cacheEnabled     bool
+	cacheSizeMB      int64
+
+	restartRequiredCrossfade bool
+	restartRequiredCache     bool
+}
+
+var settingsKeyActions = []struct {
+	action string
+	label  string
+}{
+	{"tab", "switch tab"},
+	{"play_pause", "play/pause"},
+	{"next", "next track"},
+	{"prev", "previous track"},
+	{"shuffle", "shuffle"},
+	{"loop", "repeat"},
+	{"vol_up", "volume up"},
+	{"vol_down", "volume down"},
+	{"seek_back", "seek back"},
+	{"seek_fwd", "seek forward"},
+	{"refresh", "refresh library"},
+	{"filter", "search filter"},
+	{"toggle_help", "toggle help"},
+	{"select", "select / play"},
+	{"close_modal", "close modal"},
+	{"quit", "quit (ctrl+c always quits)"},
+	{"settings", "open settings"},
+	{"queue_up", "queue cursor up"},
+	{"queue_down", "queue cursor down"},
+	{"queue_jump", "play from queue row"},
+	{"queue_remove", "remove queue row"},
+	{"queue_move_up", "move queue row up"},
+	{"queue_move_down", "move queue row down"},
+}
+
+var settingsThemeOrder = []string{"default", "minimal", "high_contrast"}

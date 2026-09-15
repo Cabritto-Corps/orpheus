@@ -28,6 +28,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.ui.helpOpen = !m.ui.helpOpen
 			return m, nil
 		}
+	case keyMatches(msg, k.Settings):
+		if !filtering {
+			return m.openSettings()
+		}
 	}
 
 	if m.ui.helpOpen {
@@ -35,6 +39,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.ui.helpOpen = false
 		}
 		return m, nil
+	}
+
+	if m.ui.settings.open {
+		return m.handleSettingsKey(msg)
 	}
 
 	if m.ui.trackPopupOpen {

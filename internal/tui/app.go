@@ -167,6 +167,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 			nerdFonts:              cfg.NerdFonts,
 			help:                   h,
 			keys:                   newKeysFromConfig(LoadKeys(cfg.KeysPath)),
+			settings:               newSettingsModel(cfg),
 		},
 	}
 

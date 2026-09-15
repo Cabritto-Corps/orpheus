@@ -244,7 +244,7 @@ func (m model) kittyOverlay() string {
 	if m.ui.imgs == nil || m.ui.imgs.protocol != imageProtocolKitty {
 		return ""
 	}
-	if m.ui.helpOpen || m.ui.trackPopupOpen {
+	if m.ui.helpOpen || m.ui.trackPopupOpen || m.ui.settings.open {
 		m.ui.imgs.beginKittyOverlayState("", "")
 		return kittyDeleteAll
 	}
