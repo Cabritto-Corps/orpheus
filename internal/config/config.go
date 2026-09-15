@@ -23,6 +23,8 @@ type Config struct {
 	AllowActiveFallback  bool
 	TokenPath            string
 	KeysPath             string
+	Theme                string
+	ThemePath            string
 	PollInterval         time.Duration
 	NerdFonts            bool
 	OnSongChange         string
@@ -46,6 +48,8 @@ func LoadFromEnv() (Config, error) {
 		AllowActiveFallback:  envBool("orpheus_allow_active_fallback", false),
 		TokenPath:            envDefault("orpheus_token_path", defaultTokenPath()),
 		KeysPath:             envDefault("orpheus_keys_file", defaultKeysPath()),
+		Theme:                envDefault("orpheus_theme", "default"),
+		ThemePath:            envDefault("orpheus_theme_file", defaultThemePath()),
 		PollInterval:         envDuration("orpheus_poll_interval", 1500*time.Millisecond),
 		NerdFonts:            resolveNerdFonts(os.Getenv("orpheus_nerd_fonts")),
 		OnSongChange:         envDefault("orpheus_on_song_change", ""),
@@ -253,6 +257,14 @@ func defaultKeysPath() string {
 		return "keys.json"
 	}
 	return filepath.Join(dir, "keys.json")
+}
+
+func defaultThemePath() string {
+	dir, err := DefaultConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
+		return "theme.json"
+	}
+	return filepath.Join(dir, "theme.json")
 }
 
 func defaultLogPath() string {

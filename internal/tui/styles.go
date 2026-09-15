@@ -7,55 +7,183 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const (
-	colorBlue      = lipgloss.Color("#4A90D9")
-	colorBlueLight = lipgloss.Color("#7AB8E6")
-	colorOffWhite  = lipgloss.Color("#C8CDD4")
-	colorGray      = lipgloss.Color("#808897")
-	colorMutedBlue = lipgloss.Color("#5B7A9E")
-	colorDimBlue   = lipgloss.Color("#728FB0")
-	colorDivider   = lipgloss.Color("#2A3A4A")
-	colorError     = lipgloss.Color("#FF5757")
+var (
+	colorBlue      = lipgloss.Color(themePresets["default"].Blue)
+	colorBlueLight = lipgloss.Color(themePresets["default"].BlueLight)
+	colorOffWhite  = lipgloss.Color(themePresets["default"].OffWhite)
+	colorGray      = lipgloss.Color(themePresets["default"].Gray)
+	colorMutedBlue = lipgloss.Color(themePresets["default"].MutedBlue)
+	colorDimBlue   = lipgloss.Color(themePresets["default"].DimBlue)
+	colorDivider   = lipgloss.Color(themePresets["default"].Divider)
+	colorError     = lipgloss.Color(themePresets["default"].Error)
 )
 
-var (
+// applyTheme rebuilds every package-level style from the resolved theme
+// colors. It must be called once at model construction, before any delegate
+// or help model is built, and never concurrently with rendering.
+func applyTheme(c themeColors) {
+	colorBlue = lipgloss.Color(c.Blue)
+	colorBlueLight = lipgloss.Color(c.BlueLight)
+	colorOffWhite = lipgloss.Color(c.OffWhite)
+	colorGray = lipgloss.Color(c.Gray)
+	colorMutedBlue = lipgloss.Color(c.MutedBlue)
+	colorDimBlue = lipgloss.Color(c.DimBlue)
+	colorDivider = lipgloss.Color(c.Divider)
+	colorError = lipgloss.Color(c.Error)
+
 	styleHeaderStatus = lipgloss.NewStyle().
-				Foreground(colorMutedBlue)
+		Foreground(colorMutedBlue)
 
 	styleHeaderPlaying = lipgloss.NewStyle().
-				Foreground(colorBlue).
-				Bold(true)
+		Foreground(colorBlue).
+		Bold(true)
 
 	styleHeaderPaused = lipgloss.NewStyle().
-				Foreground(colorMutedBlue)
+		Foreground(colorMutedBlue)
 
 	styleHeaderCenter = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(colorOffWhite)
+		Bold(true).
+		Foreground(colorOffWhite)
 
 	styleHeaderSub = lipgloss.NewStyle().
-			Foreground(colorMutedBlue)
+		Foreground(colorMutedBlue)
 
 	styleHeaderVolume = lipgloss.NewStyle().
-				Foreground(colorGray)
-)
+		Foreground(colorGray)
 
-var (
 	styleError = lipgloss.NewStyle().
-			Foreground(colorError)
+		Foreground(colorError)
 
 	styleDimmed = lipgloss.NewStyle().
-			Foreground(colorMutedBlue)
-)
+		Foreground(colorMutedBlue)
 
-var (
 	styleDivider = lipgloss.NewStyle().
-			Foreground(colorDivider)
+		Foreground(colorDivider)
 
 	styleSectionLabel = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(colorMutedBlue)
+		Bold(true).
+		Foreground(colorMutedBlue)
+
+	stylePlaylistName = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorOffWhite)
+
+	stylePlaylistOwner = lipgloss.NewStyle().
+		Foreground(colorGray)
+
+	styleTrackName = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorOffWhite)
+
+	styleArtistName = lipgloss.NewStyle().
+		Foreground(colorGray)
+
+	styleAlbumName = lipgloss.NewStyle().
+		Foreground(colorMutedBlue)
+
+	styleQueueHeader = lipgloss.NewStyle().
+		Foreground(colorMutedBlue)
+
+	styleQueueIndex = lipgloss.NewStyle().
+		Foreground(colorMutedBlue)
+
+	styleQueueTrack = lipgloss.NewStyle().
+		Foreground(colorGray)
+
+	styleQueueArtist = lipgloss.NewStyle().
+		Foreground(colorMutedBlue)
+
+	styleQueueCursor = lipgloss.NewStyle().
+		Foreground(colorBlueLight)
+
+	stylePlayerTime = lipgloss.NewStyle().
+		Foreground(colorMutedBlue)
+
+	styleProgressBarFilled = lipgloss.NewStyle().
+		Foreground(colorBlue)
+
+	styleProgressBarEmpty = lipgloss.NewStyle().
+		Foreground(colorDivider)
+
+	styleVolumeBarFilled = lipgloss.NewStyle().
+		Foreground(colorBlue)
+
+	styleVolumeBarEmpty = lipgloss.NewStyle().
+		Foreground(colorDivider)
+
+	stylePlaceholderBorder = lipgloss.NewStyle().
+		Foreground(colorDivider)
+
+	styleTrackPopupTitle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorBlue)
+
+	styleTrackPopupLoading = lipgloss.NewStyle().
+		Foreground(colorMutedBlue)
+
+	styleTrackPopupHint = lipgloss.NewStyle().
+		Foreground(colorMutedBlue)
+
+	styleTabActive = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorBlue)
+
+	styleTabInactive = lipgloss.NewStyle().
+		Foreground(colorMutedBlue)
+
+	styleModalBox = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorBlue).
+		Padding(0, 1)
+
+	styleModalTitle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorBlue)
+
+	styleModalHint = lipgloss.NewStyle().
+		Foreground(colorMutedBlue)
+}
+
+var (
+	styleHeaderStatus      lipgloss.Style
+	styleHeaderPlaying     lipgloss.Style
+	styleHeaderPaused      lipgloss.Style
+	styleHeaderCenter      lipgloss.Style
+	styleHeaderSub         lipgloss.Style
+	styleHeaderVolume      lipgloss.Style
+	styleError             lipgloss.Style
+	styleDimmed            lipgloss.Style
+	styleDivider           lipgloss.Style
+	styleSectionLabel      lipgloss.Style
+	stylePlaylistName      lipgloss.Style
+	stylePlaylistOwner     lipgloss.Style
+	styleTrackName         lipgloss.Style
+	styleArtistName        lipgloss.Style
+	styleAlbumName         lipgloss.Style
+	styleQueueHeader       lipgloss.Style
+	styleQueueIndex        lipgloss.Style
+	styleQueueTrack        lipgloss.Style
+	styleQueueArtist       lipgloss.Style
+	styleQueueCursor       lipgloss.Style
+	stylePlayerTime        lipgloss.Style
+	styleProgressBarFilled lipgloss.Style
+	styleProgressBarEmpty  lipgloss.Style
+	styleVolumeBarFilled   lipgloss.Style
+	styleVolumeBarEmpty    lipgloss.Style
+	stylePlaceholderBorder lipgloss.Style
+	styleTrackPopupTitle   lipgloss.Style
+	styleTrackPopupLoading lipgloss.Style
+	styleTrackPopupHint    lipgloss.Style
+	styleTabActive         lipgloss.Style
+	styleTabInactive       lipgloss.Style
+	styleModalBox          lipgloss.Style
+	styleModalTitle        lipgloss.Style
+	styleModalHint         lipgloss.Style
 )
+
+func init() {
+	applyTheme(themePresets["default"])
+}
 
 func sectionDivider(w int) string {
 	return styleDivider.Render(strings.Repeat("─", w))
@@ -68,99 +196,6 @@ func verticalDivider(h int) string {
 	}
 	return strings.Join(lines, "\n")
 }
-
-var (
-	stylePlaylistName = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(colorOffWhite)
-
-	stylePlaylistOwner = lipgloss.NewStyle().
-				Foreground(colorGray)
-)
-
-var (
-	styleTrackName = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorOffWhite)
-
-	styleArtistName = lipgloss.NewStyle().
-			Foreground(colorGray)
-
-	styleAlbumName = lipgloss.NewStyle().
-			Foreground(colorMutedBlue)
-)
-
-var (
-	styleQueueHeader = lipgloss.NewStyle().
-				Foreground(colorMutedBlue)
-
-	styleQueueIndex = lipgloss.NewStyle().
-			Foreground(colorMutedBlue)
-
-	styleQueueTrack = lipgloss.NewStyle().
-			Foreground(colorGray)
-
-	styleQueueArtist = lipgloss.NewStyle().
-				Foreground(colorMutedBlue)
-
-	styleQueueCursor = lipgloss.NewStyle().
-				Foreground(colorBlueLight)
-)
-
-var (
-	stylePlayerTime = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
-)
-
-var (
-	styleProgressBarFilled = lipgloss.NewStyle().
-				Foreground(colorBlue)
-
-	styleProgressBarEmpty = lipgloss.NewStyle().
-				Foreground(colorDivider)
-
-	styleVolumeBarFilled = lipgloss.NewStyle().
-				Foreground(colorBlue)
-
-	styleVolumeBarEmpty = lipgloss.NewStyle().
-				Foreground(colorDivider)
-
-	stylePlaceholderBorder = lipgloss.NewStyle().
-				Foreground(colorDivider)
-
-	styleTrackPopupTitle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(colorBlue)
-
-	styleTrackPopupLoading = lipgloss.NewStyle().
-				Foreground(colorMutedBlue)
-
-	styleTrackPopupHint = lipgloss.NewStyle().
-				Foreground(colorMutedBlue)
-)
-
-var (
-	styleTabActive = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorBlue)
-
-	styleTabInactive = lipgloss.NewStyle().
-				Foreground(colorMutedBlue)
-)
-
-var (
-	styleModalBox = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorBlue).
-			Padding(0, 1)
-
-	styleModalTitle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorBlue)
-
-	styleModalHint = lipgloss.NewStyle().
-			Foreground(colorMutedBlue)
-)
 
 func newPlaylistDelegate() list.DefaultDelegate {
 	d := list.NewDefaultDelegate()
