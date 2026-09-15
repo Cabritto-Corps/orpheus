@@ -95,7 +95,7 @@ func layoutThreeZone(w int, left, center, right string) string {
 
 func (m model) headerVolumeBar(vol int) string {
 	const w = 6
-	volChar := m.icon(iconVolume, iconVolumeNF)
+	volChar := iconVolume
 	filled := min(int(float64(vol)/100.0*float64(w)), w)
 	return styleVolumeBarFilled.Render(strings.Repeat(volChar, filled)) +
 		styleVolumeBarEmpty.Render(strings.Repeat(volChar, w-filled))

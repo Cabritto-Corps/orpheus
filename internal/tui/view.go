@@ -33,7 +33,6 @@ const (
 	iconPlayNF          = "\uf04b"
 	iconPauseNF         = "\uf04c"
 	iconDeviceNF        = "\ue30c"
-	iconVolumeNF        = "\uf028"
 	iconShuffleNF       = "\uf074"
 	iconRepeatContextNF = "\uf0b6"
 	iconRepeatTrackNF   = "\uf01e"
