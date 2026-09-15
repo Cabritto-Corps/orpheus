@@ -323,6 +323,9 @@ func runLibrespotTUI() error {
 	librespotCfg.AudioCacheEnabled = cfg.AudioCacheEnabled
 	librespotCfg.AudioCacheSizeMB = cfg.AudioCacheSizeMB
 	librespotCfg.AudioCacheDir = cfg.AudioCacheDir
+	if cfg.Crossfade && cfg.CrossfadeSeconds > 0 {
+		librespotCfg.CrossfadeSeconds = cfg.CrossfadeSeconds
+	}
 
 	playbackStateCh := make(chan *librespot.PlaybackStateUpdate, 32)
 	runtime, err := librespot.NewRuntime(librespotCfg, appState, logger, playbackStateCh)

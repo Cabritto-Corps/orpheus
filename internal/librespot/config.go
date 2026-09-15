@@ -27,6 +27,7 @@ type Config struct {
 	AudioCacheEnabled bool
 	AudioCacheSizeMB  int64
 	AudioCacheDir     string
+	CrossfadeSeconds  float64
 	ImageSize         string
 	ZeroconfEnabled   bool
 	AudioBufferTime   int
@@ -46,6 +47,7 @@ func DefaultConfig() *Config {
 		AudioCacheEnabled: false,
 		AudioCacheSizeMB:  1024,
 		AudioCacheDir:     "",
+		CrossfadeSeconds:  0,
 		ImageSize:         "large",
 		ZeroconfEnabled:   false,
 		AudioBufferTime:   0,

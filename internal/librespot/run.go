@@ -67,6 +67,7 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 		Log:                       runtime.Log,
 		FlacEnabled:               runtime.Cfg.FlacEnabled,
 		Cache:                     audioCache,
+		CrossfadeSamples:          int(runtime.Cfg.CrossfadeSeconds * float64(player.SampleRate*player.Channels)),
 		NormalisationEnabled:      true,
 		NormalisationUseAlbumGain: false,
 		NormalisationPregain:      0,

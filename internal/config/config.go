@@ -29,6 +29,8 @@ type Config struct {
 	AudioCacheEnabled    bool
 	AudioCacheSizeMB     int64
 	AudioCacheDir        string
+	Crossfade            bool
+	CrossfadeSeconds     float64
 }
 
 func LoadFromEnv() (Config, error) {
@@ -49,6 +51,8 @@ func LoadFromEnv() (Config, error) {
 		AudioCacheEnabled:    envBool("orpheus_audio_cache_enabled", false),
 		AudioCacheSizeMB:     envInt64("orpheus_audio_cache_size_mb", 1024),
 		AudioCacheDir:        envDefault("orpheus_audio_cache_dir", ""),
+		Crossfade:            envBool("orpheus_crossfade", false),
+		CrossfadeSeconds:     envFloat64("orpheus_crossfade_seconds", 0),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -149,6 +153,19 @@ func detectNerdFontsInstalled() bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(string(out)), "nerd font")
+}
+
+func envFloat64(key string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || v < 0 {
+		slog.Warn("invalid float value, using default", "key", key, "value", raw, "default", fallback)
+		return fallback
+	}
+	return v
 }
 
 func envInt64(key string, fallback int64) int64 {
