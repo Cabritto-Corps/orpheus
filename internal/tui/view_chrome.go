@@ -103,6 +103,10 @@ func (m model) headerVolumeBar(vol int) string {
 }
 
 func (m model) tabBarView() string {
+	key := tabBarCacheKey{m.ui.width, m.ui.activeTab, themeEpoch}
+	if cached, ok := tabBarCache.get(key); ok {
+		return cached
+	}
 	tabs := []struct {
 		label string
 		t     tab
@@ -119,12 +123,13 @@ func (m model) tabBarView() string {
 			parts = append(parts, styleTabInactive.Render(" "+entry.label+" "))
 		}
 	}
-	sep := styleDivider.Render("│")
+	sep := styleDivider.Render("\u2502")
 	bar := strings.Join(parts, sep)
 	underline := sectionDivider(m.ui.width)
-	return bar + "\n" + underline
+	out := bar + "\n" + underline
+	tabBarCache.put(key, out)
+	return out
 }
-
 func (m model) playerBarView() string {
 	barW := m.ui.width
 

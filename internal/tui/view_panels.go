@@ -242,10 +242,6 @@ func (m model) queuePanel(w, h int) string {
 	lines := []string{label, divLine, colHeader, colDivider}
 
 	displayQueue := m.visibleQueue()
-	if m.transport.queueCursor >= len(displayQueue) {
-		m2 := m
-		m2.transport.queueCursor = max(0, len(displayQueue)-1)
-	}
 	if m.transport.status == nil {
 		lines = append(lines, styleDimmed.Render("  nothing playing"))
 	}
@@ -341,10 +337,14 @@ func (m model) placeholderArt(cols, rows int) string {
 	if cols <= 2 || rows <= 2 {
 		return ""
 	}
+	key := placeholderCacheKey{cols, rows, themeEpoch}
+	if cached, ok := placeholderCache.get(key); ok {
+		return cached
+	}
 	style := stylePlaceholderBorder
-	top := style.Render("╭" + strings.Repeat("─", cols-2) + "╮")
-	mid := style.Render("│" + strings.Repeat(" ", cols-2) + "│")
-	bot := style.Render("╰" + strings.Repeat("─", cols-2) + "╯")
+	top := style.Render("\u256d" + strings.Repeat("\u2500", cols-2) + "\u256e")
+	mid := style.Render("\u2502" + strings.Repeat(" ", cols-2) + "\u2502")
+	bot := style.Render("\u2570" + strings.Repeat("\u2500", cols-2) + "\u256f")
 
 	midRows := rows - 2
 	var sb strings.Builder
@@ -355,5 +355,7 @@ func (m model) placeholderArt(cols, rows int) string {
 	}
 	sb.WriteByte('\n')
 	sb.WriteString(bot)
-	return sb.String()
+	out := sb.String()
+	placeholderCache.put(key, out)
+	return out
 }

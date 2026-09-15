@@ -22,6 +22,8 @@ var (
 // colors. It must be called once at model construction, before any delegate
 // or help model is built, and never concurrently with rendering.
 func applyTheme(c themeColors) {
+	themeEpoch++
+	resetStringCaches()
 	colorBlue = lipgloss.Color(c.Blue)
 	colorBlueLight = lipgloss.Color(c.BlueLight)
 	colorOffWhite = lipgloss.Color(c.OffWhite)
@@ -196,11 +198,11 @@ func sectionDivider(w int) string {
 }
 
 func verticalDivider(h int) string {
-	lines := make([]string, h)
-	for i := range lines {
-		lines[i] = styleDivider.Render("│")
+	if h <= 0 {
+		return ""
 	}
-	return strings.Join(lines, "\n")
+	line := styleDivider.Render("│")
+	return strings.Repeat(line+"\n", h-1) + line
 }
 
 func newPlaylistDelegate() list.DefaultDelegate {

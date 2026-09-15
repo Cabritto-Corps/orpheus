@@ -112,7 +112,7 @@ func newTrackPopupDelegate() list.DefaultDelegate {
 
 func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- librespot.ContextTracksResult, ldr *loader.BackgroundLoader) model {
 	applyTheme(LoadTheme(cfg.Theme, cfg.ThemePath))
-	delegate := newPlaylistDelegate()
+	delegate := newCachedPlaylistDelegate()
 
 	browser := list.New(nil, delegate, 40, 20)
 	browser.SetShowTitle(false)
