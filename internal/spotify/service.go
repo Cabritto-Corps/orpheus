@@ -475,5 +475,3 @@ func (s *Service) playerStateWithRetry(ctx context.Context) (*spotifyapi.PlayerS
 		return s.client.PlayerState(ctx)
 	})
 }
-
-

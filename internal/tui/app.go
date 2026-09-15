@@ -209,7 +209,6 @@ func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.
 	m := newModel(ctx, catalog, service, cfg, tuiCmdCh, contextTracksCh, ldr)
 	p := tea.NewProgram(m,
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
 	)
 	if playbackStateCh != nil {
 		StartPlaybackStateListener(playbackStateCh, p.Send, ctx)
@@ -220,8 +219,8 @@ func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.
 }
 
 func (m model) Init() tea.Cmd {
-	m.preloadLikedSongsArt()
 	return tea.Batch(
+		preloadLikedSongsArtCmd(m),
 		m.getCurrentUserIDCmd(),
 		m.pollCmd(true),
 		m.tickCmd(),

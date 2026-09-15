@@ -946,8 +946,6 @@ func (p *AppPlayer) stopPlayback(ctx context.Context) error {
 	closeStream(p.primaryStream)
 	p.primaryStream = nil
 	p.resetPlaybackCaches(true)
-	p.lastEmittedQueue = nil
-	p.lastEmittedQueueHasMore = false
 	p.state.reset()
 	if err := p.putConnectState(ctx, connectpb.PutStateReason_BECAME_INACTIVE); err != nil {
 		return fmt.Errorf("failed inactive state put: %w", err)

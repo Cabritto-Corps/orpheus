@@ -115,19 +115,18 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 				batchMeta, metaErr := p.sess.Spclient().ResolveTrackOrEpisodeMetadataBatch(metaCtx, trackURIs)
 				metaCancel()
 				if metaErr == nil {
+					byID := make(map[string]PlaybackStateQueueEntry, len(batchMeta))
 					for uri, entry := range batchMeta {
 						id := golibrespot.NormalizeSpotifyId(uri)
-						for i := range result {
-							if result[i].ID == id {
-								result[i].Name = entry.Name
-								artist := entry.Artist
-								if artist == "" {
-									artist = "-"
-								}
-								result[i].Artist = artist
-								result[i].DurationMS = entry.DurationMS
-								break
-							}
+						artist := entry.Artist
+						if artist == "" {
+							artist = "-"
+						}
+						byID[id] = PlaybackStateQueueEntry{ID: id, Name: entry.Name, Artist: artist, DurationMS: entry.DurationMS}
+					}
+					for i := range result {
+						if meta, ok := byID[result[i].ID]; ok {
+							result[i] = meta
 						}
 					}
 				} else if bgCtx.Err() == nil {

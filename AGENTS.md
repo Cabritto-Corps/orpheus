@@ -1,6 +1,19 @@
 # AGENTS.md
 
-Compact guide for OpenCode sessions working in this repo.
+Compact guide for agent sessions working in this repo.
+
+## Current focus: fixes & improvements
+
+The repo just went through a full three-layer review (TUI, player backend, go-librespot fork). The findings and the prioritized fix roadmap live in **`improvements-fixes/`** — start with `improvements-fixes/00-plan.md`. Per-layer detail: `orpheus-backend.md`, `orpheus-tui.md`, `fork-go-librespot.md`, `upstream-porting.md`. Update the status markers there as work lands.
+
+Known high-value gotchas that are **still unfixed** (do not assume fixed without checking the plan file):
+
+- `AppPlayer.Run` busy-spins if the dealer dies permanently (`if !ok { continue }` at `internal/librespot/appplayer.go:485-516`) — nil the channel on close when touching that code.
+- Nil-proto derefs on the Run goroutine from transfer/dealer payloads (transfer `Options`, `req.Command.Options.*`, `Context.*`) — always use proto getters or nil guards.
+- `imgCache.protocol` in `internal/tui` is read without the lock in two places (data race).
+- Track popup results carry no request identity — wrong-context playback possible.
+- Mouse capture is enabled (`tea.WithMouseCellMotion`) but unhandled — do not copy this pattern.
+- `q`/`?`/`+` are not guarded in search-filter mode (Tab is) — apply the filter-mode guard pattern to anything you add.
 
 ## Project
 
@@ -8,7 +21,9 @@ Orpheus is a terminal Spotify TUI player built on a fork of `go-librespot` (`git
 
 The fork lives at `/home/pengusz/repos/go-librespot` (separate repo). For local dev, add a `replace` directive in `go.mod`: `replace github.com/elxgy/go-librespot => /home/pengusz/repos/go-librespot`. Remove it and bump the version after publishing.
 
-Overhaul history lives in `docs/overhaul/roadmap.md` (phases 1-4 done). The error contract is documented in `docs/overhaul/error-taxonomy.md`.
+The official upstream, several commits ahead of our fork point, is cloned at `/home/pengusz/repos/go-librespot-official`. Before any fork-side fix, check whether upstream already fixed it — see `improvements-fixes/upstream-porting.md` for the porting workflow.
+
+Overhaul history lives in `docs/overhaul/roadmap.md` (phases 1-4 done). The error contract is documented in `docs/overhaul/error-taxonomy.md` — note the docs have drifted from code in places (stale line numbers, `api_types.go` description); trust the code, and fix the doc when you touch the referenced area.
 
 ## Commands
 
@@ -32,6 +47,7 @@ Run fork's `//go:build test_unit` gated tests: `go test -race -tags test_unit ./
 ## System dependencies (cgo)
 
 Build fails without native audio codec dev headers:
+
 - Linux: `libasound2-dev libflac-dev libogg-dev libvorbis-dev`
 - macOS: `libogg libvorbis flac`
 
@@ -40,19 +56,19 @@ Build fails without native audio codec dev headers:
 Orpheus has two layers: the **TUI** (bubbletea, `internal/tui`) and the **player backend** (`internal/librespot`, wrapping the fork). They communicate via two channels wired in `cmd/orpheus/main.go:315-357`:
 
 | Channel | Direction | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `tuiCmdCh` (cap 8) | TUI -> AppPlayer | `librespot.TUICommand` (play/pause/seek/skip/shuffle/repeat/play-context) |
 | `playbackStateCh` (cap 32) | AppPlayer -> TUI | `*librespot.PlaybackStateUpdate` (push-based state: track, position, queue, options) |
 
-Both types are defined in `internal/librespot/bridge.go:3-52` — this is the bridge contract.
+Both types are defined in `internal/librespot/bridge.go` — this is the bridge contract.
 
-`AppPlayer.Run` (`internal/librespot/appplayer.go:445`) is a **single goroutine select loop** — all player state mutation happens on this one goroutine. It multiplexes: TUI commands, dealer requests (remote Spotify Connect commands), dealer messages, AP packets, player events, prefetch timers, volume updates, and an end-transition guard ticker.
+`AppPlayer.Run` (`internal/librespot/appplayer.go:461-531`) is a **single goroutine select loop** — all player state mutation happens on this one goroutine. It multiplexes: TUI commands, dealer requests (remote Spotify Connect commands), dealer messages, AP packets, player events, prefetch timers, volume updates, and an end-transition guard ticker.
 
 ## Spotify Protocol Layers
 
 The fork talks to Spotify through five distinct services, all bootstrapped by `apresolve.spotify.com` (returns hostnames for AP/dealer/spclient, cached 1h):
 
-```
+```text
 apresolve.spotify.com
     |
     +-- AccessPoint (AP): raw TCP + Shannon cipher encryption
@@ -74,31 +90,35 @@ apresolve.spotify.com
 
 The fork's `Session` (`session/session.go:46-222`) owns `baseCtx, baseCancel := context.WithCancel(context.Background())` (decoupled from the bootstrap ctx, which has a login-time deadline). All four fork components (AP, Dealer, Mercury, AudioKey) receive `baseCtx` via constructor. `Session.Close()` calls `baseCancel()` first so in-flight I/O observes shutdown.
 
+**Known fork Close() bugs (fix planned, see fork-go-librespot.md F1/F2):** `Close()` hangs if no audio key was ever requested (rendezvous stopChan handshake with the loop never started) and is not idempotent on ap/dealer/mercury/audio-key (second call deadlocks holding `connMu`). Dealer's own reconnect-failure path calls `Close()` itself, so `Session.Close()` can re-deadlock it.
+
 ## Authentication: Two Separate Systems
 
 Orpheus has **two independent auth tokens**, serving different purposes:
 
 **1. Librespot session auth** (fork's `sessionconfig` package):
+
 - First run: interactive OAuth2 via go-librespot's own callback server (port 8080). AP returns `ReusableAuthCredentials` which persist to `AppState`.
 - Subsequent runs: `StoredCredentials` -> `ap.ConnectStored`, no browser needed.
 - Used for: playback (NewStream, audio keys, connect-state, dealer commands).
 - Orpheus entry: `cmd/orpheus/main.go:302` calls `sessionconfig.NewSessionFromConfigDir`. The previous `internal/librespot/session.go` was deleted in the overhaul (Phase 3d).
 
 **2. Orpheus PKCE OAuth for Web API** (`internal/auth/`):
+
 - `orpheus auth login` (`main.go:41-65`): PKCE flow with browser, redirect URI `http://127.0.0.1:8989/callback`. Token stored at `~/.config/orpheus/token.json` (`auth/token_store.go`).
 - Auto-refreshed via `NotifyingTokenSource` (`auth/notify.go`) which re-saves on change.
 - Used for: library browsing (playlists/albums/liked songs via `spotify.Service` or `playlistCatalog`).
-- If no PKCE token exists, falls back to `librespot.NewPlaylistCatalog(sess)` which proxies Web API through the spclient (`webapi.go:18`).
+- If no PKCE token exists, falls back to `librespot.NewPlaylistCatalog(sess)` which proxies Web API through the spclient (`webapi.go:18`). **Known issue:** the fallback catalog returns bare status errors that the taxonomy (`DiagnoseError`/`HTTPStatusFromError`) cannot classify — planned fix (B7).
 
 ## Track Loading & Playback Pipeline
 
 End-to-end flow when user presses play on a playlist:
 
-1. **TUI** sends `TUICommandPlayContext` on `tuiCmdCh` (`app_keys.go:363`). `beginTransportTransition()` fires the TUI's transport FSM (`playback_state.go:104`).
+1. **TUI** sends `TUICommandPlayContext` on `tuiCmdCh`. `beginTransportTransition()` fires the TUI's transport FSM (`playback_state.go:104`).
 2. **AppPlayer** `handleTUIContextCommand` (`command_router.go:15`) resolves context via `sp.ContextResolve` -> `loadContext` (`controls.go:429`).
 3. `loadContext` builds `tracks.List` from context, applies shuffle, syncs state -> `loadCurrentTrack` (`controls.go:499`).
 4. `loadCurrentTrack`: checks secondary stream / transition cache for a ready stream. If none, calls `player.NewStream` (`controls.go:555`).
-5. **`NewStream`** (fork `player/player.go:643`):
+5. **`NewStream`** (fork `player/player.go`):
    - Extended metadata request (track info + audio files) via spclient
    - `selectBestMediaFormat` picks file (FLAC if enabled, else closest bitrate; MP3/AAC skipped per Phase 4 fixes)
    - Parallel: fetch audio key (AP audio-key channel) + storage resolve (CDN URL) via spclient
@@ -106,10 +126,12 @@ End-to-end flow when user presses play on a playlist:
    - `AesAudioDecryptor` (`audio/decryptor.go`): AES-CTR decryption wrapping the chunked reader
    - Vorbis or FLAC cgo decoder (`vorbis/decoder.go` / `flac/decoder.go`): decodes to float32 PCM
    - Returns `Stream{Source: decoder, closers: [decryptedStream, rawStream]}`
-6. `player.SetPrimaryStream` (`controls.go:561`) -> `manageLoop` (fork `player.go:235`) lazily creates output device (PulseAudio), sets it as primary on `SwitchingAudioSource`, resumes -> emits `EventTypePlay`.
+6. `player.SetPrimaryStream` -> `manageLoop` (fork `player.go:235`) lazily creates output device, sets it as primary on `SwitchingAudioSource`, resumes -> emits `EventTypePlay`.
 7. **`SwitchingAudioSource.Read`** (fork `source.go:45`): output device reads float32 samples. On EOF: if secondary exists, closes old primary, flips to secondary (gapless). If not, signals `done` -> `EventTypeNotPlaying`.
-8. **State sync**: `updateState` -> `putConnectState` (`state.go:62`) PUTs to Spotify Connect. `emitPlaybackState` (`appplayer.go:425`) pushes `PlaybackStateUpdate` to TUI.
-9. **Prefetch**: `schedulePrefetchNext` (`controls.go:211`) arms timer ~30s before track end -> `runPrefetchWorker` (`controls.go:235`, background goroutine) loads next track's `Stream` -> `handlePrefetchResult` promotes to `secondaryStream`.
+8. **State sync**: `updateState` -> `putConnectState` PUTs to Spotify Connect. `emitPlaybackState` pushes `PlaybackStateUpdate` to TUI.
+9. **Prefetch**: `schedulePrefetchNext` (`controls.go:211`) arms timer ~30s before track end -> `runPrefetchWorker` (background goroutine) loads next track's `Stream` -> `handlePrefetchResult` promotes to `secondaryStream`.
+
+**Known perf issue:** the Run goroutine does unbounded network I/O during transitions — `UpcomingTracks(ctx,64)` / `NextTracks` lazily fetch context pages inline (state_adapter.go:43), plus cold `NewStream` — can stall Run for tens of seconds on a big playlist (B3, planned fix).
 
 ## Stream Cache & Prefetching
 
@@ -117,9 +139,9 @@ Three tiers of ready-to-play streams (`stream_cache.go` + `controls.go:120-301`)
 
 1. **`primaryStream`** — currently playing.
 2. **`secondaryStream`** — next track, staged in `SwitchingAudioSource` for gapless transition. At most one.
-3. **`transitionCache`** — `*transitionCache` struct (`stream_cache.go:16`): map `uri -> *Stream`, capped at 16 (`transitionStreamCacheMax`, `stream_cache.go:22`). FIFO eviction. Private mutex; methods: `Has`, `Take`, `Put` (evicts at cap), `Clear` (close all + reset pending), `HasPending`, `MarkPending`, `ClearPending`, `ResetPending`.
+3. **`transitionCache`** — `*transitionCache` struct (`stream_cache.go:16`): map `uri -> *Stream`, capped at 16 (`transitionStreamCacheMax`, `stream_cache.go:22`). FIFO eviction. Private mutex; methods: `Has`, `Take`, `Put`, `Clear`, `HasPending`, `MarkPending`, `ClearPending`, `ResetPending`.
 
-`prefetchGen` (`atomic.Uint64` on `AppPlayer`) guards against stale prefetch results — stale workers (from a previous context/shuffle) close and drop their streams.
+`prefetchGen` (`atomic.Uint64` on `AppPlayer`) guards against stale prefetch results — stale workers close and drop their streams.
 
 Invalidation: `bumpPrefetchGeneration` (`stream_cache.go:146`) on context load, shuffle toggle, or skip — clears pending set and all caches via `resetPlaybackCaches` (`controls.go:78`).
 
@@ -131,41 +153,46 @@ Invalidation: `bumpPrefetchGeneration` (`stream_cache.go:146`) on context load, 
 
 **Queue** lives inside the fork's `tracks.List` (`tracks/tracks.go:14`): `tracks` in context order, `playbackOrder []int` maps playback position -> context index (shuffled or identity), `queue []*ContextTrack` for manually-added "up next" items. Shuffle uses `math/rand/v2` with `rand.NewPCG(seed, seed)`.
 
-**Connect state sync**: `putConnectState` (`state.go:68`) PUTs to `/connect-state/v1/devices/<deviceId>` with `X-Spotify-Connection-Id` header (obtained from dealer's `pusher/v1/connections/` message, `appplayer.go:182`). This makes orpheus visible in Spotify's device picker. Remote commands from other clients arrive as dealer requests -> `handlePlayerCommand` (`appplayer.go:226`).
+**Connect state sync**: `putConnectState` PUTs to `/connect-state/v1/devices/<deviceId>` with `X-Spotify-Connection-Id` header (obtained from dealer's `pusher/v1/connections/` message). This makes orpheus visible in Spotify's device picker. Remote commands arrive as dealer requests -> `handlePlayerCommand` (`appplayer.go:226`).
 
 ## TUI Architecture
 
-**Bubbletea model** (`internal/tui/app.go`): three tabs (playlists/albums/player). 200ms tick loop (`tickCmd` in `cmds.go:328`) drives: progress interpolation, input executor pump, cover refresh scheduling. In librespot mode, **no polling** — state is push-based via `playbackStateCh`.
+**Bubbletea model** (`internal/tui/app.go`): three tabs (playlists/albums/player). 200ms tick loop (`tickCmd`) drives: progress interpolation, input executor pump, cover refresh scheduling. In librespot mode, **no polling** — state is push-based via `playbackStateCh`.
 
-**Model split** (`internal/tui/models.go`): top-level `model` (~10 fields) groups three sub-models:
-- `transportModel` (28 fields): playback status, queue, input queue, debounce, transport transition FSM, cover epoch, playback error.
-- `browseModel` (19 fields): playlist/album browsing, active playlist, preloaded IDs, track cache, retry counts.
-- `uiModel` (32 fields): tabs, popups, layout, polling, image caches, width/height.
+**Model split** (`models.go`): top-level `model` groups three sub-models:
+
+- `transportModel`: playback status, queue, input queue, debounce, transport transition FSM, cover epoch, playback error.
+- `browseModel`: playlist/album browsing, active playlist, preloaded IDs, track cache, retry counts.
+- `uiModel`: tabs, popups, layout, polling, image caches, width/height.
 
 **File decomposition**:
-- `app.go` (253 LOC): types, init, Run. `app_msg.go` (678 LOC): message dispatch. `app_keys.go` (389 LOC): key handlers.
-- `view.go` (211 LOC): layout. `view_chrome.go` (317 LOC): header/footer/help/kitty. `view_panels.go` (348 LOC): content panels.
-- `cmds.go` (355 LOC): types, listeners, poll/action, tick. `cmds_io.go` (438 LOC): I/O cmds.
-- `image.go` (716 LOC): cover cache + protocols. `cover_manager.go`: cover queue.
 
-**Command flow** (`input_pipeline.go`): key presses enqueue `playbackInputKind` (priority: next/prev=critical, play/pause=high, shuffle/loop=normal, vol/seek=low). `pumpInputExecutor` runs up to 8 actions/tick when idle. Volume/seek are debounced (50ms). Context-play commands (selecting a playlist) bypass the queue and write directly to `tuiCmdCh`. Queue predecessors dropped via `dropQueuedByPredicate(isVolumeAction)` / `dropQueuedByPredicate(isSeekAction)` (unlambda'd in Phase 4 cleanup).
+- `app.go`: types, init, Run. `app_msg.go`: message dispatch. `app_keys.go`: key handlers.
+- `view.go`: layout. `view_chrome.go`: header/footer/help/kitty. `view_panels.go`: content panels.
+- `cmds.go` / `cmds_io.go`: tea.Cmds + channel listeners + I/O.
+- `image.go`: cover cache + protocols. `cover_manager.go`: cover queue.
+- `input_pipeline.go`: action queue/executor. `playback_state.go`: settle/interpolation. `transport_transition.go`: transport FSM.
 
-**Transport transition FSM** (`internal/tui/transport_transition.go`, 99 LOC + 13 tests): consolidated 5 scattered fields into one `transportTransition` struct with named states (`transportIdle`, `transportAwaitingTrack`) and event enum (`transportEventTrackChanged`, `transportEventTrackPlaying`, `transportEventStuck`). Methods: `Begin`, `MaybeClear` (returns event), `Clear`, `ConsumeRecovery`, `Pending`, `RecoveryPending`, `StuckCount`, `FromTrack`, `StartedAt`. Constants `transportTransitionStuckTimeout` (4s) + `transportTransitionProgressMaxMS` (2000) co-located. Callers in `playback_state.go`, `input_pipeline.go`, `update_handlers.go`, `app_msg.go`.
+**Command flow** (`input_pipeline.go`): key presses enqueue `playbackInputKind` (priority: next/prev=critical, play/pause=high, shuffle/loop=normal, vol/seek=low). `pumpInputExecutor` runs up to 8 actions/tick when idle. Volume/seek debounced (50ms). Context-play commands bypass the queue and write directly to `tuiCmdCh`. Queue predecessors dropped via `dropQueuedByPredicate`.
 
-**State flow** (`playback_state.go`): `handlePlaybackStateMsg` (`app_msg.go:165`) applies pushed updates with settle windows (volume 3s, seek 1.2s) to prevent UI flicker. Progress is interpolated locally every 200ms tick, resynced from pushes when delta > 300ms. Track changes fire `orpheus_on_song_change` hook.
+**Transport transition FSM** (`transport_transition.go`): one `transportTransition` struct with named states (`transportIdle`, `transportAwaitingTrack`) and event enum. Methods: `Begin`, `MaybeClear`, `Clear`, `ConsumeRecovery`, `Pending`, `RecoveryPending`, `StuckCount`, `FromTrack`, `StartedAt`. Constants `transportTransitionStuckTimeout` (4s) + `transportTransitionProgressMaxMS` (2000) co-located.
 
-**Data fetching**: library loaded via `loadPlaylistsCmd` (`cmds_io.go:22`) — parallel pagination of playlists (50/page) + albums. Liked songs is a synthetic pseudo-playlist (`URI="spotify:collection"`) with procedurally generated cover art (`liked_songs_art.go`). Playlist tracks loaded on selection via `TUICommandGetContextTracks` (returns on `ResultCh`). Album art fetched via HTTP, rendered with kitty graphics protocol or half-block ANSI (`image.go`), cached in LRU(256 images / 512 covers). `cover()` does cache lookup + dispatch; `renderAndCache()` does render+cache+cleanup (single lock take, no defer-in-loop).
+**State flow** (`playback_state.go`): `handlePlaybackStateMsg` applies pushed updates with settle windows (volume 3s, seek 1.2s) to prevent UI flicker. Progress interpolated locally every 200ms tick, resynced from pushes when delta > 300ms. Track changes fire `orpheus_on_song_change` hook.
+
+**Data fetching**: library loaded via `loadPlaylistsCmd` (`cmds_io.go`) — parallel pagination of playlists (50/page) + albums. Liked songs is a synthetic pseudo-playlist (`URI="spotify:collection"`) with procedurally generated cover art (`liked_songs_art.go` — NOTE: currently generated synchronously in Init() at high supersampling; planned to be async/downsized, see T1). Album art fetched via HTTP, rendered with kitty graphics protocol or half-block ANSI (`image.go`), cached in LRU(256 images / 512 covers).
 
 ## Error Handling
 
 Canonical error taxonomy: `docs/overhaul/error-taxonomy.md`. Summary:
 
-- **Fork playback recoverable** (`golibrespot.ErrMediaRestricted`, `ErrNoSupportedFormats`): auto-skip in `controls.go:487` (load context) and `controls.go:892` (`advanceNext`, 10-attempt cap). Never surfaces to TUI.
+- **Fork playback recoverable** (`golibrespot.ErrMediaRestricted`, `ErrNoSupportedFormats`): auto-skip in load-context and `advanceNext` paths (10-attempt cap). Never surfaces to TUI.
 - **Fork player lifecycle** (`player.ErrPlayerClosed`): non-recoverable; logged.
 - **Web API** (`spotify.ErrDeviceNotFound`, `ErrNoActiveTrack`, `ErrNoPlaybackContext` + HTTP 429/403/404/5xx): classified by `spotify.DiagnoseError` (`service.go:175`), surfaced in TUI via `transport.playbackErr`.
 - **Network/context**: `DeadlineExceeded` (command timeouts — see `internal/librespot/timeouts.go`), `Canceled` (shutdown).
 
 Invariants: fork errors are wrapped (`%w`), not re-sentinelled. `transport.playbackErr` is the TUI's single source of error truth — cleared on every successful state update and every key press that initiates a new context.
+
+**Known weakness (B7):** error classification uses lower-cased substring matching in several places (`DiagnoseError`, `isRateLimitError`, `isRetryableTokenRefreshError`); it misfires once errors are wrapped, and the fallback `webapi.go` catalog returns bare `fmt.Errorf` status strings that classify as unknown. When touching error paths, prefer typed/sentinel errors over substring checks.
 
 ## Breaking Points & Gotchas
 
@@ -173,49 +200,51 @@ Invariants: fork errors are wrapped (`%w`), not re-sentinelled. `transport.playb
 
 `closeStream` (`internal/librespot/controls.go:71`) calls `s.Close()` (fork `player/stream.go:32`) which closes the vorbis/flac decoder (cgo) + underlying HTTP connections via `closers`. **Order matters**: the output device must stop reading from a decoder before it's closed, or you get use-after-free in cgo vorbis/flac state. See `crashes/double-free/crash.log`.
 
-The fork's `manageLoop` exit (`player.go:371-376`) closes output BEFORE source precisely to prevent this. Any orpheus code that closes a stream outside the manage loop (e.g. `clearTransitionStreamCache`, `resetPlaybackCaches`) must ensure no reader is active on that stream.
+The fork's `manageLoop` exit (`player.go:371-376`) closes output BEFORE source precisely to prevent this. Any orpheus code that closes a stream outside the manage loop (e.g. `clearTransitionStreamCache`, `resetPlaybackCaches`) must ensure no reader is active on that stream — orpheus uses `closeStreamAsync` for this everywhere off the hot path; keep it that way.
 
 ### Stream.Close() and connection leaks
 
-`Stream.Close()` (fork `player/stream.go:32`) closes the decoder `Source` + all `closers` (AES decryptor + HTTP chunked reader). Tested by `player/stream_test.go` (4 tests: Close invokes Source + closers, joins errors, idempotent, nil-safe). If closers are not closed, every played track leaks an HTTP connection to Spotify CDN -> connection pool exhaustion -> `NewStream` hangs -> playback freezes. This was the root cause of the extended-listening freeze bug.
+`Stream.Close()` (fork `player/stream.go:32`) closes the decoder `Source` + all `closers` (AES decryptor + HTTP chunked reader). Tested by fork `player/stream_test.go`. If closers are not closed, every played track leaks an HTTP connection to Spotify CDN -> connection pool exhaustion -> `NewStream` hangs -> playback freezes. This was the root cause of the extended-listening freeze bug. Orpheus's `closeStream` correctly calls `s.Close()`; the fork's own `cmd/daemon` does not (its `closeStream` only closes the source — fork-side fix F/M1 pending).
 
 ### AP/Dealer reconnect goroutine leaks
 
-When AP or dealer reconnect, `connect()` creates new stop channels, replacing old ones. Old goroutines (`recvLoop`, `pongAckTicker`/`pingTicker`) listen on old channels that are no longer referenced -> goroutines never stop -> leak per reconnect. The fork now saves old stop channels before reconnect and signals them after successful reconnect.
-
-Phase 4a added `baseCtx` to AP/Dealer/Mercury/AudioKey. `Session.Close()` calls `baseCancel()` first. This does NOT replace the stop-channel sync (those remain for `recvLoopOnce` coordination); it gives in-flight I/O a cancellation signal.
+When AP or dealer reconnect, `connect()` creates new stop channels, replacing old ones. Old goroutines listen on old channels -> leak per reconnect. The fork saves old stop channels before reconnect and signals them after successful reconnect. `baseCtx` (Phase 4a) gives in-flight I/O a cancellation signal but does NOT replace stop-channel sync.
 
 ### Mercury has no reconnect of its own
 
-Mercury (`mercury/client.go`) depends entirely on AP reconnecting. If AP drops and reconnects, mercury's `ap.Receive(...)` channel survives (registrations are on the `Accesspoint` struct, not the connection). But in-flight mercury requests lose their `seq` mapping on reconnect -> 15s timeout -> `context.DeadlineExceeded`. No automatic retry.
+Mercury depends entirely on AP reconnecting. Registrations are on the `Accesspoint` struct (not the connection) so they survive reconnect, but in-flight mercury requests lose their `seq` mapping -> 15s timeout. No automatic retry. Known additional leaks (F18): request-map entries are never deleted on caller timeout, and pending requests are never failed on AP reconnect.
 
 ### HttpChunkedReader.Close() is synchronous
 
-`Close()` (fork `audio/chunked-reader.go:395`) cancels context and **blocks on `prefetchWg.Wait()`** — waits for all prefetch goroutines to finish. Closing a chunked reader while prefetch is in progress will block.
+`Close()` (fork `audio/chunked-reader.go`) cancels context and blocks on `prefetchWg.Wait()`. Closing a chunked reader while prefetch is in progress will block. Also: `prefetchWg.Add` racing `Wait` is a real panic risk (F19) — do not add new concurrent `Add` callers before that fix.
 
 ### Session.Close() ordering
 
-Fork `session/session.go:225`: calls `baseCancel()` first, then closes AP (stops transport that mercury/audioKey depend on), then events, audioKey, mercury, dealer. Reversing this risks mercury/audioKey `Close()` hanging (their recv loops may already be dead from AP drop).
+Fork `session/session.go`: calls `baseCancel()` first, then closes AP (stops transport that mercury/audioKey depend on), then events, audioKey, mercury, dealer. Reversing this risks mercury/audioKey `Close()` hanging. Caveat: `Close()` itself can still hang in the no-audio-key case (F1) until fixed.
 
 ### Dealer requestReceivers panic on duplicate
 
-`ReceiveRequest(uri)` (fork `dealer/recv.go:244`) panics if a receiver for the URI already exists. After a permanent dealer stop, re-registering requires a new `Dealer` instance — the map is not cleared on reconnect, only on permanent stop.
+`ReceiveRequest(uri)` (fork `dealer/recv.go`) panics if a receiver for the URI already exists. The map is not cleared on reconnect, only on permanent stop. Also: dealer receivers registered in `Run` (`appplayer.go:471-472`) are NOT re-registered after a dealer reconnect — after a reconnect with a new connection identity the device can go deaf (F9, planned fix). Do not add a second `ReceiveRequest` registration as a workaround.
 
 ### Single-goroutine player state
 
-All `AppPlayer` state mutation happens on the `Run` goroutine. Never call `loadCurrentTrack`, `updateState`, `skipNext`, etc. from another goroutine. TUI commands arrive on `tuiCmdCh` and are dispatched inside `Run`. The only exception is `runPrefetchWorker` (background goroutine); it returns results via channels consumed by `Run`.
+All `AppPlayer` state mutation happens on the `Run` goroutine. Never call `loadCurrentTrack`, `updateState`, `skipNext`, etc. from another goroutine. TUI commands arrive on `tuiCmdCh` and are dispatched inside `Run`. The only exceptions are background workers (prefetch, metadata batch resolver) which return results via channels consumed by `Run`.
+
+Do not add long network calls to `Run`'s handlers — the select loop stalls (dealer `req.Reply` is deferred until the handler returns). Queue-building for `PlaybackStateUpdate` is a known offender (B3).
 
 ### Non-blocking channel sends
 
-All `tuiCmdCh` sends from the TUI use `select`/`default` (non-blocking) so a blocked AppPlayer never freezes the UI. Dropped actions are requeued (max 3 retries). `playbackStateCh` sends from AppPlayer are also non-blocking (counted as dropped if full).
+All `tuiCmdCh` sends from the TUI use `select`/`default` so a blocked AppPlayer never freezes the UI. `playbackStateCh` sends from AppPlayer are also non-blocking. Keep this invariant. Note the trade-offs already known: dropped pushes have no reconcile backstop (T8), and dropped play commands vanish silently (T9).
 
-## go-librespot fork: local dev gotcha
+## go-librespot fork workflow
 
-When modifying the fork: changes to `go-librespot` `Close()` signatures or vorbis/flac decoder lifecycle directly affect orpheus's `closeStream` (`internal/librespot/controls.go:71`), which calls `s.Close()` which now type-asserts `io.Closer` on the decoder (the fork's `AudioSource` interface embeds `io.Closer` as of Phase 1c). A decoder that previously leaked (didn't satisfy the interface) will start being closed after such a change, which can surface use-after-free bugs in cgo vorbis state cleanup. See `crashes/double-free/` for prior examples.
+When modifying the fork: changes to fork `Close()` signatures or vorbis/flac decoder lifecycle directly affect orpheus's `closeStream` (`internal/librespot/controls.go:71`). A decoder that previously leaked will start being closed after such a change — can surface use-after-free bugs. See `crashes/double-free/` for prior examples.
 
 After fork changes: build + test the fork (`go build ./... && go test -race ./...`), commit, push, then update orpheus `go.mod` with `go get github.com/elxgy/go-librespot@<hash> && go mod tidy`. Remove any `replace` directive first. `go mod tidy` strips the replace directive — re-add it if you want to keep testing locally without bumping.
 
-Fork runtime requirements: Go 1.25+ (uses `math/rand/v2`, stdlib `slices`/`maps`, `errors.Join`). `golang.org/x/exp/*` no longer imported directly.
+Fork runtime requirements: Go 1.25+ (uses `math/rand/v2`, stdlib `slices`/`maps`, `errors.Join`).
+
+**Upstream sync**: official repo cloned at `/home/pengusz/repos/go-librespot-official`. Before starting any fork-side fix, check whether upstream already fixed it (`git -C ~/repos/go-librespot-official log --oneline -- <pkg>/`). Port upstream fixes where they overlap fork bugs; preserve fork-only divergences (baseCtx, Stream.Close, decoder guards, playbackOrder shuffle, CDN quarantine, tests). Full workflow in `improvements-fixes/upstream-porting.md`.
 
 ## Entry points
 
@@ -223,18 +252,18 @@ Fork runtime requirements: Go 1.25+ (uses `math/rand/v2`, stdlib `slices`/`maps`
   - `orpheus` (no arg / `librespot`) — run the TUI (default)
   - `orpheus auth login` — Spotify PKCE OAuth via browser
   - `orpheus check` — verify config + token
-- `internal/librespot` — core player: `AppPlayer` wraps go-librespot session/player; `controls.go` (track loading, transitions, stream cache), `stream_cache.go` (`transitionCache` struct, prefetch generation), `state.go`/`queue_state.go` (player state), `appplayer.go` (lifecycle + Run loop), `command_router.go` (TUI command dispatch), `webapi.go` (Spotify Web API bridge via spclient), `bridge.go` (TUICommand/PlaybackStateUpdate types), `state_adapter.go` (builds PlaybackStateUpdate for TUI), `timeouts.go` (named timeout constants), `api_types.go` (orpheus-specific `ApiEvent`/`ApiResponse` types for the daemon event API — error sentinels deleted in Phase 4 cleanup), `config.go` (uses fork's `sessionconfig.ParseDeviceType`)
-- `internal/tui` — bubbletea TUI (`app.go` is the model; `models.go` sub-model types; `app_msg.go` message dispatch; `app_keys.go` key handlers; `view.go`/`view_chrome.go`/`view_panels.go` rendering; `cmds.go`/`cmds_io.go` tea.Cmds + channel listeners; `input_pipeline.go` action queue/executor; `playback_state.go` settle/interpolation; `transport_transition.go` transport FSM; `image.go` image cache + protocols; `cover_manager.go` cover queue)
+- `internal/librespot` — core player: `AppPlayer` wraps go-librespot session/player; `controls.go` (track loading, transitions, stream cache), `stream_cache.go` (`transitionCache`, prefetch generation), `state.go`/`queue_state.go` (player state), `appplayer.go` (lifecycle + Run loop), `command_router.go` (TUI command dispatch), `webapi.go` (Web API bridge via spclient), `bridge.go` (TUICommand/PlaybackStateUpdate types), `state_adapter.go` (builds PlaybackStateUpdate), `timeouts.go` (named timeouts), `api_types.go` (orpheus `ApiResponse` types), `config.go` (uses fork's `sessionconfig.ParseDeviceType`)
+- `internal/tui` — bubbletea TUI (see TUI Architecture)
 - `internal/auth` — PKCE OAuth flow + file token store + notifying token source
-- `internal/config` — env-based config loaded from `.env` (cwd first, falls back to `<configDir>/.env`, see `loadEnvFile`); config dir resolution via `DefaultConfigDir` (`ORPHEUS_CONFIG_DIR` or `UserConfigDir/orpheus`)
-- `internal/spotify` — Web API client (`service.go`, `service_playback.go` transport, `service_catalog.go` browsing, `service_errors.go` `DiagnoseError`, `timeutil.go` `sleepWithContext`)
+- `internal/config` — env-based config loaded from `.env` (cwd first, falls back to `<configDir>/.env`, see `loadEnvFile`); config dir via `DefaultConfigDir` (`ORPHEUS_CONFIG_DIR` or `UserConfigDir/orpheus`)
+- `internal/spotify` — Web API client (`service.go`, `service_playback.go`, `service_catalog.go`, `service_errors.go` `DiagnoseError`, `timeutil.go`)
 - `internal/playbackdomain` — option resolution helpers (shuffle/repeat traversal)
-- `internal/cache` — LRU + TTL caches (for images and track metadata)
+- `internal/cache` — LRU + TTL caches (images, track metadata)
 - `internal/loader` — background loader pool (128 workers) for image fetching
 
 ## Config
 
-`.env` file (gitignored). Lookup order: cwd first, falls back to `<configDir>/.env` (so a globally-installed orpheus works from any directory — put `.env` at `~/.config/orpheus/.env`). Required: `SPOTIFY_CLIENT_ID`. See `tutorial.md` for Spotify developer dashboard setup (redirect URI `http://127.0.0.1:8989/callback`). Other vars prefixed `orpheus_*` — see `internal/config/config.go:36-47`.
+`.env` file (gitignored). Lookup order: cwd first, falls back to `<configDir>/.env` (so a globally-installed orpheus works from any directory — put `.env` at `~/.config/orpheus/.env`). Required: `SPOTIFY_CLIENT_ID`. See `tutorial.md` for Spotify developer dashboard setup (redirect URI `http://127.0.0.1:8989/callback`). Other vars prefixed `orpheus_*` — see `internal/config/config.go`. Known issue: malformed env values revert to defaults silently (B16) — surface a warning when touching that code.
 
 ## Testing
 
@@ -244,6 +273,7 @@ Fork runtime requirements: Go 1.25+ (uses `math/rand/v2`, stdlib `slices`/`maps`
 - `internal/tui/transport_transition_test.go`: 13 tests for the transport FSM.
 - Fork `player/stream_test.go`: 4 tests for `Stream.Close` invariant.
 - Fork `tracks/paged-list_internal_test.go` (gated `//go:build test_unit`): paged list shuffle/unshuffle with `math/rand/v2` PCG seeds.
+- The review found the race/requeue/popup-identity/popup-timeout paths are **untested** — when fixing those (T5/T6/T7/T9b), add tests in the same commit.
 
 ## Code style
 

@@ -43,13 +43,9 @@ func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUp
 			upcoming := p.state.tracks.UpcomingTracks(ctx, queueOverrideMaxTracks)
 			out.Queue = providedTracksToQueueEntries(p, upcoming)
 			out.QueueHasMore = len(upcoming) >= queueOverrideMaxTracks
-			p.lastEmittedQueue = append([]PlaybackStateQueueEntry(nil), out.Queue...)
-			p.lastEmittedQueueHasMore = out.QueueHasMore
 		} else {
 			out.Queue = nil
 			out.QueueHasMore = false
-			p.lastEmittedQueue = nil
-			p.lastEmittedQueueHasMore = false
 		}
 	}
 

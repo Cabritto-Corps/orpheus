@@ -70,10 +70,8 @@ type AppPlayer struct {
 	shuffleRefreshPending bool
 	shuffleRefreshGen     uint64
 
-	queueMetaCache          *cache.LRU[string, PlaybackStateQueueEntry]
-	queueMetaMu             sync.RWMutex
-	lastEmittedQueue        []PlaybackStateQueueEntry
-	lastEmittedQueueHasMore bool
+	queueMetaCache *cache.LRU[string, PlaybackStateQueueEntry]
+	queueMetaMu    sync.RWMutex
 
 	advanceInFlight atomic.Bool
 }
@@ -483,6 +481,7 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			return
 		case pkt, ok := <-apRecv:
 			if !ok {
+				apRecv = nil
 				continue
 			}
 			if err := p.handleAccesspointPacket(pkt.Type, pkt.Payload); err != nil {
@@ -490,6 +489,7 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			}
 		case msg, ok := <-msgRecv:
 			if !ok {
+				msgRecv = nil
 				continue
 			}
 			if err := p.handleDealerMessage(ctx, msg); err != nil {
@@ -497,6 +497,7 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			}
 		case req, ok := <-reqRecv:
 			if !ok {
+				reqRecv = nil
 				continue
 			}
 			if err := p.handleDealerRequest(ctx, req); err != nil {
@@ -507,6 +508,7 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			}
 		case cmd, ok := <-tuiCmdCh:
 			if !ok {
+				tuiCmdCh = nil
 				continue
 			}
 			if err := p.handleTUICommand(ctx, cmd); err != nil {
@@ -514,6 +516,7 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			}
 		case ev, ok := <-playerRecv:
 			if !ok {
+				playerRecv = nil
 				continue
 			}
 			p.handlePlayerEvent(ctx, &ev)

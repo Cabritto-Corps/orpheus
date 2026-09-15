@@ -24,12 +24,12 @@ const minRightW = 28
 
 const (
 	iconPlay            = "▶"
-	iconPause           = ""
+	iconPause           = "‖"
 	iconDevice          = "●"
 	iconVolume          = "▪"
-	iconShuffle         = ""
-	iconRepeatContext   = ""
-	iconRepeatTrack     = ""
+	iconShuffle         = "⇄"
+	iconRepeatContext   = "↻"
+	iconRepeatTrack     = "↻¹"
 	iconPlayNF          = "\uf04b"
 	iconPauseNF         = "\uf04c"
 	iconDeviceNF        = "\ue30c"

@@ -107,6 +107,7 @@ func envBool(key string, fallback bool) bool {
 	}
 	v, err := strconv.ParseBool(raw)
 	if err != nil {
+		slog.Warn("invalid boolean value, using default", "key", key, "value", raw, "default", fallback)
 		return fallback
 	}
 	return v
@@ -119,6 +120,7 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 	}
 	v, err := time.ParseDuration(raw)
 	if err != nil {
+		slog.Warn("invalid duration value, using default", "key", key, "value", raw, "default", fallback)
 		return fallback
 	}
 	return v

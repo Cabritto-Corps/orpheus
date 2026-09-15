@@ -15,13 +15,18 @@ import (
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
+	filtering := m.isFiltering()
 
 	switch {
 	case keyMatches(msg, k.Quit):
-		return m, tea.Quit
+		if !filtering || msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
 	case keyMatches(msg, k.ToggleHelp):
-		m.ui.helpOpen = !m.ui.helpOpen
-		return m, nil
+		if !filtering {
+			m.ui.helpOpen = !m.ui.helpOpen
+			return m, nil
+		}
 	}
 
 	if m.ui.helpOpen {
@@ -36,8 +41,6 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if keyMatches(msg, k.Tab) {
-		filtering := (m.ui.activeTab == tabPlaylists && m.browse.playlistList.FilterState() == list.Filtering) ||
-			(m.ui.activeTab == tabAlbums && m.browse.albumList.FilterState() == list.Filtering)
 		if !filtering {
 			switch m.ui.activeTab {
 			case tabPlaylists:
@@ -55,9 +58,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Global playback keys: work on all tabs, not just player
-	if action := m.matchGlobalPlaybackKey(msg); action != "" {
-		m.enqueuePlaybackInput(action)
-		return m, m.pumpInputExecutor()
+	if !filtering {
+		if action := m.matchGlobalPlaybackKey(msg); action != "" {
+			m.enqueuePlaybackInput(action)
+			return m, m.pumpInputExecutor()
+		}
 	}
 
 	switch m.ui.activeTab {
@@ -154,6 +159,11 @@ func (m model) handleAlbumKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.loadImageCmd(nextURL, false))
 	}
 	return m, tea.Batch(cmds...)
+}
+
+func (m model) isFiltering() bool {
+	return (m.ui.activeTab == tabPlaylists && m.browse.playlistList.FilterState() == list.Filtering) ||
+		(m.ui.activeTab == tabAlbums && m.browse.albumList.FilterState() == list.Filtering)
 }
 
 func (m model) matchGlobalPlaybackKey(msg tea.KeyMsg) playbackInputKind {
