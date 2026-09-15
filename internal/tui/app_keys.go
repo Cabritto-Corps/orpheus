@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -226,11 +227,14 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 type trackPopupItemsMsg struct {
+	token int
 	items []spotify.QueueItem
 }
 
 func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.ui.trackPopupOpen = true
+	m.ui.trackPopupReqToken++
+	m.ui.trackPopupWaitTicks = 0
 	m.ui.trackPopupKind = sel.summary.Kind
 	m.ui.trackPopupID = sel.summary.ID
 	m.ui.trackPopupURI = sel.summary.URI
@@ -259,9 +263,14 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 		case m.tuiCmdCh <- librespot.TUICommand{
 			Kind:     librespot.TUICommandGetContextTracks,
 			URI:      sel.summary.URI,
+			ReqToken: m.ui.trackPopupReqToken,
 			ResultCh: m.contextTracksCh,
 		}:
 		default:
+			// The backend queue is full; without a reply the popup would
+			// sit on "Loading…" forever.
+			m.ui.trackPopupOpen = false
+			m.transport.playbackErr = errors.New("couldn't load tracks — player busy")
 		}
 	} else {
 		m.ui.trackPopupItems = []spotify.QueueItem{}

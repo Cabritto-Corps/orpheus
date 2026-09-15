@@ -247,6 +247,7 @@ func (m model) loadPlaylistItemsCmd(playlistID string, offset int, token int) te
 				pageOffsets = append(pageOffsets, off)
 			}
 			results := make([]pageResult, len(pageOffsets))
+			resCh := make(chan pageResult, len(pageOffsets))
 			var wg sync.WaitGroup
 			for i, off := range pageOffsets {
 				wg.Add(1)
@@ -254,31 +255,39 @@ func (m model) loadPlaylistItemsCmd(playlistID string, offset int, token int) te
 					defer wg.Done()
 					limit := min(playlistItemPageSize, playlistItemPreloadMax-pageOff)
 					pg, pErr := catalog.ListPlaylistItemsPage(ctx, playlistID, pageOff, limit)
-					results[idx] = pageResult{idx: idx, page: pg, err: pErr}
+					resCh <- pageResult{idx: idx, page: pg, err: pErr}
 				}(i, off)
 			}
 			wg.Wait()
+			close(resCh)
+			for r := range resCh {
+				results[r.idx] = r
+			}
 
+			lastPageHasMore := false
 			for _, r := range results {
 				if r.err != nil {
 					slog.Warn("playlist preload page failed", "error", r.err)
-					continue
+					break
 				}
 				if r.page == nil {
 					break
 				}
 				all = append(all, r.page.ItemIDs...)
 				allInfos = append(allInfos, r.page.ItemInfos...)
+				lastPageHasMore = r.page.HasMore
 				if !r.page.HasMore {
 					break
 				}
 			}
+			// The preload cap is not the playlist end: report the truncated
+			// boundary so the incremental loader can continue past it.
 			return playlistItemsMsg{
 				playlistID: playlistID,
 				itemIDs:    all,
 				itemInfos:  allInfos,
 				nextOffset: len(all),
-				hasMore:    false,
+				hasMore:    lastPageHasMore && len(all) >= playlistItemPreloadMax,
 				token:      token,
 			}
 		}
@@ -404,7 +413,11 @@ func (m *model) loadImagesBatchCmd(urls []string) tea.Cmd {
 			Timeout: imageFetchTimeout,
 		})
 		msgs := make([]imageLoadedMsg, 0, len(results))
+		answered := make(map[int]struct{}, len(results))
 		for _, r := range results {
+			if r.Index >= 0 && r.Index < len(validURLs) {
+				answered[r.Index] = struct{}{}
+			}
 			url := validURLs[r.Index]
 			if r.Error != nil {
 				msgs = append(msgs, imageLoadedMsg{url: url, err: r.Error})
@@ -432,6 +445,14 @@ func (m *model) loadImagesBatchCmd(urls []string) tea.Cmd {
 			}
 			m.ui.imgs.preRenderCovers(url, coverSizes)
 			msgs = append(msgs, imageLoadedMsg{url: url})
+		}
+		// The loader can return fewer results than requested (e.g. pool
+		// context done); synthesize failures so inflight flags don't leak.
+		for i := range validURLs {
+			if _, ok := answered[i]; ok {
+				continue
+			}
+			msgs = append(msgs, imageLoadedMsg{url: validURLs[i], err: loader.ErrLoadFailed})
 		}
 		return imagesBatchLoadedMsg{results: msgs}
 	}

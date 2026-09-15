@@ -22,7 +22,16 @@ type TUICommand struct {
 	TrackID  string
 	Position int64
 	Volume   int
-	ResultCh chan<- []PlaybackStateQueueEntry
+	ReqToken int
+	ResultCh chan<- ContextTracksResult
+}
+
+// ContextTracksResult is the reply to TUICommandGetContextTracks. ReqToken
+// echoes the request so the TUI can drop results that no longer match the
+// open popup.
+type ContextTracksResult struct {
+	ReqToken int
+	Entries  []PlaybackStateQueueEntry
 }
 
 type PlaybackStateQueueEntry struct {

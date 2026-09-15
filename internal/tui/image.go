@@ -214,8 +214,11 @@ func chunkBase64(encoded string, size int) []string {
 }
 
 func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRows int) {
+	c.mu.RLock()
+	protocol := c.protocol
+	c.mu.RUnlock()
 	encoded := ""
-	if c.protocol == imageProtocolKitty {
+	if protocol == imageProtocolKitty {
 		if s, err := encodeImageAsPNGBase64AtSize(img, displayCols, displayRows); err == nil {
 			encoded = s
 		}
@@ -239,6 +242,12 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 	}
 }
 
+func (c *imgCache) setProtocol(protocol imageProtocol) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.protocol = protocol
+}
+
 func (c *imgCache) pinURL(url string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -246,10 +255,12 @@ func (c *imgCache) pinURL(url string) {
 }
 
 func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
-	if c.protocol == imageProtocolKitty {
+	c.mu.RLock()
+	protocol := c.protocol
+	if protocol == imageProtocolKitty {
+		c.mu.RUnlock()
 		return
 	}
-	c.mu.RLock()
 	img, ok := c.imgs.Peek(url)
 	encoded := c.encoded[url]
 	c.mu.RUnlock()
@@ -268,7 +279,22 @@ func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
 			c.mu.Unlock()
 			continue
 		}
-		s := renderCover(c.protocol, img, encoded, cols, rows)
+		if ch, rendering := c.rendering[key]; rendering {
+			c.mu.Unlock()
+			<-ch
+			continue
+		}
+		ch := make(chan struct{})
+		c.rendering[key] = ch
+		c.mu.Unlock()
+
+		// Resize+render happens outside the lock so per-frame View() reads
+		// are not blocked behind bilinear work.
+		s := renderCover(protocol, img, encoded, cols, rows)
+
+		c.mu.Lock()
+		delete(c.rendering, key)
+		close(ch)
 		if _, exists := c.covers.Peek(key); !exists {
 			if evictedKey, _, evicted := c.covers.Set(key, s); evicted {
 				c.removeCoverKeyFromURLMap(evictedKey)
@@ -440,6 +466,7 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 			return "", false
 		}
 		encoded := c.encoded[url]
+		protocol := c.protocol
 		if ch, rendering := c.rendering[key]; rendering {
 			c.mu.Unlock()
 			<-ch
@@ -448,12 +475,12 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 		ch := make(chan struct{})
 		c.rendering[key] = ch
 		c.mu.Unlock()
-		return c.renderAndCache(key, url, img, encoded, cols, rows, ch)
+		return c.renderAndCache(key, url, img, encoded, protocol, cols, rows, ch)
 	}
 }
 
-func (c *imgCache) renderAndCache(key coverKey, url string, img image.Image, encoded string, cols, rows int, ch chan struct{}) (string, bool) {
-	s := renderCover(c.protocol, img, encoded, cols, rows)
+func (c *imgCache) renderAndCache(key coverKey, url string, img image.Image, encoded string, protocol imageProtocol, cols, rows int, ch chan struct{}) (string, bool) {
+	s := renderCover(protocol, img, encoded, cols, rows)
 
 	c.mu.Lock()
 	var result string

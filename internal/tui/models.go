@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -38,6 +39,8 @@ type transportModel struct {
 	onSongChange            string
 	lastPlayedID            string
 	playbackErr             error
+	queueFingerprint        uint64
+	songChangeInFlight      *atomic.Bool
 }
 
 type browseModel struct {
@@ -73,6 +76,8 @@ type uiModel struct {
 	trackPopupURI           string
 	trackPopupName          string
 	trackPopupItems         []spotify.QueueItem
+	trackPopupReqToken      int
+	trackPopupWaitTicks     int
 	trackPopupWidth         int
 	width                   int
 	height                  int
@@ -103,7 +108,7 @@ type model struct {
 	service         *spotify.Service
 	deviceName      string
 	tuiCmdCh        chan librespot.TUICommand
-	contextTracksCh chan<- []librespot.PlaybackStateQueueEntry
+	contextTracksCh chan<- librespot.ContextTracksResult
 	ldr             *loader.BackgroundLoader
 
 	transport transportModel

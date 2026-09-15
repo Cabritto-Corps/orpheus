@@ -17,6 +17,7 @@ type coverManager struct {
 	queue                 []string
 	queued                map[string]int
 	playerCoverFailStreak int
+	kittyRecoveryStreak   int
 }
 
 func newCoverManager() coverManager {
@@ -150,7 +151,15 @@ func (m *model) queueMissingLibraryImageResolvesCmd(limit int) tea.Cmd {
 		}
 		items = append(items, struct{ Kind, ID string }{Kind: spotify.ContextKindAlbum, ID: al.summary.ID})
 	}
-	return m.resolveContextImageURLsBatchCmd(items)
+	cmd := m.resolveContextImageURLsBatchCmd(items)
+	if cmd == nil {
+		// No loader: unmark the in-flight keys so they can be retried later.
+		for _, item := range items {
+			m.ui.cover.clearResolve(item.Kind, item.ID)
+		}
+		return nil
+	}
+	return cmd
 }
 
 func (m *model) queueResolvesForImageURLCmd(url string, limit int) tea.Cmd {
@@ -211,6 +220,21 @@ func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
 	return m.loadImagesBatchCmd(urls)
 }
 
+func (m *model) maybeRecoverKittyProtocol() {
+	if m.ui.imgs == nil || m.ui.imgs.protocol == imageProtocolKitty {
+		return
+	}
+	// Recovery: after a healthy streak of successful loads while kitty is
+	// disabled, give it another chance instead of staying in half-block mode
+	// for the whole session.
+	m.ui.cover.kittyRecoveryStreak++
+	if m.ui.cover.kittyRecoveryStreak >= kittyProtocolRecoveryStreak {
+		m.ui.imgs.setProtocol(imageProtocolKitty)
+		m.ui.cover.kittyRecoveryStreak = 0
+		slog.Info("re-enabling kitty image protocol after recovery streak")
+	}
+}
+
 func (m *model) maybeFallbackFromKittyOnPlayerFailures(url string) {
 	if m.ui.imgs == nil || m.ui.imgs.protocol != imageProtocolKitty {
 		return
@@ -224,8 +248,9 @@ func (m *model) maybeFallbackFromKittyOnPlayerFailures(url string) {
 	if m.ui.cover.playerCoverFailStreak < kittyProtocolFallbackFailures {
 		return
 	}
-	m.ui.imgs.protocol = imageProtocolNone
+	m.ui.imgs.setProtocol(imageProtocolNone)
 	m.ui.cover.playerCoverFailStreak = 0
+	m.ui.cover.kittyRecoveryStreak = 0
 	slog.Warn("disabling kitty image protocol after repeated player cover failures", "url", url)
 }
 

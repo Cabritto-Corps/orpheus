@@ -2,8 +2,13 @@ package loader
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrLoadFailed marks a request the pool never answered (dropped or
+// canceled); callers use it to release per-request state.
+var ErrLoadFailed = errors.New("load failed")
 
 type LoadType int
 

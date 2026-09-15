@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"hash/fnv"
 	"strconv"
 	"strings"
 	"time"
@@ -156,11 +157,20 @@ func (m *model) applyOptimisticSkip(next bool) {
 	m.transport.status.Playing = true
 	m.transport.interpolationSyncAt = time.Time{}
 	m.transport.interpolationProgressMS = 0
-	if next && len(m.transport.queue) > 0 {
-		m.transport.status.TrackID = m.transport.queue[0].ID
-		m.transport.status.TrackName = m.transport.queue[0].Name
-		m.transport.status.ArtistName = m.transport.queue[0].Artist
-		m.transport.status.DurationMS = m.transport.queue[0].DurationMS
+	if next {
+		// The view hides queue entries matching the current track, so
+		// aiming at queue[0] would show no visible change when the head
+		// still is the playing track (e.g. repeat-one).
+		for _, entry := range m.transport.queue {
+			if entry.ID == m.transport.status.TrackID {
+				continue
+			}
+			m.transport.status.TrackID = entry.ID
+			m.transport.status.TrackName = entry.Name
+			m.transport.status.ArtistName = entry.Artist
+			m.transport.status.DurationMS = entry.DurationMS
+			break
+		}
 	}
 	m.resetInterpolationBaseline()
 }
@@ -381,7 +391,26 @@ func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool
 	if updateHasMore {
 		m.transport.queueHasMore = queueHasMore
 	}
-	m.rebuildPreloadedFromQueue()
+	fingerprint := queueFingerprint(m.transport.queue)
+	if fingerprint != m.transport.queueFingerprint {
+		m.transport.queueFingerprint = fingerprint
+		m.rebuildPreloadedFromQueue()
+	}
+}
+
+// queueFingerprint summarizes queue identity cheaply: length plus the first,
+// middle and last track IDs. Rebuilding the preloaded map on every poll was
+// pure allocation churn when the queue did not change.
+func queueFingerprint(queue []spotify.QueueItem) uint64 {
+	if len(queue) == 0 {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(strconv.Itoa(len(queue))))
+	for _, i := range []int{0, len(queue) / 2, len(queue) - 1} {
+		_, _ = h.Write([]byte(queue[i].ID))
+	}
+	return h.Sum64()
 }
 
 func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.QueueItem, next *spotify.PlaybackStatus, trackCache *cache.TTL[string, spotify.QueueItem]) *spotify.PlaybackStatus {

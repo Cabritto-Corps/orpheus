@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -36,15 +37,18 @@ const (
 	libraryMetaRefreshEvery           = 300
 	coverQueueDrainBatch              = 20
 	kittyProtocolFallbackFailures     = 8
+	kittyProtocolRecoveryStreak       = 8
 	trackMetadataTTL                  = 2 * time.Hour
 	uiTickInterval                    = 200 * time.Millisecond
-	navDebounceInterval               = 60 * time.Millisecond
-	volSeekDebounceInterval           = 50 * time.Millisecond
-	volSettleWindow                   = 3 * time.Second
-	seekSettleWindow                  = 1200 * time.Millisecond
-	reconcileActionWindow             = 2 * time.Second
-	actionFastPollWindow              = 3 * time.Second
-	idlePollBackoffMax                = 5 * time.Second
+	// 8s at the 200ms tick interval before a pending popup load gives up.
+	trackPopupLoadTimeoutTicks = 40
+	navDebounceInterval        = 60 * time.Millisecond
+	volSeekDebounceInterval    = 50 * time.Millisecond
+	volSettleWindow            = 3 * time.Second
+	seekSettleWindow           = 1200 * time.Millisecond
+	reconcileActionWindow      = 2 * time.Second
+	actionFastPollWindow       = 3 * time.Second
+	idlePollBackoffMax         = 5 * time.Second
 )
 
 type playlistItem struct {
@@ -106,7 +110,7 @@ func newTrackPopupDelegate() list.DefaultDelegate {
 	return d
 }
 
-func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- []librespot.PlaybackStateQueueEntry, ldr *loader.BackgroundLoader) model {
+func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- librespot.ContextTracksResult, ldr *loader.BackgroundLoader) model {
 	delegate := newPlaylistDelegate()
 
 	browser := list.New(nil, delegate, 40, 20)
@@ -143,6 +147,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 			volSentTarget:       -1,
 			seekSentTarget:      -1,
 			onSongChange:        cfg.OnSongChange,
+			songChangeInFlight:  &atomic.Bool{},
 		},
 		browse: browseModel{
 			preloadedItemIDs: make(map[string]struct{}),
@@ -204,7 +209,7 @@ func (m *model) normalizeLibraryPagination() {
 }
 
 func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, playbackStateCh <-chan *librespot.PlaybackStateUpdate) error {
-	contextTracksCh := make(chan []librespot.PlaybackStateQueueEntry, 1)
+	contextTracksCh := make(chan librespot.ContextTracksResult, 1)
 	ldr := loader.New(ctx, 128, NewTUIExecutor(ctx, catalog))
 	m := newModel(ctx, catalog, service, cfg, tuiCmdCh, contextTracksCh, ldr)
 	p := tea.NewProgram(m,

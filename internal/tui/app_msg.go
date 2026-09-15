@@ -642,8 +642,14 @@ func (m *model) fireOnSongChange(prev, next *spotify.PlaybackStatus) {
 		return
 	}
 	m.transport.lastPlayedID = nextID
+	// Single-flight: a slow hook must not stack goroutines when the user
+	// skips through tracks faster than the hook finishes.
+	if !m.transport.songChangeInFlight.CompareAndSwap(false, true) {
+		return
+	}
 	cmd := m.transport.onSongChange
 	go func(name, artist, id string) {
+		defer m.transport.songChangeInFlight.Store(false)
 		execCmd(cmd, name, artist, id)
 	}(nextName, nextArtist, nextID)
 }

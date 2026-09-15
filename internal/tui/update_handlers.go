@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -44,6 +45,7 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	m.interpolatePlaybackProgress(uiTickInterval)
+	popupTimeoutCmd := m.tickTrackPopupWait()
 	inputCmd := m.pumpInputExecutor()
 	var startupCoverCmd tea.Cmd
 	if m.ui.startupCoverBoostTicks > 0 {
@@ -85,8 +87,11 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	}
 
 	if m.tuiCmdCh != nil {
-		cmds := make([]tea.Cmd, 0, 6)
+		cmds := make([]tea.Cmd, 0, 7)
 		cmds = append(cmds, m.tickCmd(), inputCmd)
+		if popupTimeoutCmd != nil {
+			cmds = append(cmds, popupTimeoutCmd)
+		}
 		if startupCoverCmd != nil {
 			cmds = append(cmds, startupCoverCmd)
 		}
@@ -105,8 +110,11 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	}
 	if m.ui.activeTab != tabPlayer {
-		cmds := make([]tea.Cmd, 0, 6)
+		cmds := make([]tea.Cmd, 0, 7)
 		cmds = append(cmds, m.tickCmd(), inputCmd)
+		if popupTimeoutCmd != nil {
+			cmds = append(cmds, popupTimeoutCmd)
+		}
 		if startupCoverCmd != nil {
 			cmds = append(cmds, startupCoverCmd)
 		}
@@ -393,6 +401,7 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 		if m.transport.status != nil && strings.TrimSpace(m.transport.status.AlbumImageURL) == strings.TrimSpace(msg.url) {
 			m.ui.cover.playerCoverFailStreak = 0
 		}
+		m.maybeRecoverKittyProtocol()
 		m.ui.cover.clearRetry(msg.url)
 		return m, nil
 	}
@@ -478,6 +487,10 @@ func (m model) handleTUICmdRetryMsg(msg tuiCmdRetryMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.left <= 1 {
+		// The command never reached the player: surface it instead of
+		// silently returning to a stale transport.
+		m.transport.playbackErr = errors.New("command could not be sent — player busy")
+		m.transport.transition.Clear()
 		return m, nil
 	}
 	return m, m.tuiCmdRetryCmd(msg.cmd, msg.left-1)
@@ -575,6 +588,10 @@ func (m model) handleTrackPopupItemsMsg(msg trackPopupItemsMsg) (tea.Model, tea.
 	if !m.ui.trackPopupOpen {
 		return m, nil
 	}
+	if msg.token != m.ui.trackPopupReqToken {
+		return m, nil
+	}
+	m.ui.trackPopupWaitTicks = 0
 	m.ui.trackPopupItems = msg.items
 	maxTitleW := max(m.ui.trackPopupWidth-6, 10)
 	items := make([]list.Item, 0, len(msg.items))
@@ -584,6 +601,21 @@ func (m model) handleTrackPopupItemsMsg(msg trackPopupItemsMsg) (tea.Model, tea.
 	}
 	m.ui.trackPopupList.SetItems(items)
 	return m, nil
+}
+
+// tickTrackPopupWait closes the popup with an error when a pending
+// load never gets a reply (dropped command or a wedged backend).
+func (m *model) tickTrackPopupWait() tea.Cmd {
+	if !m.ui.trackPopupOpen || m.ui.trackPopupItems != nil {
+		return nil
+	}
+	m.ui.trackPopupWaitTicks++
+	if m.ui.trackPopupWaitTicks < trackPopupLoadTimeoutTicks {
+		return nil
+	}
+	m.ui.trackPopupOpen = false
+	m.transport.playbackErr = errors.New("couldn't load tracks — timed out")
+	return nil
 }
 
 func (m model) handleCoverImageURLsBatchResolvedMsg(msg coverImageURLsBatchResolvedMsg) (tea.Model, tea.Cmd) {

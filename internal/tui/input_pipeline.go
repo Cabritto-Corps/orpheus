@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"log/slog"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -84,16 +85,16 @@ func (m *model) enqueuePlaybackInput(action playbackInputKind) {
 	})
 }
 
-func (m *model) requeueFront(action playbackInputKind) {
+func (m *model) requeueFront(action playbackInputKind, prevRetries int) {
+	// The retry count travels with the popped action: matching against
+	// inputQueue[0] never fired because the failed item was already dequeued.
+	retries := prevRetries + 1
+	if retries >= maxRequeueRetries {
+		slog.Debug("dropping playback action after retries", "kind", action)
+		return
+	}
 	if len(m.transport.inputQueue) >= maxInputQueueSize {
 		m.transport.inputQueue = m.transport.inputQueue[:maxInputQueueSize-1]
-	}
-	retries := 0
-	if len(m.transport.inputQueue) > 0 && m.transport.inputQueue[0].kind == action {
-		retries = m.transport.inputQueue[0].retryCount + 1
-	}
-	if retries >= maxRequeueRetries {
-		return
 	}
 	m.transport.inputQueue = append([]playbackInput{{kind: action, priority: inputPriorityOf(action), retryCount: retries}}, m.transport.inputQueue...)
 }
@@ -109,8 +110,9 @@ func (m *model) pumpInputExecutor() tea.Cmd {
 			return nil
 		}
 		action := m.transport.inputQueue[idx].kind
+		retryCount := m.transport.inputQueue[idx].retryCount
 		m.transport.inputQueue = append(m.transport.inputQueue[:idx], m.transport.inputQueue[idx+1:]...)
-		if cmd := m.executePlaybackInput(action); cmd != nil {
+		if cmd := m.executePlaybackInput(action, retryCount); cmd != nil {
 			return cmd
 		}
 	}
@@ -130,7 +132,7 @@ func (m *model) consumeTransportRecoveryCmd() tea.Cmd {
 	return m.pollCmd(true)
 }
 
-func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
+func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) tea.Cmd {
 	switch action {
 	case playbackInputRefresh:
 		if m.tuiCmdCh != nil {
@@ -147,7 +149,7 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 			case m.tuiCmdCh <- librespot.TUICommand{Kind: kind}:
 				return nil
 			default:
-				m.requeueFront(action)
+				m.requeueFront(action, retryCount)
 				return nil
 			}
 		}
@@ -166,7 +168,7 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 	case playbackInputNext:
 		if m.tuiCmdCh != nil {
 			if !m.trySendTransportSkip(librespot.TUICommandSkipNext) {
-				m.requeueFront(action)
+				m.requeueFront(action, retryCount)
 				return nil
 			}
 			m.applyOptimisticSkip(true)
@@ -183,7 +185,7 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 	case playbackInputPrev:
 		if m.tuiCmdCh != nil {
 			if !m.trySendTransportSkip(librespot.TUICommandSkipPrev) {
-				m.requeueFront(action)
+				m.requeueFront(action, retryCount)
 				return nil
 			}
 			m.applyOptimisticSkip(false)
@@ -202,7 +204,7 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 			select {
 			case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandShuffle}:
 			default:
-				m.requeueFront(action)
+				m.requeueFront(action, retryCount)
 				return nil
 			}
 			m.clearPreloadedTracks()
@@ -231,7 +233,7 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 				m.transport.status.RepeatContext = next.RepeatContext
 				m.transport.status.RepeatTrack = next.RepeatTrack
 			default:
-				m.requeueFront(action)
+				m.requeueFront(action, retryCount)
 			}
 			return nil
 		}

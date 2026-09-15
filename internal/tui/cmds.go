@@ -148,16 +148,16 @@ func StartPlaybackStateListener(playbackStateCh <-chan *librespot.PlaybackStateU
 	}()
 }
 
-func StartContextTracksListener(ch <-chan []librespot.PlaybackStateQueueEntry, send func(tea.Msg), ctx context.Context) {
+func StartContextTracksListener(ch <-chan librespot.ContextTracksResult, send func(tea.Msg), ctx context.Context) {
 	go func() {
 		for {
 			select {
-			case entries := <-ch:
-				items := make([]spotify.QueueItem, 0, len(entries))
-				for _, e := range entries {
+			case res := <-ch:
+				items := make([]spotify.QueueItem, 0, len(res.Entries))
+				for _, e := range res.Entries {
 					items = append(items, spotify.QueueItem{ID: e.ID, Name: e.Name, Artist: e.Artist, DurationMS: e.DurationMS})
 				}
-				send(trackPopupItemsMsg{items: items})
+				send(trackPopupItemsMsg{token: res.ReqToken, items: items})
 			case <-ctx.Done():
 				return
 			}

@@ -66,6 +66,7 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 		return true, nil
 	case TUICommandGetContextTracks:
 		resultCh := cmd.ResultCh
+		reqToken := cmd.ReqToken
 		uri := cmd.URI
 		go func() {
 			bgCtx, cancel := context.WithTimeout(p.ownerContext(), contextTracksBgTimeout)
@@ -78,7 +79,7 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 				}
 				if resultCh != nil {
 					select {
-					case resultCh <- nil:
+					case resultCh <- ContextTracksResult{ReqToken: reqToken}:
 					default:
 					}
 				}
@@ -91,7 +92,7 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 				}
 				if resultCh != nil {
 					select {
-					case resultCh <- nil:
+					case resultCh <- ContextTracksResult{ReqToken: reqToken}:
 					default:
 					}
 				}
@@ -136,7 +137,7 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 
 			if bgCtx.Err() == nil && resultCh != nil {
 				select {
-				case resultCh <- result:
+				case resultCh <- ContextTracksResult{ReqToken: reqToken, Entries: result}:
 				default:
 					p.runtime.Log.Warn("dropped context tracks result, no receiver")
 				}

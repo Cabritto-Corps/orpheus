@@ -34,6 +34,9 @@ const (
 	// endGuardMaxFailures bounds the end-of-track guard's retry loop before
 	// it surfaces the stuck state instead of retrying forever.
 	endGuardMaxFailures = 3
+
+	// stateReconcileInterval is the push-mode self-heal period.
+	stateReconcileInterval = 30 * time.Second
 )
 
 type AppPlayer struct {
@@ -501,6 +504,8 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 	volumeTimer.Stop()
 	endTransitionGuardTicker := time.NewTicker(endTransitionGuardInterval)
 	defer endTransitionGuardTicker.Stop()
+	reconcileTicker := time.NewTicker(stateReconcileInterval)
+	defer reconcileTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -575,6 +580,13 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			p.flushConnectState()
 		case <-endTransitionGuardTicker.C:
 			p.maybeAdvanceOnTrackEndGuard()
+		case <-reconcileTicker.C:
+			// Push-mode backstop: a dropped playbackStateCh send would
+			// otherwise leave the TUI stale until the next event. Cheap:
+			// the light path reads only in-memory state, no network.
+			if p.state != nil && p.state.player != nil && p.state.player.ContextUri != "" {
+				p.emitPlaybackStateLight()
+			}
 		}
 	}
 }
