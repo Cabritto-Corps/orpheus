@@ -17,6 +17,7 @@ import (
 type transportModel struct {
 	status                  *spotify.PlaybackStatus
 	queue                   []spotify.QueueItem
+	queueCursor             int
 	queueHasMore            bool
 	stableQueueLen          int
 	pendingContextFrom      string

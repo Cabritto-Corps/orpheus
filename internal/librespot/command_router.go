@@ -188,6 +188,15 @@ func (p *AppPlayer) handleTUIPlaybackCommand(ctx context.Context, cmd TUICommand
 		}
 		next := playbackdomain.NextRepeatTraversalOptions(curr)
 		return true, p.setOptions(ctx, &next.RepeatContext, &next.RepeatTrack, nil)
+	case TUICommandQueueRemove:
+		p.queueRemove(cmd.QueueIndex)
+		return true, nil
+	case TUICommandQueueReorder:
+		p.queueReorder(cmd.QueueIndex, cmd.QueueTargetIndex)
+		return true, nil
+	case TUICommandQueueJump:
+		p.queueJump(ctx, cmd.QueueIndex)
+		return true, nil
 	default:
 		return false, nil
 	}

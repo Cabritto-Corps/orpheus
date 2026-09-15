@@ -167,6 +167,51 @@ func (m model) isFiltering() bool {
 		(m.ui.activeTab == tabAlbums && m.browse.albumList.FilterState() == list.Filtering)
 }
 
+// handleQueueKey handles the up-next panel's interaction keys (player tab).
+// Cursor positions and command payloads use the visible-view addressing the
+// backend expects: position 0 is the entry the panel shows first.
+func (m *model) handleQueueKey(msg tea.KeyMsg) tea.Cmd {
+	q := m.visibleQueue()
+	if len(q) == 0 {
+		return nil
+	}
+
+	cursor := min(m.transport.queueCursor, len(q)-1)
+	switch msg.String() {
+	case "up":
+		if cursor > 0 {
+			m.transport.queueCursor = cursor - 1
+		}
+		return nil
+	case "down":
+		if cursor < len(q)-1 {
+			m.transport.queueCursor = cursor + 1
+		}
+		return nil
+	case "enter", "return":
+		// Jump loads a track — same class as next/prev, so it must not
+		// fire while a transport transition is mid-flight.
+		if m.transport.transition.Pending() {
+			return nil
+		}
+		return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueJump, QueueIndex: cursor})
+	case "x", "d":
+		return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueRemove, QueueIndex: cursor})
+	case "[":
+		if cursor > 0 {
+			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueReorder, QueueIndex: cursor, QueueTargetIndex: cursor - 1})
+		}
+		return nil
+	case "]":
+		if cursor < len(q)-1 {
+			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueReorder, QueueIndex: cursor, QueueTargetIndex: cursor + 1})
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
 func (m model) matchGlobalPlaybackKey(msg tea.KeyMsg) playbackInputKind {
 	k := m.ui.keys
 	switch {
@@ -180,8 +225,11 @@ func (m model) matchGlobalPlaybackKey(msg tea.KeyMsg) playbackInputKind {
 }
 
 func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	k := m.ui.keys
+	if cmd := m.handleQueueKey(msg); cmd != nil {
+		return m, cmd
+	}
 	if m.shouldBlockTransportInput(msg) {
-		k := m.ui.keys
 		switch {
 		case keyMatches(msg, k.PlayPause):
 			m.enqueuePlaybackInput(playbackInputPlayPause)
@@ -196,7 +244,6 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	k := m.ui.keys
 	var action playbackInputKind
 	switch {
 	case keyMatches(msg, k.Refresh):

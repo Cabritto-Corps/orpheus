@@ -45,6 +45,20 @@ func queueHeadTrackID(queue []spotify.QueueItem) string {
 	return golibrespot.NormalizeSpotifyId(queue[0].ID)
 }
 
+// visibleQueue is what the up-next panel shows: the pushed queue with the
+// currently playing queue entry (when it heads the queue) hidden. Positions
+// here are the same "visible view" the backend uses for queue commands.
+func (m model) visibleQueue() []spotify.QueueItem {
+	q := m.transport.queue
+	if m.transport.status != nil && len(q) > 0 {
+		currentID := golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
+		if currentID != "" && golibrespot.NormalizeSpotifyId(q[0].ID) == currentID {
+			return q[1:]
+		}
+	}
+	return q
+}
+
 func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.PlaybackStatus, prevQueueHead, nextQueueHead string) {
 	prevTrack := ""
 	nextTrack := ""
@@ -383,8 +397,13 @@ func (m *model) shouldApplyIncomingQueue(incomingTrack string) bool {
 	return true
 }
 
+func clampQueueCursor(cursor int, visible []spotify.QueueItem) int {
+	return min(max(cursor, 0), max(0, len(visible)-1))
+}
+
 func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool) {
 	m.transport.queue = mergeQueueNames(m.transport.queue, incoming, m.browse.trackCache)
+	m.transport.queueCursor = clampQueueCursor(m.transport.queueCursor, m.visibleQueue())
 	if updateStable {
 		m.transport.stableQueueLen = len(m.transport.queue)
 	}
@@ -399,8 +418,7 @@ func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool
 }
 
 // queueFingerprint summarizes queue identity cheaply: length plus the first,
-// middle and last track IDs. Rebuilding the preloaded map on every poll was
-// pure allocation churn when the queue did not change.
+// middle and last entry IDs.
 func queueFingerprint(queue []spotify.QueueItem) uint64 {
 	if len(queue) == 0 {
 		return 0

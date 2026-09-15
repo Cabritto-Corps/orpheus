@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	golibrespot "github.com/elxgy/go-librespot"
 
 	"orpheus/internal/spotify"
 )
@@ -242,14 +241,10 @@ func (m model) queuePanel(w, h int) string {
 
 	lines := []string{label, divLine, colHeader, colDivider}
 
-	displayQueue := m.transport.queue
-	hidCurrentFromQueue := false
-	if m.transport.status != nil && len(displayQueue) > 0 {
-		currentID := golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
-		if currentID != "" && golibrespot.NormalizeSpotifyId(displayQueue[0].ID) == currentID {
-			displayQueue = displayQueue[1:]
-			hidCurrentFromQueue = true
-		}
+	displayQueue := m.visibleQueue()
+	if m.transport.queueCursor >= len(displayQueue) {
+		m2 := m
+		m2.transport.queueCursor = max(0, len(displayQueue)-1)
 	}
 	if m.transport.status == nil {
 		lines = append(lines, styleDimmed.Render("  nothing playing"))
@@ -259,10 +254,16 @@ func (m model) queuePanel(w, h int) string {
 		lines = append(lines, styleDimmed.Render("  queue is empty"))
 	} else {
 		maxRows := contentLines - 2
-		n := min(len(displayQueue), maxRows)
-		for i := range n {
-			q := displayQueue[i]
-			idx := styleQueueIndex.Render(fmt.Sprintf("%*d.", idxW-1, i+1))
+		window := min(len(displayQueue), maxRows)
+		cursor := min(m.transport.queueCursor, len(displayQueue)-1)
+		start := 0
+		if cursor >= maxRows {
+			start = cursor - maxRows + 1
+		}
+		for i := range window {
+			qi := start + i
+			q := displayQueue[qi]
+			idx := styleQueueIndex.Render(fmt.Sprintf("%*d.", idxW-1, qi+1))
 			title := truncate(q.Name, titleW)
 			artist := truncate(q.Artist, artistW)
 			dur := ""
@@ -277,14 +278,20 @@ func (m model) queuePanel(w, h int) string {
 			if artistPad < 0 {
 				artistPad = 0
 			}
-			lines = append(lines, " "+idx+" "+styleQueueTrack.Render(title)+strings.Repeat(" ", titlePad)+"  "+styleQueueArtist.Render(artist)+strings.Repeat(" ", artistPad)+" "+stylePlayerTime.Render(dur))
+			rowStyle := styleQueueTrack
+			marker := " "
+			if qi == cursor {
+				rowStyle = styleQueueCursor
+				marker = ">"
+			}
+			lines = append(lines, marker+idx+rowStyle.Render(title)+strings.Repeat(" ", titlePad)+"  "+styleQueueArtist.Render(artist)+strings.Repeat(" ", artistPad)+" "+stylePlayerTime.Render(dur))
 		}
 
 		stableVisibleQueueLen := m.transport.stableQueueLen
-		if hidCurrentFromQueue && stableVisibleQueueLen > 0 {
+		if hidCurrent := len(m.transport.queue) > 0 && len(displayQueue) == len(m.transport.queue)-1; hidCurrent && stableVisibleQueueLen > 0 {
 			stableVisibleQueueLen--
 		}
-		notVisible := max(0, stableVisibleQueueLen-n)
+		notVisible := max(0, stableVisibleQueueLen-(start+window))
 		if notVisible > 0 {
 			if m.transport.queueHasMore {
 				lines = append(lines, styleDimmed.Render("  + more"))

@@ -720,6 +720,58 @@ func (p *AppPlayer) addToQueue(ctx context.Context, track *connectpb.ContextTrac
 	p.emitPlaybackState()
 }
 
+func (p *AppPlayer) queueRemove(index int) {
+	if p.state == nil || p.state.tracks == nil {
+		return
+	}
+	if !p.state.tracks.RemoveFromQueue(index) {
+		p.runtime.Log.WithField("index", index).Warn("queue remove out of range")
+		return
+	}
+	p.afterQueueEdit()
+}
+
+func (p *AppPlayer) queueReorder(from, to int) {
+	if p.state == nil || p.state.tracks == nil {
+		return
+	}
+	if !p.state.tracks.ReorderQueue(from, to) {
+		p.runtime.Log.WithField("from", from).WithField("to", to).Warn("queue reorder out of range")
+		return
+	}
+	p.afterQueueEdit()
+}
+
+// queueJump promotes the up-next entry at `index` to the current position and
+// starts playing it; the target becomes queue[0] (the "playing" head).
+func (p *AppPlayer) queueJump(ctx context.Context, index int) {
+	if p.state == nil || p.state.tracks == nil {
+		return
+	}
+	if !p.state.tracks.GoToQueueEntry(index) {
+		p.runtime.Log.WithField("index", index).Warn("queue jump out of range")
+		return
+	}
+	p.syncPlayerTrackState(p.state.tracks, nil)
+	p.updateState()
+	p.emitPlaybackState()
+	if p.player == nil {
+		return
+	}
+	if err := p.loadCurrentTrackFromTransition(ctx, false, true, "queue jump"); err != nil {
+		p.runtime.Log.WithError(err).Error("failed loading queue-jump target")
+	}
+}
+
+// afterQueueEdit refreshes everything a queue mutation affects: track state,
+// connect-state, prefetch targets and the pushed TUI queue.
+func (p *AppPlayer) afterQueueEdit() {
+	p.syncPlayerTrackState(p.state.tracks, nil)
+	p.updateState()
+	p.schedulePrefetchNext()
+	p.emitPlaybackState()
+}
+
 func (p *AppPlayer) setQueue(ctx context.Context, prev []*connectpb.ContextTrack, next []*connectpb.ContextTrack) {
 	if p.state.tracks == nil {
 		p.runtime.Log.Warnf("cannot set queue without a context")

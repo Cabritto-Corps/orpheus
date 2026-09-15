@@ -102,6 +102,9 @@ var (
 
 	styleQueueArtist = lipgloss.NewStyle().
 				Foreground(colorMutedBlue)
+
+	styleQueueCursor = lipgloss.NewStyle().
+				Foreground(colorBlueLight)
 )
 
 var (
