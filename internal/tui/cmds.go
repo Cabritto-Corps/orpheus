@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -115,6 +116,10 @@ type playbackStateMsg struct {
 	queueIncluded bool
 }
 
+type connectionLostMsg struct {
+	err error
+}
+
 type tuiCmdRetryMsg struct {
 	cmd  librespot.TUICommand
 	left int
@@ -127,6 +132,10 @@ func StartPlaybackStateListener(playbackStateCh <-chan *librespot.PlaybackStateU
 			select {
 			case u := <-playbackStateCh:
 				if u == nil {
+					continue
+				}
+				if u.Error != "" {
+					send(connectionLostMsg{err: errors.New(u.Error)})
 					continue
 				}
 				seq++

@@ -50,4 +50,8 @@ type PlaybackStateUpdate struct {
 	Queue         []PlaybackStateQueueEntry
 	QueueHasMore  bool
 	QueueIncluded bool
+
+	// Error carries a transport-level failure (e.g. connection lost). Empty
+	// means healthy; the TUI surfaces non-empty values as playbackErr.
+	Error string
 }

@@ -73,7 +73,8 @@ type AppPlayer struct {
 	queueMetaCache *cache.LRU[string, PlaybackStateQueueEntry]
 	queueMetaMu    sync.RWMutex
 
-	advanceInFlight atomic.Bool
+	advanceInFlight      atomic.Bool
+	connectionLostEmitted atomic.Bool
 }
 
 func (p *AppPlayer) setRunContext(ctx context.Context) {
@@ -423,6 +424,14 @@ func (p *AppPlayer) emitPlaybackStateLight() {
 	p.emitPlaybackStateWithQueue(false)
 }
 
+func (p *AppPlayer) emitConnectionLost(reason string) {
+	if p.connectionLostEmitted.Swap(true) {
+		return
+	}
+	p.runtime.Log.Errorf("connection lost: %s", reason)
+	p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "connection lost: " + reason})
+}
+
 func (p *AppPlayer) emitPlaybackStateWithQueue(includeQueue bool) {
 	if p.suppressEmit {
 		return
@@ -490,6 +499,7 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 		case msg, ok := <-msgRecv:
 			if !ok {
 				msgRecv = nil
+				p.emitConnectionLost("dealer message channel closed")
 				continue
 			}
 			if err := p.handleDealerMessage(ctx, msg); err != nil {
@@ -498,6 +508,7 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 		case req, ok := <-reqRecv:
 			if !ok {
 				reqRecv = nil
+				p.emitConnectionLost("dealer request channel closed")
 				continue
 			}
 			if err := p.handleDealerRequest(ctx, req); err != nil {
