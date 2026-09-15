@@ -4,9 +4,11 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -38,7 +40,7 @@ func LoadFromEnv() (Config, error) {
 		AllowActiveFallback:  envBool("orpheus_allow_active_fallback", false),
 		TokenPath:            envDefault("orpheus_token_path", defaultTokenPath()),
 		PollInterval:         envDuration("orpheus_poll_interval", 1500*time.Millisecond),
-		NerdFonts:            envBool("orpheus_nerd_fonts", false),
+		NerdFonts:            resolveNerdFonts(os.Getenv("orpheus_nerd_fonts")),
 		OnSongChange:         envDefault("orpheus_on_song_change", ""),
 		LogFile:              envDefault("orpheus_log_file", defaultLogPath()),
 	}
@@ -111,6 +113,36 @@ func envBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return v
+}
+
+// resolveNerdFonts honors explicit true/false and falls back to auto-detection
+// ("auto" or unset): Nerd Font glyphs can only render if a Nerd Font family is
+// installed and selectable by the terminal, so the fontconfig list is the best
+// available signal.
+func resolveNerdFonts(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return nerdFontsInstalled()
+	case "auto":
+		return nerdFontsInstalled()
+	case "true", "1", "yes", "on":
+		return true
+	case "false", "0", "no", "off":
+		return false
+	default:
+		slog.Warn("invalid orpheus_nerd_fonts value, auto-detecting", "value", raw)
+		return nerdFontsInstalled()
+	}
+}
+
+var nerdFontsInstalled = sync.OnceValue(detectNerdFontsInstalled)
+
+func detectNerdFontsInstalled() bool {
+	out, err := exec.Command("fc-list", ":", "family").Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(string(out)), "nerd font")
 }
 
 func envDuration(key string, fallback time.Duration) time.Duration {

@@ -24,7 +24,7 @@ const minRightW = 28
 
 const (
 	iconPlay            = "▶"
-	iconPause           = "‖"
+	iconPause           = "⏸"
 	iconDevice          = "●"
 	iconVolume          = "▪"
 	iconShuffle         = "⇄"
