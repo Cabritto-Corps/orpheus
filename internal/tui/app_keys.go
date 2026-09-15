@@ -311,15 +311,12 @@ func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 	}
 
 	if m.tuiCmdCh != nil {
-		select {
-		case m.tuiCmdCh <- librespot.TUICommand{
+		cmd := librespot.TUICommand{
 			Kind:    librespot.TUICommandPlayContextFromTrack,
 			URI:     m.ui.trackPopupURI,
 			TrackID: trackID,
-		}:
-		default:
 		}
-		return m, nil
+		return m, m.sendTUICommandOrRetry(cmd)
 	}
 
 	cmds := []tea.Cmd{
@@ -359,12 +356,11 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 	m.transport.interpolationSyncAt = time.Time{}
 	m.transport.interpolationProgressMS = 0
 	if m.tuiCmdCh != nil {
-		select {
-		case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandPlayContext, URI: sel.summary.URI}:
-			m.beginTransportTransition()
-		default:
+		m.beginTransportTransition()
+		cmds := []tea.Cmd{
+			m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandPlayContext, URI: sel.summary.URI}),
+			m.loadImageCmd(sel.summary.ImageURL, true),
 		}
-		cmds := []tea.Cmd{m.loadImageCmd(sel.summary.ImageURL, true)}
 		if canReadTracks {
 			m.browse.activePlaylistItemLoading = true
 			m.browse.activePlaylistLoadToken++

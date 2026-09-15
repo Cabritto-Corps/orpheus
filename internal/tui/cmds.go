@@ -108,10 +108,16 @@ type navDebounceMsg struct {
 }
 
 type playbackStateMsg struct {
-	seq          uint64
-	status       *spotify.PlaybackStatus
-	queue        []spotify.QueueItem
-	queueHasMore bool
+	seq           uint64
+	status        *spotify.PlaybackStatus
+	queue         []spotify.QueueItem
+	queueHasMore  bool
+	queueIncluded bool
+}
+
+type tuiCmdRetryMsg struct {
+	cmd  librespot.TUICommand
+	left int
 }
 
 func StartPlaybackStateListener(playbackStateCh <-chan *librespot.PlaybackStateUpdate, send func(tea.Msg), ctx context.Context) {
@@ -124,8 +130,8 @@ func StartPlaybackStateListener(playbackStateCh <-chan *librespot.PlaybackStateU
 					continue
 				}
 				seq++
-				status, queue, queueHasMore := PlaybackStateFromLibrespot(u)
-				send(playbackStateMsg{seq: seq, status: status, queue: queue, queueHasMore: queueHasMore})
+				status, queue, queueHasMore, queueIncluded := PlaybackStateFromLibrespot(u)
+				send(playbackStateMsg{seq: seq, status: status, queue: queue, queueHasMore: queueHasMore, queueIncluded: queueIncluded})
 			case <-ctx.Done():
 				return
 			}
@@ -150,9 +156,9 @@ func StartContextTracksListener(ch <-chan []librespot.PlaybackStateQueueEntry, s
 	}()
 }
 
-func PlaybackStateFromLibrespot(u *librespot.PlaybackStateUpdate) (*spotify.PlaybackStatus, []spotify.QueueItem, bool) {
+func PlaybackStateFromLibrespot(u *librespot.PlaybackStateUpdate) (*spotify.PlaybackStatus, []spotify.QueueItem, bool, bool) {
 	if u == nil {
-		return nil, nil, false
+		return nil, nil, false, false
 	}
 	status := &spotify.PlaybackStatus{
 		DeviceName:    u.DeviceName,
@@ -170,11 +176,14 @@ func PlaybackStateFromLibrespot(u *librespot.PlaybackStateUpdate) (*spotify.Play
 		RepeatContext: u.RepeatContext,
 		RepeatTrack:   u.RepeatTrack,
 	}
+	if !u.QueueIncluded {
+		return status, nil, false, false
+	}
 	queue := make([]spotify.QueueItem, 0, len(u.Queue))
 	for _, e := range u.Queue {
 		queue = append(queue, spotify.QueueItem{ID: e.ID, Name: e.Name, Artist: e.Artist, DurationMS: e.DurationMS})
 	}
-	return status, queue, u.QueueHasMore
+	return status, queue, u.QueueHasMore, true
 }
 
 type volDebounceMsg struct {

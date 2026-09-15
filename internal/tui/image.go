@@ -73,8 +73,8 @@ func newImgCache() *imgCache {
 }
 
 func (c *imgCache) getImage(url string) (image.Image, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.imgs.Get(url)
 }
 
@@ -227,14 +227,15 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 		c.encoded[url] = encoded
 		c.deleteKittyChunksLocked(url)
 	}
-	if evicted {
+	for evicted {
 		if _, pinned := c.pinned[evictedURL]; pinned {
-			c.imgs.Set(evictedURL, evictedImg)
-		} else {
-			c.deleteCoversForURLLocked(evictedURL)
-			delete(c.encoded, evictedURL)
-			c.deleteKittyChunksLocked(evictedURL)
+			evictedURL, evictedImg, evicted = c.imgs.Set(evictedURL, evictedImg)
+			continue
 		}
+		c.deleteCoversForURLLocked(evictedURL)
+		delete(c.encoded, evictedURL)
+		c.deleteKittyChunksLocked(evictedURL)
+		break
 	}
 }
 
@@ -298,44 +299,62 @@ func (c *imgCache) beginLoad(url string) bool {
 }
 
 func (c *imgCache) shouldQueueLoad(url string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
 	if url == "" {
+		c.mu.RUnlock()
 		return false
 	}
 	if _, ok := c.imgs.Peek(url); ok && c.hasKittyEncodingLocked(url) {
+		c.mu.RUnlock()
 		return false
 	}
 	if _, ok := c.inflight[url]; ok {
+		c.mu.RUnlock()
 		return false
 	}
-	if t, ok := c.failedAt[url]; ok {
-		if time.Since(t) < imageFetchFailCooldown {
-			return false
-		}
+	t, failed := c.failedAt[url]
+	c.mu.RUnlock()
+	if !failed {
+		return true
+	}
+	if time.Since(t) < imageFetchFailCooldown {
+		return false
+	}
+	c.mu.Lock()
+	if t2, ok := c.failedAt[url]; ok && time.Since(t2) >= imageFetchFailCooldown {
 		delete(c.failedAt, url)
 	}
+	c.mu.Unlock()
 	return true
 }
 
 func (c *imgCache) shouldQueuePriorityLoad(url string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
 	if url == "" {
+		c.mu.RUnlock()
 		return false
 	}
 	if _, ok := c.imgs.Peek(url); ok && c.hasKittyEncodingLocked(url) {
+		c.mu.RUnlock()
 		return false
 	}
 	if _, ok := c.inflight[url]; ok {
+		c.mu.RUnlock()
 		return false
 	}
-	if t, ok := c.failedAt[url]; ok {
-		if time.Since(t) < imageFetchPriorityFailCooldown {
-			return false
-		}
+	t, failed := c.failedAt[url]
+	c.mu.RUnlock()
+	if !failed {
+		return true
+	}
+	if time.Since(t) < imageFetchPriorityFailCooldown {
+		return false
+	}
+	c.mu.Lock()
+	if t2, ok := c.failedAt[url]; ok && time.Since(t2) >= imageFetchPriorityFailCooldown {
 		delete(c.failedAt, url)
 	}
+	c.mu.Unlock()
 	return true
 }
 

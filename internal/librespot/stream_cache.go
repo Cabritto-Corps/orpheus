@@ -61,35 +61,37 @@ func (c *transitionCache) Put(id golibrespot.SpotifyId, stream *player.Stream) b
 	}
 	key := streamCacheKey(id)
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.streams == nil {
 		c.streams = make(map[string]*player.Stream, transitionStreamCacheMax)
 	}
 	if _, exists := c.streams[key]; exists {
+		c.mu.Unlock()
 		return false
 	}
+	var evicted *player.Stream
 	if len(c.order) >= transitionStreamCacheMax {
 		evict := c.order[0]
 		c.order = c.order[1:]
-		if old := c.streams[evict]; old != nil {
-			closeStream(old)
-		}
+		evicted = c.streams[evict]
 		delete(c.streams, evict)
 	}
 	c.order = append(c.order, key)
 	c.streams[key] = stream
+	c.mu.Unlock()
+	closeStreamAsync(evicted)
 	return true
 }
 
 func (c *transitionCache) Clear() {
 	c.mu.Lock()
-	for _, s := range c.streams {
-		closeStream(s)
-	}
+	streams := c.streams
 	c.streams = make(map[string]*player.Stream, transitionStreamCacheMax)
 	c.order = nil
 	c.pending = make(map[string]struct{}, transitionStreamCacheMax)
 	c.mu.Unlock()
+	for _, s := range streams {
+		closeStreamAsync(s)
+	}
 }
 
 func (c *transitionCache) HasPending(id golibrespot.SpotifyId) bool {

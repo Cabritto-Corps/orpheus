@@ -49,4 +49,5 @@ type PlaybackStateUpdate struct {
 	RepeatTrack   bool
 	Queue         []PlaybackStateQueueEntry
 	QueueHasMore  bool
+	QueueIncluded bool
 }

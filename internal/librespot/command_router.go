@@ -47,8 +47,9 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 			return golibrespot.NormalizeSpotifyId(track.Uri) == targetID
 		}
 		p.suppressEmit = true
-		defer func() { p.suppressEmit = false }()
-		if err := p.loadContext(ctx, spotCtx, skipTo, false, true); err != nil {
+		err = p.loadContext(ctx, spotCtx, skipTo, false, true)
+		p.suppressEmit = false
+		if err != nil {
 			return true, err
 		}
 		if p.state.tracks != nil {

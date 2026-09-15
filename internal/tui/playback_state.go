@@ -116,7 +116,7 @@ func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
 	if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
 		m.ui.imgs.forceKittyRedraw()
 	}
-	if event == transportEventStuck {
+	if event == transportEventStuck && m.tuiCmdCh == nil {
 		m.ui.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
 	}
 	m.syncExecutorState()
@@ -315,15 +315,35 @@ func (m *model) applyStatusSettleOverrides(status *spotify.PlaybackStatus, obser
 }
 
 func (m *model) trySendTransportSkip(kind librespot.TUICommandKind) bool {
+	return m.trySendTUICommand(librespot.TUICommand{Kind: kind})
+}
+
+func (m *model) trySendTUICommand(cmd librespot.TUICommand) bool {
 	if m.tuiCmdCh == nil {
 		return false
 	}
 	select {
-	case m.tuiCmdCh <- librespot.TUICommand{Kind: kind}:
+	case m.tuiCmdCh <- cmd:
 		return true
 	default:
 		return false
 	}
+}
+
+func (m *model) sendTUICommandOrRetry(cmd librespot.TUICommand) tea.Cmd {
+	if m.trySendTUICommand(cmd) {
+		return nil
+	}
+	return m.tuiCmdRetryCmd(cmd, maxRequeueRetries)
+}
+
+func (m *model) tuiCmdRetryCmd(cmd librespot.TUICommand, left int) tea.Cmd {
+	if left <= 0 {
+		return nil
+	}
+	return tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
+		return tuiCmdRetryMsg{cmd: cmd, left: left}
+	})
 }
 
 func absInt(v int) int {

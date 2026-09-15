@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -170,8 +169,8 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 				m.requeueFront(action)
 				return nil
 			}
+			m.applyOptimisticSkip(true)
 			m.beginTransportTransition()
-			m.ui.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
 			return nil
 		}
 		rollback := cloneStatus(m.transport.status)
@@ -187,8 +186,8 @@ func (m *model) executePlaybackInput(action playbackInputKind) tea.Cmd {
 				m.requeueFront(action)
 				return nil
 			}
+			m.applyOptimisticSkip(false)
 			m.beginTransportTransition()
-			m.ui.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
 			return nil
 		}
 		rollback := cloneStatus(m.transport.status)

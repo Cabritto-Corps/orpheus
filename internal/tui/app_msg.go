@@ -209,7 +209,7 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 		m.transport.queueHasMore = false
 		m.transport.stableQueueLen = 0
 	}
-	if m.shouldApplyIncomingQueue(nextTrackID) {
+	if msg.queueIncluded && m.shouldApplyIncomingQueue(nextTrackID) {
 		m.applyMergedQueue(msg.queue, msg.queueHasMore, true, true)
 	}
 	m.transport.status = mergeStatusFromPrevious(prevStatus, m.transport.queue, msg.status, m.browse.trackCache)

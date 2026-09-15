@@ -9,9 +9,13 @@ import (
 	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
 )
 
-const queueOverrideMaxTracks = 500
+const queueOverrideMaxTracks = 64
 
 func (p *AppPlayer) BuildPlaybackStateUpdate() *PlaybackStateUpdate {
+	return p.buildPlaybackStateUpdate(true)
+}
+
+func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUpdate {
 	if p.state == nil || p.state.player == nil {
 		return nil
 	}
@@ -31,12 +35,22 @@ func (p *AppPlayer) BuildPlaybackStateUpdate() *PlaybackStateUpdate {
 		RepeatTrack:   p.state.player.Options != nil && p.state.player.Options.RepeatingTrack,
 	}
 
-	if p.state.tracks != nil {
-		ctx, cancel := context.WithTimeout(p.ownerContext(), stateAdapterBatchTimeout)
-		defer cancel()
-		upcoming := p.state.tracks.UpcomingTracks(ctx, queueOverrideMaxTracks)
-		out.Queue = providedTracksToQueueEntries(p, upcoming)
-		out.QueueHasMore = len(upcoming) >= queueOverrideMaxTracks
+	if includeQueue {
+		out.QueueIncluded = true
+		if p.state.tracks != nil {
+			ctx, cancel := context.WithTimeout(p.ownerContext(), stateAdapterBatchTimeout)
+			defer cancel()
+			upcoming := p.state.tracks.UpcomingTracks(ctx, queueOverrideMaxTracks)
+			out.Queue = providedTracksToQueueEntries(p, upcoming)
+			out.QueueHasMore = len(upcoming) >= queueOverrideMaxTracks
+			p.lastEmittedQueue = append([]PlaybackStateQueueEntry(nil), out.Queue...)
+			p.lastEmittedQueueHasMore = out.QueueHasMore
+		} else {
+			out.Queue = nil
+			out.QueueHasMore = false
+			p.lastEmittedQueue = nil
+			p.lastEmittedQueueHasMore = false
+		}
 	}
 
 	if p.state.player.Track != nil {

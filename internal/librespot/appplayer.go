@@ -27,7 +27,10 @@ import (
 	"orpheus/internal/cache"
 )
 
-const volumeUpdateDebounce = 100 * time.Millisecond
+const (
+	volumeUpdateDebounce = 100 * time.Millisecond
+	connectStateDebounce = 75 * time.Millisecond
+)
 
 type AppPlayer struct {
 	runtime *Runtime
@@ -55,16 +58,22 @@ type AppPlayer struct {
 
 	prefetchTimer       *time.Timer
 	shuffleRefreshTimer *time.Timer
+	connectStateTimer   *time.Timer
 	prefetchJobs        chan prefetchJob
 	prefetchDone        chan prefetchResult
+
+	pendingConnectPut    bool
+	pendingConnectReason connectpb.PutStateReason
 
 	transitionCache       *transitionCache
 	prefetchGen           atomic.Uint64
 	shuffleRefreshPending bool
 	shuffleRefreshGen     uint64
 
-	queueMetaCache *cache.LRU[string, PlaybackStateQueueEntry]
-	queueMetaMu    sync.RWMutex
+	queueMetaCache          *cache.LRU[string, PlaybackStateQueueEntry]
+	queueMetaMu             sync.RWMutex
+	lastEmittedQueue        []PlaybackStateQueueEntry
+	lastEmittedQueueHasMore bool
 
 	advanceInFlight atomic.Bool
 }
@@ -275,6 +284,7 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		p.state.tracks = ctxTracks
 		p.syncPlayerTrackState(ctx, ctxTracks, nil)
 		p.resetQueueMetaForContext()
+		p.resetPlaybackCaches(true)
 		if err := p.loadCurrentTrack(ctx, pause, true); err != nil {
 			return fmt.Errorf("failed loading current track (transfer): %w", err)
 		}
@@ -408,10 +418,18 @@ func (p *AppPlayer) handleTUICommand(ctx context.Context, cmd TUICommand) error 
 }
 
 func (p *AppPlayer) emitPlaybackState() {
+	p.emitPlaybackStateWithQueue(true)
+}
+
+func (p *AppPlayer) emitPlaybackStateLight() {
+	p.emitPlaybackStateWithQueue(false)
+}
+
+func (p *AppPlayer) emitPlaybackStateWithQueue(includeQueue bool) {
 	if p.suppressEmit {
 		return
 	}
-	u := p.BuildPlaybackStateUpdate()
+	u := p.buildPlaybackStateUpdate(includeQueue)
 	if u != nil {
 		p.runtime.EmitPlaybackState(u)
 	}
@@ -430,6 +448,7 @@ func (p *AppPlayer) Close() {
 		p.clearTransitionStreamCache()
 		p.prefetchTimer.Stop()
 		p.shuffleRefreshTimer.Stop()
+		p.connectStateTimer.Stop()
 		p.player.Close()
 	})
 }
@@ -509,6 +528,8 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			volumeTimer.Reset(volumeUpdateDebounce)
 		case <-volumeTimer.C:
 			p.volumeUpdated(ctx)
+		case <-p.connectStateTimer.C:
+			p.flushConnectState()
 		case <-endTransitionGuardTicker.C:
 			p.maybeAdvanceOnTrackEndGuard()
 		}

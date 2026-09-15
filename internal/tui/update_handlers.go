@@ -473,6 +473,16 @@ func (m model) handleActionMsg(msg actionMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m model) handleTUICmdRetryMsg(msg tuiCmdRetryMsg) (tea.Model, tea.Cmd) {
+	if m.trySendTUICommand(msg.cmd) {
+		return m, nil
+	}
+	if msg.left <= 1 {
+		return m, nil
+	}
+	return m, m.tuiCmdRetryCmd(msg.cmd, msg.left-1)
+}
+
 func (m model) handleVolDebounceMsg(msg volDebounceMsg) (tea.Model, tea.Cmd) {
 	if msg.token != m.transport.volDebounceToken || m.transport.volDebouncePending < 0 {
 		return m, nil
@@ -484,7 +494,6 @@ func (m model) handleVolDebounceMsg(msg volDebounceMsg) (tea.Model, tea.Cmd) {
 			m.transport.volDebouncePending = -1
 			m.transport.volSentTarget = target
 			m.transport.volSentAt = time.Now()
-			m.ui.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
 		default:
 			m.transport.volDebouncePending = target
 			m.transport.volDebounceToken++
