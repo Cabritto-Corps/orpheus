@@ -22,6 +22,7 @@ type Config struct {
 	DeviceResolutionMode string
 	AllowActiveFallback  bool
 	TokenPath            string
+	KeysPath             string
 	PollInterval         time.Duration
 	NerdFonts            bool
 	OnSongChange         string
@@ -44,6 +45,7 @@ func LoadFromEnv() (Config, error) {
 		DeviceResolutionMode: envDefault("orpheus_device_resolution_mode", "strict"),
 		AllowActiveFallback:  envBool("orpheus_allow_active_fallback", false),
 		TokenPath:            envDefault("orpheus_token_path", defaultTokenPath()),
+		KeysPath:             envDefault("orpheus_keys_file", defaultKeysPath()),
 		PollInterval:         envDuration("orpheus_poll_interval", 1500*time.Millisecond),
 		NerdFonts:            resolveNerdFonts(os.Getenv("orpheus_nerd_fonts")),
 		OnSongChange:         envDefault("orpheus_on_song_change", ""),
@@ -243,6 +245,14 @@ func defaultTokenPath() string {
 		return ".orpheus-token.json"
 	}
 	return filepath.Join(dir, "token.json")
+}
+
+func defaultKeysPath() string {
+	dir, err := DefaultConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
+		return "keys.json"
+	}
+	return filepath.Join(dir, "keys.json")
 }
 
 func defaultLogPath() string {
