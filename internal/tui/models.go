@@ -5,8 +5,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/viewport"
 
 	"orpheus/internal/cache"
 	"orpheus/internal/librespot"
@@ -85,7 +86,7 @@ type uiModel struct {
 	nerdFonts               bool
 	cachedBodyLayout        bodyLayout
 	cachedBodyLayoutValid   bool
-	help                    help.Model
+	helpViewport            *viewport.Model
 	keys                    keyMap
 	pollInterval            time.Duration
 	pollTick                int
@@ -132,10 +133,14 @@ type settingsModel struct {
 	cursor      int
 	keysCursor  int
 	captureKey  string
+	pendingKey  string
 	themePreset string
 	keysPath    string
 	themePath   string
 	envPath     string
+
+	keysTable *table.Model
+	conflicts map[string]bool
 
 	crossfadeEnabled bool
 	crossfadeSeconds float64
@@ -144,6 +149,7 @@ type settingsModel struct {
 
 	restartRequiredCrossfade bool
 	restartRequiredCache     bool
+	keysTableDirty           bool
 }
 
 var settingsKeyActions = []struct {

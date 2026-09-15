@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -29,6 +30,9 @@ func (m model) openSettings() (tea.Model, tea.Cmd) {
 	m.ui.settings.mode = settingsModeRoot
 	m.ui.settings.cursor = 0
 	m.ui.settings.captureKey = ""
+	m.ui.settings.pendingKey = ""
+	m.ui.settings.conflicts = keyConflictActions(m.ui.keys)
+	m.ui.settings.keysTableDirty = true
 	return m, nil
 }
 
@@ -212,19 +216,45 @@ func (m model) handleSettingsCapture(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" {
 		s.mode = settingsModeKeys
 		s.captureKey = ""
+		s.pendingKey = ""
 		return m, nil
 	}
 
 	keyName := captureKeyName(msg)
-	if keyName == "" {
+	if s.pendingKey != "" {
+		// Two-step capture: a key is armed; enter confirms, any other key
+		// replaces the pending one, esc cancels.
+		if msg.String() == "enter" {
+			err := m.applyCapture(s.captureKey, s.pendingKey)
+			s.mode = settingsModeKeys
+			s.captureKey = ""
+			s.pendingKey = ""
+			if err != nil {
+				// Save failure drops back to the list; the rebind is still
+				// live for the session.
+				slog.Warn("rebind not persisted", "error", err)
+			}
+			return m, nil
+		}
+		if keyName != "" {
+			s.pendingKey = keyName
+		}
 		return m, nil
 	}
 
+	if keyName == "" {
+		return m, nil
+	}
+	s.pendingKey = keyName
+	return m, nil
+}
+
+func (m *model) applyCapture(action, keyName string) error {
+	s := &m.ui.settings
 	overrides := LoadKeys(s.keysPath)
 	if overrides == nil {
 		overrides = map[string][]string{}
 	}
-	action := s.captureKey
 	if action == "quit" {
 		// ctrl+c always quits: keep it in the stored list like the loader does.
 		if !keyContains(overrides[action], "ctrl+c") {
@@ -240,13 +270,13 @@ func (m model) handleSettingsCapture(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if err := SaveKeys(s.keysPath, overrides); err != nil {
 		slog.Warn("failed saving keys file", "path", s.keysPath, "error", err)
-		return m, nil
+		return err
 	}
 
 	m.ui.keys = newKeysFromConfig(overrides)
-	s.mode = settingsModeKeys
-	s.captureKey = ""
-	return m, nil
+	s.conflicts = keyConflictActions(m.ui.keys)
+	s.keysTableDirty = true
+	return nil
 }
 
 func captureKeyName(msg tea.KeyMsg) string {
@@ -274,75 +304,111 @@ func (m model) settingsOpen() bool {
 	return m.ui.settings.open
 }
 
+func (m model) settingsKeysTable(w, h int) *table.Model {
+	s := &m.ui.settings
+	if s.keysTable == nil || s.keysTableDirty {
+		cols := []table.Column{
+			{Title: "Action", Width: 24},
+			{Title: "Key", Width: max(6, w-28)},
+		}
+		rows := make([]table.Row, 0, len(settingsKeyActions))
+		for _, entry := range settingsKeyActions {
+			rows = append(rows, table.Row{entry.label, m.primaryKeyLabel(entry.action)})
+		}
+		t := table.New(
+			table.WithColumns(cols),
+			table.WithRows(rows),
+			table.WithHeight(h),
+		)
+		t.SetStyles(tableStyles())
+		s.keysTable = &t
+		s.keysTableDirty = false
+	}
+	s.keysTable.SetHeight(h)
+	s.keysTable.SetCursor(s.keysCursor)
+	return s.keysTable
+}
+
+func tableStyles() table.Styles {
+	st := table.DefaultStyles()
+	st.Header = st.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(colorDivider).
+		BorderBottom(true).
+		Bold(false).
+		Foreground(colorMutedBlue)
+	st.Selected = st.Selected.
+		Border(lipgloss.NormalBorder(), false, false, false, false)
+	return st
+}
+
 func (m model) settingsModalView() string {
 	modalW := min(m.ui.width-8, 52)
 	bodyH := m.ui.height - headerH - tabBarH - 2
 	innerH := max(bodyH-4, 10)
 
-	title := styleModalTitle.Render("Settings")
 	s := m.ui.settings
 
-	var body string
 	switch s.mode {
 	case settingsModeCapture:
-		body = "\n  Press any key to bind \"" + settingsKeyActions[s.keysCursor].action + "\"\n\n  esc: cancel"
+		var body string
+		if s.pendingKey == "" {
+			body = "\n" + styleTrackPopupLoading.Render("  Press any key to bind \""+settingsActionLabel(s.captureKey)+"\"") + "\n"
+		} else {
+			pending := styleTrackPopupTitle.Render(shortKeyLabel([]string{s.pendingKey}))
+			body = "\n  bind \"" + settingsActionLabel(s.captureKey) + "\" to " + pending + "\n\n  enter: confirm   esc: cancel\n"
+		}
+		return modalFrame(m.ui.width, bodyH, styleModalTitle.Render("Settings"), styleModalHint.Render("enter: confirm   esc: cancel"), body, modalW, innerH)
+
 	case settingsModeKeys:
-		var b strings.Builder
-		b.WriteString("\n")
-		start := max(0, s.keysCursor-(innerH-6)/2)
-		end := min(start+innerH-5, len(settingsKeyActions))
-		for i := start; i < end; i++ {
-			entry := settingsKeyActions[i]
-			row := "  "
-			if i == s.keysCursor {
-				row = " > "
-			}
-			key := m.primaryKeyLabel(entry.action)
-			body += b.String()
-			body += row + padTo(entry.label, 24) + key + "\n"
+		t := m.settingsKeysTable(max(4, modalW-6), max(6, innerH-6))
+		body := "\n" + t.View() + "\n"
+		for action := range s.conflicts {
+			body += styleError.Render("  ⚠ conflict: "+settingsActionLabel(action)) + "\n"
 		}
-		body += "\n  enter: rebind   esc: back"
+		return modalFrame(m.ui.width, bodyH, styleModalTitle.Render("Keybinds"), styleModalHint.Render("enter: rebind   esc: back"), body, modalW, innerH)
+
 	default:
-		rows := [4]string{
-			"  Theme          " + s.themePreset,
-			"  Keybinds       edit...",
-			"  Crossfade      " + settingsCrossfadeLabel(&s),
-			"  Audio cache    " + settingsCacheLabel(&s),
+		crossfadeGauge := ""
+		cacheGauge := ""
+		if s.crossfadeEnabled {
+			crossfadeGauge = " " + miniGauge(s.crossfadeSeconds/30, 6)
 		}
-		body = "\n"
-		for i, row := range rows {
-			if i == s.cursor {
-				body += " > " + row[3:] + "\n"
-			} else {
-				body += row + "\n"
-			}
+		if s.cacheEnabled {
+			cacheGauge = " " + miniGauge(float64(s.cacheSizeMB-64)/float64(4096-64), 6)
 		}
-		body += "\n  enter: cycle/toggle   +/-: adjust   esc: close\n"
+		rows := []string{
+			modalRow("Theme", themeValue(s.themePreset), s.cursor == 0, modalW),
+			modalRow("Keybinds", "edit...", s.cursor == 1, modalW),
+			modalRow("Crossfade", settingsCrossfadeLabel(&s)+crossfadeGauge, s.cursor == 2, modalW),
+			modalRow("Audio cache", settingsCacheLabel(&s)+cacheGauge, s.cursor == 3, modalW),
+		}
+		body := "\n" + strings.Join(rows, "\n") + "\n"
+		body += "\n" + styleModalHint.Render("enter: change   +/-: adjust   esc: close") + "\n"
 		if s.restartRequiredCrossfade {
-			body += styleError.Render("  crossfade change applies on restart") + "\n"
+			body += styleError.Render("  crossfade applies on restart") + "\n"
 		}
 		if s.restartRequiredCache {
-			body += styleError.Render("  cache change applies on restart") + "\n"
+			body += styleError.Render("  cache applies on restart") + "\n"
 		}
 		if s.cursor == 0 {
 			body += styleTrackPopupHint.Render("  edit theme.json for per-color overrides") + "\n"
 		}
+		return modalFrame(m.ui.width, bodyH, styleModalTitle.Render("Settings"), styleModalHint.Render("o/esc: close"), body, modalW, innerH)
 	}
+}
 
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		title,
-		body,
-	)
-	if s.mode == settingsModeRoot {
-		hint := styleTrackPopupHint.Render("  o/esc: close")
-		content = lipgloss.JoinVertical(lipgloss.Left, title, body, hint)
+func themeValue(preset string) string {
+	return preset + "  " + swatchBar(themeSwatches(themePreset(preset)))
+}
+
+func settingsActionLabel(action string) string {
+	for _, entry := range settingsKeyActions {
+		if entry.action == action {
+			return entry.label
+		}
 	}
-
-	box := styleModalBox.
-		Width(modalW).
-		Height(innerH).
-		Render(content)
-	return lipgloss.Place(m.ui.width, bodyH, lipgloss.Center, lipgloss.Center, box)
+	return action
 }
 
 func settingsCrossfadeLabel(s *settingsModel) string {

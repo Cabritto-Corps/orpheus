@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	golibrespot "github.com/elxgy/go-librespot"
 )
@@ -188,56 +189,67 @@ func (m model) trackPopupView() string {
 	var hint string
 	if m.ui.trackPopupItems == nil {
 		body = styleTrackPopupLoading.Render("\n  Loading...")
-		hint = ""
 	} else if len(m.ui.trackPopupItems) == 0 {
 		body = styleTrackPopupLoading.Render("\n  No tracks found")
-		hint = styleTrackPopupHint.Render("  esc: close")
 	} else {
 		body = m.ui.trackPopupList.View()
-		hint = styleTrackPopupHint.Render("  enter: play  /: search  esc: close")
+	}
+	if hint == "" {
+		if m.ui.trackPopupItems != nil {
+			hint = styleTrackPopupHint.Render("enter: play  /: search  esc: close")
+		}
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		title,
-		body,
-		hint,
-	)
+	return modalFrame(m.ui.width, bodyH, title, hint, body, modalW, innerH)
+}
 
-	box := styleModalBox.
-		Width(modalW).
-		Height(innerH).
-		Render(content)
+// ensureHelpViewport builds (or rebuilds) the help modal's viewport when the
+// grouped help body overflows the modal. It runs from Update paths (open,
+// resize) because View cannot persist state.
+func (m *model) ensureHelpViewport() {
+	modalW := min(m.ui.width-8, 80)
+	outerH := m.ui.height - headerH - tabBarH - gapFooterH
+	innerH := max(6, outerH-4)
+	contentW := max(12, modalW-4)
+	body := m.helpGroupedBody(contentW, innerH-4)
+	if lipgloss.Height(body) > innerH-2 {
+		v := viewport.New(contentW, innerH-2)
+		v.SetContent(body)
+		m.ui.helpViewport = &v
+	} else {
+		m.ui.helpViewport = nil
+	}
+}
 
-	return lipgloss.Place(m.ui.width, bodyH, lipgloss.Center, lipgloss.Center, box)
+// scrollHelp scrolls the help modal's viewport when the content overflows;
+// a no-op otherwise.
+func (m model) scrollHelp(dy int) model {
+	if m.ui.helpViewport == nil {
+		return m
+	}
+	vp := *m.ui.helpViewport
+	if dy < 0 {
+		vp.LineUp(-dy)
+	} else {
+		vp.LineDown(dy)
+	}
+	m.ui.helpViewport = &vp
+	return m
 }
 
 func (m model) helpModalView() string {
 	modalW := min(m.ui.width-8, 80)
-	innerH := max(m.ui.height-14, 6)
+	outerH := m.ui.height - headerH - tabBarH - gapFooterH
+	innerH := max(6, outerH-4)
 	contentW := max(12, modalW-4)
-	title := styleModalTitle.Render("Help")
-	hint := styleModalHint.Render("? or esc close")
-	header := lipgloss.PlaceHorizontal(contentW, lipgloss.Center, title+"  "+hint)
-	sep := styleModalHint.Render(strings.Repeat("─", contentW))
 
-	h := m.ui.help
-	h.ShowAll = true
-	helpText := centerBlockLines(h.View(m.ui.keys), contentW)
-	helpAreaH := max(3, innerH-4)
-	helpBody := lipgloss.Place(contentW, helpAreaH, lipgloss.Center, lipgloss.Center, helpText)
+	body := m.helpGroupedBody(contentW, innerH-4)
+	if vp := m.ui.helpViewport; vp != nil {
+		body = vp.View()
+	}
 
-	boxContent := header + "\n" + sep + "\n\n" + helpBody
-	box := styleModalBox.Width(modalW).Height(innerH).Render(boxContent)
-	placed := lipgloss.Place(
-		m.ui.width,
-		m.ui.height-headerH-tabBarH-gapFooterH,
-		lipgloss.Center,
-		lipgloss.Center,
-		box,
-		lipgloss.WithWhitespaceChars("░"),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("#1a1a2a")),
-	)
-	return placed
+	return modalFrame(m.ui.width, outerH, styleModalTitle.Render("Help"),
+		styleModalHint.Render("? or esc close"), body, modalW, innerH)
 }
 
 func (m model) kittyOverlay() string {

@@ -126,7 +126,8 @@ func applyTheme(c themeColors) {
 
 	styleTabActive = lipgloss.NewStyle().
 		Bold(true).
-		Foreground(colorBlue)
+		Foreground(colorOffWhite).
+		Background(colorDimBlue)
 
 	styleTabInactive = lipgloss.NewStyle().
 		Foreground(colorMutedBlue)
@@ -142,6 +143,10 @@ func applyTheme(c themeColors) {
 
 	styleModalHint = lipgloss.NewStyle().
 		Foreground(colorMutedBlue)
+
+	styleModalSelectedRow = lipgloss.NewStyle().
+		Background(colorDimBlue).
+		Foreground(colorOffWhite)
 }
 
 var (
@@ -179,6 +184,7 @@ var (
 	styleModalBox          lipgloss.Style
 	styleModalTitle        lipgloss.Style
 	styleModalHint         lipgloss.Style
+	styleModalSelectedRow  lipgloss.Style
 )
 
 func init() {

@@ -129,8 +129,12 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 
 	next = sendEnter(next) // capture again
 	next = sendKey(next, "j")
-	if next.ui.settings.captureKey != "" {
-		t.Fatal("capture should complete after one keypress")
+	if next.ui.settings.pendingKey != "j" {
+		t.Fatalf("capture should arm pending key after first press, got %q", next.ui.settings.pendingKey)
+	}
+	next = sendEnter(next) // confirm
+	if next.ui.settings.captureKey != "" || next.ui.settings.pendingKey != "" {
+		t.Fatal("capture should complete after enter confirm")
 	}
 
 	data, err := os.ReadFile(keysPath)

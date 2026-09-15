@@ -6,7 +6,7 @@ require (
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/elxgy/go-librespot v0.0.0-20260915155233-6cfe5b97cdf8
+	github.com/elxgy/go-librespot v0.0.0-20260915184557-ce19fbe6747a
 	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-runewidth v0.0.30
 	github.com/sirupsen/logrus v1.10.2
@@ -48,5 +48,3 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 )
-
-replace github.com/elxgy/go-librespot => /home/pengusz/repos/go-librespot

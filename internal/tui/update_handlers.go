@@ -29,6 +29,10 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.browse.albumList.SetSize(listInnerW, listInnerH)
 	m.normalizeLibraryPagination()
 
+	if m.ui.helpOpen {
+		m.ensureHelpViewport()
+	}
+
 	if m.ui.trackPopupOpen {
 		modalW := min(m.ui.width-8, 60)
 		popupBodyH := m.ui.height - headerH - tabBarH - 2
@@ -572,6 +576,10 @@ func (m model) handleSeekDebounceMsg(msg seekDebounceMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleFilterMatchesMsg(msg list.FilterMatchesMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+	if m.ui.helpOpen {
+		m.ensureHelpViewport()
+	}
+
 	if m.ui.trackPopupOpen {
 		m.ui.trackPopupList, cmd = m.ui.trackPopupList.Update(msg)
 		return m, cmd

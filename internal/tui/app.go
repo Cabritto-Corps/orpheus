@@ -132,8 +132,6 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 	albums.FilterInput.Prompt = "Search: "
 	applyListStyles(&albums)
 
-	h := newHelp()
-
 	m := model{
 		ctx:             ctx,
 		catalog:         catalog,
@@ -165,7 +163,6 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 			startupCoverBoostTicks: 40,
 			cover:                  newCoverManager(),
 			nerdFonts:              cfg.NerdFonts,
-			help:                   h,
 			keys:                   newKeysFromConfig(LoadKeys(cfg.KeysPath)),
 			settings:               newSettingsModel(cfg),
 		},

@@ -1,7 +1,8 @@
 package tui
 
 import (
-	"github.com/charmbracelet/bubbles/help"
+	"strings"
+
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -73,14 +74,92 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	}
 }
 
-func newHelp() help.Model {
-	h := help.New()
-	h.Styles.ShortKey = lipgloss.NewStyle().Foreground(colorBlue)
-	h.Styles.ShortDesc = lipgloss.NewStyle().Foreground(colorMutedBlue)
-	h.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(colorMutedBlue)
-	h.Styles.FullKey = lipgloss.NewStyle().Foreground(colorBlue)
-	h.Styles.FullDesc = lipgloss.NewStyle().Foreground(colorMutedBlue)
-	h.Styles.FullSeparator = lipgloss.NewStyle().Foreground(colorMutedBlue)
-	h.Styles.Ellipsis = lipgloss.NewStyle().Foreground(colorMutedBlue)
-	return h
+type helpGroup struct {
+	title string
+	items []struct{ action, label string }
+}
+
+var helpGroupsLayout = []struct {
+	title  string
+	action string
+	label  string
+}{
+	// Playback
+	{"Playback", "play_pause", "play/pause"},
+	{"Playback", "next", "next track"},
+	{"Playback", "prev", "previous track"},
+	{"Playback", "shuffle", "shuffle"},
+	{"Playback", "loop", "repeat"},
+	{"Playback", "vol_up", "volume up"},
+	{"Playback", "vol_down", "volume down"},
+	{"Playback", "seek_back", "seek back"},
+	{"Playback", "seek_fwd", "seek forward"},
+	// Navigation
+	{"Navigation", "tab", "switch tab"},
+	{"Navigation", "filter", "search filter"},
+	{"Navigation", "select", "select / play"},
+	{"Navigation", "refresh", "refresh library"},
+	{"Navigation", "toggle_help", "toggle help"},
+	{"Navigation", "settings", "open settings"},
+	{"Navigation", "close_modal", "close modal"},
+	{"Navigation", "quit", "quit"},
+	// Queue
+	{"Queue", "queue_up", "cursor up"},
+	{"Queue", "queue_down", "cursor down"},
+	{"Queue", "queue_jump", "play from row"},
+	{"Queue", "queue_remove", "remove row"},
+	{"Queue", "queue_move_up", "move row up"},
+	{"Queue", "queue_move_down", "move row down"},
+}
+
+// helpGroupLines renders one group as label……key lines.
+func (m model) helpGroupLines(title string, labelWidth int) []string {
+	lines := []string{styleSectionLabel.Render(title)}
+	for _, g := range helpGroupsLayout {
+		if g.title != title {
+			continue
+		}
+		keys, ok := defaultKeysForAction(m.ui.keys, g.action)
+		if !ok {
+			continue
+		}
+		label := g.label
+		if g.action == "quit" {
+			label += " (ctrl+c always quits)"
+		}
+		lines = append(lines, styleQueueTrack.Render(padTo(label, labelWidth))+
+			styleTrackPopupTitle.Render(shortKeyLabel(keys)))
+	}
+	return lines
+}
+
+func (m model) helpGroupedBody(contentW, availH int) string {
+	groups := []string{"Playback", "Navigation", "Queue"}
+	labelWidth := 0
+	for _, g := range helpGroupsLayout {
+		lw := lipgloss.Width(g.label)
+		if lw > labelWidth {
+			labelWidth = lw
+		}
+	}
+	labelWidth += 4
+
+	cols := make([][]string, 0, len(groups))
+	for _, title := range groups {
+		cols = append(cols, m.helpGroupLines(title, labelWidth))
+	}
+
+	var body string
+	if m.ui.width >= 90 {
+		left := strings.Join(append(cols[0], ""), "\n")
+		right := strings.Join(append(cols[1], "\n", strings.Join(cols[2], "\n")), "\n")
+		body = lipgloss.JoinHorizontal(lipgloss.Top, left, "    ", right)
+	} else {
+		parts := make([]string, 0, len(cols))
+		for _, col := range cols {
+			parts = append(parts, strings.Join(col, "\n"))
+		}
+		body = strings.Join(parts, "\n\n")
+	}
+	return body
 }

@@ -198,14 +198,6 @@ func centerText(s string, w int) string {
 	return strings.Repeat(" ", pad) + s + strings.Repeat(" ", w-sw-pad)
 }
 
-func centerBlockLines(s string, w int) string {
-	lines := strings.Split(s, "\n")
-	for i := range lines {
-		lines[i] = centerText(lines[i], w)
-	}
-	return strings.Join(lines, "\n")
-}
-
 func (m *model) getBodyLayout() bodyLayout {
 	if m.ui.cachedBodyLayoutValid {
 		return m.ui.cachedBodyLayout

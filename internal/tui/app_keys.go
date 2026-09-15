@@ -26,6 +26,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyMatches(msg, k.ToggleHelp):
 		if !filtering {
 			m.ui.helpOpen = !m.ui.helpOpen
+			if m.ui.helpOpen {
+				m.ensureHelpViewport()
+			}
 			return m, nil
 		}
 	case keyMatches(msg, k.Settings):
@@ -37,6 +40,12 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.ui.helpOpen {
 		if keyMatches(msg, k.CloseModal) {
 			m.ui.helpOpen = false
+		}
+		switch {
+		case keyMatches(msg, k.QueueUp):
+			m.scrollHelp(-3)
+		case keyMatches(msg, k.QueueDown):
+			m.scrollHelp(3)
 		}
 		return m, nil
 	}

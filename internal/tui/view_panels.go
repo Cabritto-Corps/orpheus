@@ -280,11 +280,15 @@ func (m model) queuePanel(w, h int) string {
 			}
 			rowStyle := styleQueueTrack
 			marker := " "
-			if qi == cursor {
-				rowStyle = styleQueueCursor
+			selectedRow := qi == cursor
+			if selectedRow {
 				marker = ">"
+				rowStyle = styleQueueCursor
 			}
 			lines = append(lines, marker+idx+rowStyle.Render(title)+strings.Repeat(" ", titlePad)+"  "+styleQueueArtist.Render(artist)+strings.Repeat(" ", artistPad)+" "+stylePlayerTime.Render(dur))
+			if selectedRow && w >= 40 {
+				lines[len(lines)-1] = styleModalSelectedRow.Render(lines[len(lines)-1])
+			}
 		}
 
 		stableVisibleQueueLen := m.transport.stableQueueLen
