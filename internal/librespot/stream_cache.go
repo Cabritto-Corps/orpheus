@@ -17,13 +17,13 @@ type transitionCache struct {
 	mu      sync.Mutex
 	streams map[string]*player.Stream
 	order   []string
-	pending map[string]struct{}
+	pending map[string]uint64
 }
 
 func newTransitionCache() *transitionCache {
 	return &transitionCache{
 		streams: make(map[string]*player.Stream, transitionStreamCacheMax),
-		pending: make(map[string]struct{}, transitionStreamCacheMax),
+		pending: make(map[string]uint64, transitionStreamCacheMax),
 	}
 }
 
@@ -87,7 +87,7 @@ func (c *transitionCache) Clear() {
 	streams := c.streams
 	c.streams = make(map[string]*player.Stream, transitionStreamCacheMax)
 	c.order = nil
-	c.pending = make(map[string]struct{}, transitionStreamCacheMax)
+	c.pending = make(map[string]uint64, transitionStreamCacheMax)
 	c.mu.Unlock()
 	for _, s := range streams {
 		closeStreamAsync(s)
@@ -102,30 +102,32 @@ func (c *transitionCache) HasPending(id golibrespot.SpotifyId) bool {
 	return ok
 }
 
-func (c *transitionCache) MarkPending(id golibrespot.SpotifyId) bool {
+func (c *transitionCache) MarkPending(id golibrespot.SpotifyId, gen uint64) bool {
 	key := streamCacheKey(id)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.pending == nil {
-		c.pending = make(map[string]struct{}, transitionStreamCacheMax)
+		c.pending = make(map[string]uint64, transitionStreamCacheMax)
 	}
 	if _, exists := c.pending[key]; exists {
 		return false
 	}
-	c.pending[key] = struct{}{}
+	c.pending[key] = gen
 	return true
 }
 
-func (c *transitionCache) ClearPending(id golibrespot.SpotifyId) {
+func (c *transitionCache) ClearPending(id golibrespot.SpotifyId, gen uint64) {
 	key := streamCacheKey(id)
 	c.mu.Lock()
-	delete(c.pending, key)
+	if c.pending[key] == gen {
+		delete(c.pending, key)
+	}
 	c.mu.Unlock()
 }
 
 func (c *transitionCache) ResetPending() {
 	c.mu.Lock()
-	c.pending = make(map[string]struct{}, transitionStreamCacheMax)
+	c.pending = make(map[string]uint64, transitionStreamCacheMax)
 	c.mu.Unlock()
 }
 
@@ -155,10 +157,10 @@ func (p *AppPlayer) hasPrefetchPending(id golibrespot.SpotifyId) bool {
 	return p.transitionCache.HasPending(id)
 }
 
-func (p *AppPlayer) markPrefetchPending(id golibrespot.SpotifyId) bool {
-	return p.transitionCache.MarkPending(id)
+func (p *AppPlayer) markPrefetchPending(id golibrespot.SpotifyId, gen uint64) bool {
+	return p.transitionCache.MarkPending(id, gen)
 }
 
-func (p *AppPlayer) clearPrefetchPending(id golibrespot.SpotifyId) {
-	p.transitionCache.ClearPending(id)
+func (p *AppPlayer) clearPrefetchPending(id golibrespot.SpotifyId, gen uint64) {
+	p.transitionCache.ClearPending(id, gen)
 }

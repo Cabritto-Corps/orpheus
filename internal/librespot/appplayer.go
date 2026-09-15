@@ -30,6 +30,10 @@ import (
 const (
 	volumeUpdateDebounce = 100 * time.Millisecond
 	connectStateDebounce = 75 * time.Millisecond
+
+	// endGuardMaxFailures bounds the end-of-track guard's retry loop before
+	// it surfaces the stuck state instead of retrying forever.
+	endGuardMaxFailures = 3
 )
 
 type AppPlayer struct {
@@ -73,8 +77,9 @@ type AppPlayer struct {
 	queueMetaCache *cache.LRU[string, PlaybackStateQueueEntry]
 	queueMetaMu    sync.RWMutex
 
-	advanceInFlight      atomic.Bool
+	advanceInFlight       atomic.Bool
 	connectionLostEmitted atomic.Bool
+	endGuardFailures      int
 }
 
 func (p *AppPlayer) setRunContext(ctx context.Context) {
@@ -226,6 +231,12 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		if err := proto.Unmarshal(req.Command.Data, &transferState); err != nil {
 			return fmt.Errorf("failed unmarshalling TransferState: %w", err)
 		}
+		if transferState.CurrentSession == nil || transferState.CurrentSession.Context == nil {
+			return fmt.Errorf("transfer state without current session context")
+		}
+		if transferState.Options == nil {
+			transferState.Options = &connectpb.ContextPlayerOptions{}
+		}
 		p.state.lastTransferTimestamp = transferState.Playback.Timestamp
 		ctxTracks, err := tracks.NewTrackListFromContext(ctx, p.runtime.Log, p.sess.Spclient(), transferState.CurrentSession.Context, 0)
 		if err != nil {
@@ -266,20 +277,22 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 			return fmt.Errorf("failed shuffling context")
 		}
 		p.state.queueID = 0
-		for _, track := range transferState.Queue.Tracks {
-			if track.Uid == "" || track.Uid[0] != 'q' {
-				continue
+		if transferState.Queue != nil {
+			for _, track := range transferState.Queue.Tracks {
+				if track.Uid == "" || track.Uid[0] != 'q' {
+					continue
+				}
+				n, err := strconv.ParseUint(track.Uid[1:], 10, 64)
+				if err != nil {
+					continue
+				}
+				p.state.queueID = max(p.state.queueID, n)
 			}
-			n, err := strconv.ParseUint(track.Uid[1:], 10, 64)
-			if err != nil {
-				continue
+			for _, track := range transferState.Queue.Tracks {
+				ctxTracks.AddToQueue(track)
 			}
-			p.state.queueID = max(p.state.queueID, n)
+			ctxTracks.SetPlayingQueue(transferState.Queue.IsPlayingQueue)
 		}
-		for _, track := range transferState.Queue.Tracks {
-			ctxTracks.AddToQueue(track)
-		}
-		ctxTracks.SetPlayingQueue(transferState.Queue.IsPlayingQueue)
 		p.state.tracks = ctxTracks
 		p.syncPlayerTrackState(ctx, ctxTracks, nil)
 		p.resetQueueMetaForContext()
@@ -289,10 +302,16 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		}
 		return nil
 	case "play":
+		if req.Command.Context == nil {
+			return fmt.Errorf("play command without context")
+		}
 		p.state.setActive(true)
 		p.state.player.PlayOrigin = req.Command.PlayOrigin
 		p.state.player.PlayOrigin.DeviceIdentifier = req.SentByDeviceId
 		p.state.player.Suppressions = req.Command.Options.Suppressions
+		if p.state.player.Options == nil {
+			p.state.player.Options = &connectpb.ContextPlayerOptions{}
+		}
 		if req.Command.Options.PlayerOptionsOverride != nil {
 			p.state.player.Options.ShufflingContext = req.Command.Options.PlayerOptionsOverride.ShufflingContext
 			p.state.player.Options.RepeatingTrack = req.Command.Options.PlayerOptionsOverride.RepeatingTrack
@@ -347,7 +366,7 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 	case "skip_next":
 		return p.skipNext(ctx, req.Command.Track)
 	case "update_context":
-		if req.Command.Context.Uri != p.state.player.ContextUri {
+		if req.Command.Context == nil || req.Command.Context.Uri != p.state.player.ContextUri {
 			p.runtime.Log.Warnf("ignoring context update for wrong uri: %s", req.Command.Context.Uri)
 			return nil
 		}
@@ -538,6 +557,16 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 		case res := <-p.prefetchDone:
 			p.handlePrefetchResult(res)
 		case volume := <-p.volumeUpdate:
+			// Coalesce bursts: only the most recent value matters.
+		drain:
+			for {
+				select {
+				case v := <-p.volumeUpdate:
+					volume = v
+				default:
+					break drain
+				}
+			}
 			p.state.device.Volume = uint32(math.Round(float64(volume * player.MaxStateVolume)))
 			volumeTimer.Reset(volumeUpdateDebounce)
 		case <-volumeTimer.C:

@@ -122,7 +122,7 @@ func TestClearTransitionStreamCache(t *testing.T) {
 func TestClearTransitionStreamCacheAlsoClearsPending(t *testing.T) {
 	p := newTestAppPlayer()
 	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
-	p.markPrefetchPending(id)
+	p.markPrefetchPending(id, 1)
 
 	p.clearTransitionStreamCache()
 	if p.hasPrefetchPending(id) {
@@ -142,7 +142,7 @@ func TestBumpPrefetchGeneration(t *testing.T) {
 func TestBumpPrefetchGenerationResetsPending(t *testing.T) {
 	p := newTestAppPlayer()
 	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
-	p.markPrefetchPending(id)
+	p.markPrefetchPending(id, 1)
 
 	p.bumpPrefetchGeneration()
 	if p.hasPrefetchPending(id) {
@@ -154,13 +154,13 @@ func TestMarkAndHasPrefetchPending(t *testing.T) {
 	p := newTestAppPlayer()
 	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
 
-	if !p.markPrefetchPending(id) {
+	if !p.markPrefetchPending(id, 1) {
 		t.Fatal("expected first mark to succeed")
 	}
 	if !p.hasPrefetchPending(id) {
 		t.Fatal("expected has to return true")
 	}
-	if p.markPrefetchPending(id) {
+	if p.markPrefetchPending(id, 1) {
 		t.Fatal("expected duplicate mark to return false")
 	}
 }
@@ -168,10 +168,25 @@ func TestMarkAndHasPrefetchPending(t *testing.T) {
 func TestClearPrefetchPending(t *testing.T) {
 	p := newTestAppPlayer()
 	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
-	p.markPrefetchPending(id)
+	p.markPrefetchPending(id, 1)
 
-	p.clearPrefetchPending(id)
+	p.clearPrefetchPending(id, 1)
 	if p.hasPrefetchPending(id) {
 		t.Fatal("expected pending to be cleared")
+	}
+}
+
+func TestClearPrefetchPendingStaleGenerationKeepsMark(t *testing.T) {
+	p := newTestAppPlayer()
+	id := mustID("spotify:track:7GhIk7Il098yCjg4BQjzvb")
+	p.markPrefetchPending(id, 2)
+
+	p.clearPrefetchPending(id, 1)
+	if !p.hasPrefetchPending(id) {
+		t.Fatal("a stale result must not clear a newer pending mark")
+	}
+	p.clearPrefetchPending(id, 2)
+	if p.hasPrefetchPending(id) {
+		t.Fatal("expected pending to be cleared by the matching generation")
 	}
 }
