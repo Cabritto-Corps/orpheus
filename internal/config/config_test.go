@@ -288,8 +288,8 @@ func TestCrossfadeEnvDefaults(t *testing.T) {
 	if cfg.Crossfade {
 		t.Fatal("crossfade must default to disabled")
 	}
-	if cfg.CrossfadeSeconds != 0 {
-		t.Fatalf("CrossfadeSeconds default = %v, want 0", cfg.CrossfadeSeconds)
+	if cfg.CrossfadeSeconds != 3 {
+		t.Fatalf("CrossfadeSeconds default = %v, want 3", cfg.CrossfadeSeconds)
 	}
 }
 
@@ -301,8 +301,8 @@ func TestCrossfadeEnvMalformedFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromEnv: %v", err)
 	}
-	if cfg.CrossfadeSeconds != 0 {
-		t.Fatalf("malformed CrossfadeSeconds = %v, want 0", cfg.CrossfadeSeconds)
+	if cfg.CrossfadeSeconds != 3 {
+		t.Fatalf("malformed CrossfadeSeconds = %v, want default 3", cfg.CrossfadeSeconds)
 	}
 }
 
@@ -314,7 +314,7 @@ func TestCrossfadeNegativeSecondsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromEnv: %v", err)
 	}
-	if cfg.CrossfadeSeconds != 0 {
-		t.Fatalf("negative CrossfadeSeconds = %v, want 0", cfg.CrossfadeSeconds)
+	if cfg.CrossfadeSeconds != 3 {
+		t.Fatalf("negative CrossfadeSeconds = %v, want default 3", cfg.CrossfadeSeconds)
 	}
 }

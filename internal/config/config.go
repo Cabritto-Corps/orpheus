@@ -52,7 +52,7 @@ func LoadFromEnv() (Config, error) {
 		AudioCacheSizeMB:     envInt64("orpheus_audio_cache_size_mb", 1024),
 		AudioCacheDir:        envDefault("orpheus_audio_cache_dir", ""),
 		Crossfade:            envBool("orpheus_crossfade", false),
-		CrossfadeSeconds:     envFloat64("orpheus_crossfade_seconds", 0),
+		CrossfadeSeconds:     envFloat64("orpheus_crossfade_seconds", 3),
 	}
 
 	if err := cfg.Validate(); err != nil {
