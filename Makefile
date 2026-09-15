@@ -1,4 +1,4 @@
-.PHONY: test vet lint check build fix
+.PHONY: test vet lint check build fix fmt
 
 build:
 	go build -o orpheus ./cmd/orpheus
@@ -15,7 +15,10 @@ vet:
 fix:
 	go fix ./...
 
+fmt:
+	go fmt ./...
+
 lint:
 	golangci-lint run --timeout=5m
 
-check: fix test vet lint
+check: fix fmt test vet lint

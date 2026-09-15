@@ -20,6 +20,7 @@ import (
 	"orpheus/internal/spotify"
 	"orpheus/internal/tui"
 
+	"github.com/elxgy/go-librespot/sessionconfig"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/oauth2"
 )
@@ -177,7 +178,9 @@ func runCheck(ctx context.Context, authManager *auth.Manager, token *oauth2.Toke
 	notifyingSource := auth.NewNotifyingTokenSourceWithInitial(
 		baseTokenSource,
 		func(newToken *oauth2.Token) {
-			_ = authManager.SaveToken(newToken)
+			if saveErr := authManager.SaveToken(newToken); saveErr != nil {
+				slog.Warn("failed saving refreshed spotify token", "error", saveErr)
+			}
 		},
 		token.AccessToken,
 	)
@@ -266,19 +269,24 @@ func runCheck(ctx context.Context, authManager *auth.Manager, token *oauth2.Toke
 }
 
 func runLibrespotTUI() error {
-	configDir := os.Getenv("ORPHEUS_CONFIG_DIR")
-	if configDir == "" {
-		dir, err := os.UserConfigDir()
-		if err != nil {
-			return fmt.Errorf("config dir: %w", err)
-		}
-		configDir = filepath.Join(dir, "orpheus")
+	configDir, err := config.DefaultConfigDir()
+	if err != nil {
+		return fmt.Errorf("config dir: %w", err)
 	}
 
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		return fmt.Errorf("config dir: %w", err)
 	}
+
+	cfg, cfgErr := config.LoadFromEnv()
+	if cfgErr != nil {
+		slog.Warn("spotify config not fully loaded", "error", cfgErr)
+	}
+
 	logPath := os.Getenv("ORPHEUS_LOG_FILE")
+	if logPath == "" {
+		logPath = cfg.LogFile
+	}
 	if logPath == "" {
 		logPath = filepath.Join(configDir, "orpheus.log")
 	}
@@ -298,7 +306,7 @@ func runLibrespotTUI() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	sess, appState, err := librespot.NewSession(ctx, logger, librespot.SessionOptions{
+	sess, appState, err := sessionconfig.NewSessionFromConfigDir(ctx, logger, sessionconfig.Options{
 		ConfigDir:    configDir,
 		CallbackPort: 8080,
 		DeviceType:   "computer",
@@ -309,10 +317,12 @@ func runLibrespotTUI() error {
 	defer sess.Close()
 
 	librespotCfg := librespot.DefaultConfig()
-	librespotCfg.DeviceName = "orpheus"
+	if cfg.DeviceName != "" {
+		librespotCfg.DeviceName = cfg.DeviceName
+	}
 
 	playbackStateCh := make(chan *librespot.PlaybackStateUpdate, 32)
-	runtime, err := librespot.NewRuntime(librespotCfg, appState, logger, nil, playbackStateCh)
+	runtime, err := librespot.NewRuntime(librespotCfg, appState, logger, playbackStateCh)
 	if err != nil {
 		return err
 	}
@@ -327,23 +337,34 @@ func runLibrespotTUI() error {
 	go appPlayer.Run(ctx, tuiCmdCh)
 
 	tuiCfg := config.Config{
-		DeviceName:   librespotCfg.DeviceName,
-		PollInterval: 1500 * time.Millisecond,
-		NerdFonts:    false,
+		SpotifyClientID:      cfg.SpotifyClientID,
+		RedirectURI:          cfg.RedirectURI,
+		Scopes:               cfg.Scopes,
+		DeviceName:           librespotCfg.DeviceName,
+		DeviceResolutionMode: cfg.DeviceResolutionMode,
+		AllowActiveFallback:  cfg.AllowActiveFallback,
+		TokenPath:            cfg.TokenPath,
+		PollInterval:         cfg.PollInterval,
+		NerdFonts:            cfg.NerdFonts,
+		OnSongChange:         cfg.OnSongChange,
+		LogFile:              cfg.LogFile,
 	}
 
 	var catalog spotify.PlaylistCatalog
-	if cfg, cfgErr := config.LoadFromEnv(); cfgErr != nil {
+	if cfgErr != nil {
 		slog.Warn("spotify config not available, using librespot catalog", "error", cfgErr)
 	} else if authMgr, authErr := auth.NewPKCEManager(cfg, auth.NewFileTokenStore(cfg.TokenPath)); authErr != nil {
 		slog.Warn("spotify auth init failed, using librespot catalog", "error", authErr)
 	} else if token, tokenErr := authMgr.LoadToken(); tokenErr != nil || token == nil {
 		slog.Info("no spotify token found, using librespot catalog")
+		slog.Warn("library browsing limited to the session's Web API proxy; run 'orpheus auth login' to browse your full library")
 	} else {
 		oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, oauthHTTPClient())
 		baseTS := authMgr.TokenSource(oauthCtx, token)
 		ts := auth.NewNotifyingTokenSourceWithInitial(baseTS, func(t *oauth2.Token) {
-			_ = authMgr.SaveToken(t)
+			if saveErr := authMgr.SaveToken(t); saveErr != nil {
+				slog.Warn("failed saving refreshed spotify token", "error", saveErr)
+			}
 		}, token.AccessToken)
 		spotifyClient := spotify.NewClient(oauthCtx, ts)
 		catalog = spotify.NewService(spotifyClient, spotify.Options{

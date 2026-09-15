@@ -2,7 +2,6 @@ package librespot
 
 import (
 	"context"
-	"strings"
 
 	golibrespot "github.com/elxgy/go-librespot"
 	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
@@ -31,65 +30,10 @@ func (p *AppPlayer) setCachedQueueMeta(id string, e PlaybackStateQueueEntry) {
 	p.queueMetaCache.Set(id, e)
 }
 
-func (p *AppPlayer) resetQueueMetaForContext(contextKey string) {
+func (p *AppPlayer) resetQueueMetaForContext() {
 	p.queueMetaMu.Lock()
-	if p.queueMetaCache == nil {
-		p.queueMetaCache = cache.NewLRU[string, PlaybackStateQueueEntry](8192)
-	}
-	p.queueMetaMu.Unlock()
-
-	p.queueResolveMu.Lock()
-	p.namePreloadContext = contextKey
-	p.namePreloadToken++
-	p.namePreloadDone = false
-	p.queueResolveInFlight = false
-	p.queueResolveMu.Unlock()
-}
-
-func (p *AppPlayer) claimContextNamePreload(contextKey string) (token uint64, ok bool) {
-	contextKey = strings.TrimSpace(contextKey)
-	if contextKey == "" {
-		return 0, false
-	}
-	p.queueResolveMu.Lock()
-	defer p.queueResolveMu.Unlock()
-	if p.namePreloadContext != contextKey {
-		p.namePreloadContext = contextKey
-		p.namePreloadToken++
-		p.namePreloadDone = false
-		p.queueResolveInFlight = false
-	}
-	if p.namePreloadDone || p.queueResolveInFlight {
-		return 0, false
-	}
-	p.queueResolveInFlight = true
-	return p.namePreloadToken, true
-}
-
-func (p *AppPlayer) finishContextNamePreload(contextKey string, token uint64) {
-	p.queueResolveMu.Lock()
-	defer p.queueResolveMu.Unlock()
-	if p.namePreloadContext == contextKey && p.namePreloadToken == token {
-		p.namePreloadDone = true
-	}
-	p.queueResolveInFlight = false
-}
-
-func (p *AppPlayer) checkNamePreloadStatus(contextKey string) bool {
-	p.queueResolveMu.Lock()
-	defer p.queueResolveMu.Unlock()
-	contextKey = strings.TrimSpace(contextKey)
-	if contextKey == "" {
-		return false
-	}
-	if p.namePreloadContext != contextKey {
-		p.namePreloadContext = contextKey
-		p.namePreloadToken++
-		p.namePreloadDone = false
-		p.queueResolveInFlight = false
-		return false
-	}
-	return p.namePreloadDone
+	defer p.queueMetaMu.Unlock()
+	p.queueMetaCache = cache.NewLRU[string, PlaybackStateQueueEntry](8192)
 }
 
 func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*connectpb.ProvidedTrack) {
@@ -136,7 +80,9 @@ func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*conn
 
 	batch, err := p.sess.Spclient().ResolveTrackOrEpisodeMetadataBatch(ctx, toResolve)
 	if err != nil {
-		p.runtime.Log.WithError(err).Warn("batch metadata resolution failed")
+		if ctx.Err() == nil {
+			p.runtime.Log.WithError(err).Warn("batch metadata resolution failed")
+		}
 		return
 	}
 	for uri, entry := range batch {

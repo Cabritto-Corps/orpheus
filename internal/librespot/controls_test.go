@@ -21,12 +21,6 @@ func TestCloseStreamWithCloser(t *testing.T) {
 	}
 }
 
-func TestCloseStreamWithoutCloser(t *testing.T) {
-	mock := &mockAudioSourceNoClose{}
-	s := &player.Stream{Source: mock}
-	closeStream(s) // should not panic
-}
-
 type mockAudioSource struct {
 	onClose func()
 }
@@ -40,12 +34,6 @@ func (m *mockAudioSource) Close() error {
 	}
 	return nil
 }
-
-type mockAudioSourceNoClose struct{}
-
-func (m *mockAudioSourceNoClose) SetPositionMs(int64) error   { return nil }
-func (m *mockAudioSourceNoClose) PositionMs() int64           { return 0 }
-func (m *mockAudioSourceNoClose) Read([]float32) (int, error) { return 0, nil }
 
 func TestStopAndResetTimerNil(t *testing.T) {
 	stopAndResetTimer(nil, time.Second) // should not panic

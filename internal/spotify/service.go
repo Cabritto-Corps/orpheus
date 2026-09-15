@@ -64,7 +64,6 @@ const (
 	apiRetryMaxAttempts                     = 4
 	apiRetryExponentCap                     = 5
 	rateLimitRetryDelay                     = 5 * time.Second
-	pollStatusBackoffMax                    = 10 * time.Second
 )
 
 type Options struct {
@@ -163,15 +162,6 @@ const (
 	ContextKindAlbum      = "album"
 	ContextKindLikedSongs = "liked-songs"
 )
-
-type DeviceDoctorReport struct {
-	TargetDevice string
-	Mode         DeviceMode
-	MatchedBy    string
-	MatchedName  string
-	Discovered   []string
-	Notes        []string
-}
 
 func DiagnoseError(err error) ErrorDiagnosis {
 	if err == nil {
@@ -349,10 +339,8 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 		t.mu.Unlock()
 
 		if d := time.Until(waitUntil); d > 0 {
-			select {
-			case <-req.Context().Done():
-				return nil, req.Context().Err()
-			case <-time.After(d):
+			if err := sleepWithContext(req.Context(), d); err != nil {
+				return nil, err
 			}
 		}
 
@@ -385,10 +373,8 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 		}
 		t.mu.Unlock()
 
-		select {
-		case <-req.Context().Done():
-			return nil, req.Context().Err()
-		case <-time.After(delay):
+		if err := sleepWithContext(req.Context(), delay); err != nil {
+			return nil, err
 		}
 	}
 }
@@ -488,36 +474,4 @@ func (s *Service) playerStateWithRetry(ctx context.Context) (*spotifyapi.PlayerS
 	return apiCallWithRetry(ctx, func() (*spotifyapi.PlayerState, error) {
 		return s.client.PlayerState(ctx)
 	})
-}
-
-func PollStatus(ctx context.Context, interval time.Duration, fetch func(context.Context) (*PlaybackStatus, error), onStatus func(*PlaybackStatus), onError func(error)) {
-	timer := time.NewTimer(0)
-	defer timer.Stop()
-
-	backoff := interval
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			status, err := fetch(ctx)
-			if err != nil {
-				onError(err)
-				if IsTransientAPIError(err) {
-					backoff *= 2
-					if backoff > pollStatusBackoffMax {
-						backoff = pollStatusBackoffMax
-					}
-					timer.Reset(backoff)
-					continue
-				}
-				backoff = interval
-				timer.Reset(interval)
-				continue
-			}
-			backoff = interval
-			onStatus(status)
-			timer.Reset(interval)
-		}
-	}
 }

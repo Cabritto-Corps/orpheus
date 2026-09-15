@@ -3,7 +3,6 @@ package librespot
 import (
 	"context"
 	"fmt"
-	"time"
 
 	golibrespot "github.com/elxgy/go-librespot"
 	"github.com/elxgy/go-librespot/player"
@@ -48,8 +47,9 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 			return golibrespot.NormalizeSpotifyId(track.Uri) == targetID
 		}
 		p.suppressEmit = true
-		defer func() { p.suppressEmit = false }()
-		if err := p.loadContext(ctx, spotCtx, skipTo, false, true); err != nil {
+		err = p.loadContext(ctx, spotCtx, skipTo, false, true)
+		p.suppressEmit = false
+		if err != nil {
 			return true, err
 		}
 		if p.state.tracks != nil {
@@ -60,64 +60,89 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 				}
 			}
 			p.state.tracks.WrapPlaybackFromCurrent()
-			p.syncPlayerTrackState(ctx, p.state.tracks, nil)
+			p.syncPlayerTrackState(p.state.tracks, nil)
 			p.emitPlaybackState()
 		}
 		return true, nil
 	case TUICommandGetContextTracks:
-		spotCtx, err := p.sess.Spclient().ContextResolve(ctx, cmd.URI)
-		if err != nil {
-			return true, fmt.Errorf("failed resolving context for tracks: %w", err)
-		}
-		ctxTracks, err := tracks.NewTrackListFromContext(ctx, p.runtime.Log, p.sess.Spclient(), spotCtx, 0)
-		if err != nil {
-			return true, fmt.Errorf("failed creating track list: %w", err)
-		}
-		allProvided := ctxTracks.AllTracks(ctx)
+		resultCh := cmd.ResultCh
+		reqToken := cmd.ReqToken
+		uri := cmd.URI
+		go func() {
+			bgCtx, cancel := context.WithTimeout(p.ownerContext(), contextTracksBgTimeout)
+			defer cancel()
 
-		trackURIs := make([]string, 0, len(allProvided))
-		result := make([]PlaybackStateQueueEntry, 0, len(allProvided))
-		for _, t := range allProvided {
-			if t == nil {
-				continue
-			}
-			id := golibrespot.NormalizeSpotifyId(t.Uri)
-			trackURIs = append(trackURIs, t.Uri)
-			result = append(result, PlaybackStateQueueEntry{ID: id, Name: "Unknown track", Artist: "-"})
-		}
-
-		if len(trackURIs) > 0 {
-			metaCtx, metaCancel := context.WithTimeout(ctx, 15*time.Second)
-			batchMeta, metaErr := p.sess.Spclient().ResolveTrackOrEpisodeMetadataBatch(metaCtx, trackURIs)
-			metaCancel()
-			if metaErr == nil {
-				for uri, entry := range batchMeta {
-					id := golibrespot.NormalizeSpotifyId(uri)
-					for i := range result {
-						if result[i].ID == id {
-							result[i].Name = entry.Name
-							artist := entry.Artist
-							if artist == "" {
-								artist = "-"
-							}
-							result[i].Artist = artist
-							result[i].DurationMS = entry.DurationMS
-							break
-						}
+			spotCtx, err := p.sess.Spclient().ContextResolve(bgCtx, uri)
+			if err != nil {
+				if bgCtx.Err() == nil {
+					p.runtime.Log.WithError(err).Error("failed resolving context for tracks")
+				}
+				if resultCh != nil {
+					select {
+					case resultCh <- ContextTracksResult{ReqToken: reqToken}:
+					default:
 					}
 				}
-			} else {
-				p.runtime.Log.WithError(metaErr).Warn("failed resolving track metadata batch for context tracks")
+				return
 			}
-		}
+			ctxTracks, err := tracks.NewTrackListFromContext(bgCtx, p.runtime.Log, p.sess.Spclient(), spotCtx, 0)
+			if err != nil {
+				if bgCtx.Err() == nil {
+					p.runtime.Log.WithError(err).Error("failed creating track list for context tracks")
+				}
+				if resultCh != nil {
+					select {
+					case resultCh <- ContextTracksResult{ReqToken: reqToken}:
+					default:
+					}
+				}
+				return
+			}
+			allProvided := ctxTracks.AllTracks(bgCtx)
 
-		if cmd.ResultCh != nil {
-			select {
-			case cmd.ResultCh <- result:
-			default:
-				p.runtime.Log.Warn("dropped context tracks result, no receiver")
+			trackURIs := make([]string, 0, len(allProvided))
+			result := make([]PlaybackStateQueueEntry, 0, len(allProvided))
+			for _, t := range allProvided {
+				if t == nil {
+					continue
+				}
+				id := golibrespot.NormalizeSpotifyId(t.Uri)
+				trackURIs = append(trackURIs, t.Uri)
+				result = append(result, PlaybackStateQueueEntry{ID: id, Name: "Unknown track", Artist: "-"})
 			}
-		}
+
+			if len(trackURIs) > 0 {
+				metaCtx, metaCancel := context.WithTimeout(bgCtx, metadataBatchTimeout)
+				batchMeta, metaErr := p.sess.Spclient().ResolveTrackOrEpisodeMetadataBatch(metaCtx, trackURIs)
+				metaCancel()
+				if metaErr == nil {
+					byID := make(map[string]PlaybackStateQueueEntry, len(batchMeta))
+					for uri, entry := range batchMeta {
+						id := golibrespot.NormalizeSpotifyId(uri)
+						artist := entry.Artist
+						if artist == "" {
+							artist = "-"
+						}
+						byID[id] = PlaybackStateQueueEntry{ID: id, Name: entry.Name, Artist: artist, DurationMS: entry.DurationMS}
+					}
+					for i := range result {
+						if meta, ok := byID[result[i].ID]; ok {
+							result[i] = meta
+						}
+					}
+				} else if bgCtx.Err() == nil {
+					p.runtime.Log.WithError(metaErr).Warn("failed resolving track metadata batch for context tracks")
+				}
+			}
+
+			if bgCtx.Err() == nil && resultCh != nil {
+				select {
+				case resultCh <- ContextTracksResult{ReqToken: reqToken, Entries: result}:
+				default:
+					p.runtime.Log.Warn("dropped context tracks result, no receiver")
+				}
+			}
+		}()
 		return true, nil
 	default:
 		return false, nil

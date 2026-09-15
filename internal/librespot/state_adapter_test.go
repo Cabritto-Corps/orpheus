@@ -125,3 +125,23 @@ func TestFallbackQueueLabel(t *testing.T) {
 		t.Fatalf("expected 'Unknown track', got %s", got)
 	}
 }
+
+func TestBuildPlaybackStateUpdateAlwaysSetsTrackID(t *testing.T) {
+	p := &AppPlayer{
+		runtime: &Runtime{Cfg: &Config{DeviceName: "test", VolumeSteps: 64}, DeviceId: "dev1"},
+		state: &State{
+			device: &connectpb.DeviceInfo{Volume: 32768},
+			player: &connectpb.PlayerState{
+				Track: &connectpb.ProvidedTrack{Uri: "spotify:track:7GhIk7Il098yCjg4BQjzvb"},
+			},
+		},
+	}
+	update := p.BuildPlaybackStateUpdate()
+	if update == nil {
+		t.Fatal("expected non-nil update")
+	}
+	expected := golibrespot.NormalizeSpotifyId("spotify:track:7GhIk7Il098yCjg4BQjzvb")
+	if update.TrackID != expected {
+		t.Fatalf("expected TrackID %q, got %q", expected, update.TrackID)
+	}
+}

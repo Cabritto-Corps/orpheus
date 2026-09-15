@@ -17,7 +17,7 @@
 
 4. After that, copy the client ID from the basic information tab
 
-5. Now create a .env file in the same directory as the executable and add the following line to it, replacing the client ID with your own
+5. Create a `.env` file containing the line below, replacing the client ID with your own. For a globally installed `orpheus` (e.g. on your `PATH`), put it at `~/.config/orpheus/.env` so it loads from any working directory. Otherwise place it next to the executable (the current directory is checked first).
 
 ```bash
 SPOTIFY_CLIENT_ID=your_client_id_here

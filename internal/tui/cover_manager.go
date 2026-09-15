@@ -17,6 +17,7 @@ type coverManager struct {
 	queue                 []string
 	queued                map[string]int
 	playerCoverFailStreak int
+	kittyRecoveryStreak   int
 }
 
 func newCoverManager() coverManager {
@@ -108,12 +109,12 @@ func (m *model) queueCoverResolveCmd(kind, id string) tea.Cmd {
 	if kind == "" || id == "" {
 		return nil
 	}
-	if !m.cover.queueResolve(kind, id) {
+	if !m.ui.cover.queueResolve(kind, id) {
 		return nil
 	}
 	cmd := m.resolveContextImageURLCmd(kind, id)
 	if cmd == nil {
-		m.cover.clearResolve(kind, id)
+		m.ui.cover.clearResolve(kind, id)
 		return nil
 	}
 	return cmd
@@ -124,7 +125,7 @@ func (m *model) queueMissingLibraryImageResolvesCmd(limit int) tea.Cmd {
 		return nil
 	}
 	items := make([]struct{ Kind, ID string }, 0, limit)
-	for _, item := range m.playlistList.Items() {
+	for _, item := range m.browse.playlistList.Items() {
 		if len(items) >= limit {
 			break
 		}
@@ -132,12 +133,12 @@ func (m *model) queueMissingLibraryImageResolvesCmd(limit int) tea.Cmd {
 		if !ok || strings.TrimSpace(pl.summary.ImageURL) != "" {
 			continue
 		}
-		if !m.cover.queueResolve(spotify.ContextKindPlaylist, pl.summary.ID) {
+		if !m.ui.cover.queueResolve(spotify.ContextKindPlaylist, pl.summary.ID) {
 			continue
 		}
 		items = append(items, struct{ Kind, ID string }{Kind: spotify.ContextKindPlaylist, ID: pl.summary.ID})
 	}
-	for _, item := range m.albumList.Items() {
+	for _, item := range m.browse.albumList.Items() {
 		if len(items) >= limit {
 			break
 		}
@@ -145,12 +146,20 @@ func (m *model) queueMissingLibraryImageResolvesCmd(limit int) tea.Cmd {
 		if !ok || strings.TrimSpace(al.summary.ImageURL) != "" {
 			continue
 		}
-		if !m.cover.queueResolve(spotify.ContextKindAlbum, al.summary.ID) {
+		if !m.ui.cover.queueResolve(spotify.ContextKindAlbum, al.summary.ID) {
 			continue
 		}
 		items = append(items, struct{ Kind, ID string }{Kind: spotify.ContextKindAlbum, ID: al.summary.ID})
 	}
-	return m.resolveContextImageURLsBatchCmd(items)
+	cmd := m.resolveContextImageURLsBatchCmd(items)
+	if cmd == nil {
+		// No loader: unmark the in-flight keys so they can be retried later.
+		for _, item := range items {
+			m.ui.cover.clearResolve(item.Kind, item.ID)
+		}
+		return nil
+	}
+	return cmd
 }
 
 func (m *model) queueResolvesForImageURLCmd(url string, limit int) tea.Cmd {
@@ -159,7 +168,7 @@ func (m *model) queueResolvesForImageURLCmd(url string, limit int) tea.Cmd {
 		return nil
 	}
 	cmds := make([]tea.Cmd, 0, limit)
-	for _, item := range m.playlistList.Items() {
+	for _, item := range m.browse.playlistList.Items() {
 		if len(cmds) >= limit {
 			break
 		}
@@ -171,7 +180,7 @@ func (m *model) queueResolvesForImageURLCmd(url string, limit int) tea.Cmd {
 			cmds = append(cmds, cmd)
 		}
 	}
-	for _, item := range m.albumList.Items() {
+	for _, item := range m.browse.albumList.Items() {
 		if len(cmds) >= limit {
 			break
 		}
@@ -187,7 +196,7 @@ func (m *model) queueResolvesForImageURLCmd(url string, limit int) tea.Cmd {
 }
 
 func (m *model) enqueueCoverURL(url string) {
-	m.cover.enqueueURL(url)
+	m.ui.cover.enqueueURL(url)
 }
 
 func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
@@ -195,15 +204,15 @@ func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
 		limit = coverQueueDrainBatch
 	}
 	urls := make([]string, 0, limit)
-	if m.status != nil {
-		playerURL := strings.TrimSpace(m.status.AlbumImageURL)
-		if playerURL != "" && m.cover.removeFromQueue(playerURL) && m.imgs.shouldQueueLoad(playerURL) {
+	if m.transport.status != nil {
+		playerURL := strings.TrimSpace(m.transport.status.AlbumImageURL)
+		if playerURL != "" && m.ui.cover.removeFromQueue(playerURL) && m.ui.imgs.shouldQueueLoad(playerURL) {
 			urls = append(urls, playerURL)
 		}
 	}
-	for len(m.cover.queue) > 0 && len(urls) < limit {
-		url, _ := m.cover.popURL()
-		if !m.imgs.shouldQueueLoad(url) {
+	for len(m.ui.cover.queue) > 0 && len(urls) < limit {
+		url, _ := m.ui.cover.popURL()
+		if !m.ui.imgs.shouldQueueLoad(url) {
 			continue
 		}
 		urls = append(urls, url)
@@ -211,21 +220,37 @@ func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
 	return m.loadImagesBatchCmd(urls)
 }
 
+func (m *model) maybeRecoverKittyProtocol() {
+	if m.ui.imgs == nil || m.ui.imgs.protocol == imageProtocolKitty {
+		return
+	}
+	// Recovery: after a healthy streak of successful loads while kitty is
+	// disabled, give it another chance instead of staying in half-block mode
+	// for the whole session.
+	m.ui.cover.kittyRecoveryStreak++
+	if m.ui.cover.kittyRecoveryStreak >= kittyProtocolRecoveryStreak {
+		m.ui.imgs.setProtocol(imageProtocolKitty)
+		m.ui.cover.kittyRecoveryStreak = 0
+		slog.Info("re-enabling kitty image protocol after recovery streak")
+	}
+}
+
 func (m *model) maybeFallbackFromKittyOnPlayerFailures(url string) {
-	if m.imgs == nil || m.imgs.protocol != imageProtocolKitty {
+	if m.ui.imgs == nil || m.ui.imgs.protocol != imageProtocolKitty {
 		return
 	}
-	if m.status == nil || strings.TrimSpace(m.status.AlbumImageURL) == "" {
+	if m.transport.status == nil || strings.TrimSpace(m.transport.status.AlbumImageURL) == "" {
 		return
 	}
-	if strings.TrimSpace(m.status.AlbumImageURL) != strings.TrimSpace(url) {
+	if strings.TrimSpace(m.transport.status.AlbumImageURL) != strings.TrimSpace(url) {
 		return
 	}
-	if m.cover.playerCoverFailStreak < kittyProtocolFallbackFailures {
+	if m.ui.cover.playerCoverFailStreak < kittyProtocolFallbackFailures {
 		return
 	}
-	m.imgs.protocol = imageProtocolNone
-	m.cover.playerCoverFailStreak = 0
+	m.ui.imgs.setProtocol(imageProtocolNone)
+	m.ui.cover.playerCoverFailStreak = 0
+	m.ui.cover.kittyRecoveryStreak = 0
 	slog.Warn("disabling kitty image protocol after repeated player cover failures", "url", url)
 }
 
@@ -239,8 +264,8 @@ func (m *model) applyResolvedContextImageURL(kind, id, imageURL string) bool {
 	updated := false
 	switch kind {
 	case spotify.ContextKindPlaylist:
-		items := m.playlistList.Items()
-		prevIndex := m.playlistList.GlobalIndex()
+		items := m.browse.playlistList.Items()
+		prevIndex := m.browse.playlistList.GlobalIndex()
 		for i, item := range items {
 			pl, ok := item.(playlistItem)
 			if !ok || pl.summary.ID != id {
@@ -255,16 +280,16 @@ func (m *model) applyResolvedContextImageURL(kind, id, imageURL string) bool {
 			break
 		}
 		if updated {
-			if m.playlistList.FilterState() == list.Unfiltered {
-				m.playlistList.SetItems(items)
+			if m.browse.playlistList.FilterState() == list.Unfiltered {
+				m.browse.playlistList.SetItems(items)
 				if len(items) > 0 {
-					m.playlistList.Select(clampInt(prevIndex, 0, len(items)-1))
+					m.browse.playlistList.Select(clampInt(prevIndex, 0, len(items)-1))
 				}
 			}
 		}
 	case spotify.ContextKindAlbum:
-		items := m.albumList.Items()
-		prevIndex := m.albumList.GlobalIndex()
+		items := m.browse.albumList.Items()
+		prevIndex := m.browse.albumList.GlobalIndex()
 		for i, item := range items {
 			al, ok := item.(playlistItem)
 			if !ok || al.summary.ID != id {
@@ -279,10 +304,10 @@ func (m *model) applyResolvedContextImageURL(kind, id, imageURL string) bool {
 			break
 		}
 		if updated {
-			if m.albumList.FilterState() == list.Unfiltered {
-				m.albumList.SetItems(items)
+			if m.browse.albumList.FilterState() == list.Unfiltered {
+				m.browse.albumList.SetItems(items)
 				if len(items) > 0 {
-					m.albumList.Select(clampInt(prevIndex, 0, len(items)-1))
+					m.browse.albumList.Select(clampInt(prevIndex, 0, len(items)-1))
 				}
 			}
 		}

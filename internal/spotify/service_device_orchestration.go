@@ -32,41 +32,10 @@ func (s *Service) FindDeviceByName(ctx context.Context, target string) (*spotify
 		if time.Now().After(deadline) {
 			return nil, err
 		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(deviceLookupRetryDelay):
+		if err := sleepWithContext(ctx, deviceLookupRetryDelay); err != nil {
+			return nil, err
 		}
 	}
-}
-
-func (s *Service) DeviceDoctor(ctx context.Context, target string) (*DeviceDoctorReport, error) {
-	devices, err := s.getPlayerDevices(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch spotify devices: %w", err)
-	}
-	report := &DeviceDoctorReport{
-		TargetDevice: target,
-		Mode:         s.mode,
-		Discovered:   make([]string, 0, len(devices)),
-	}
-	for _, d := range devices {
-		report.Discovered = append(report.Discovered, fmt.Sprintf("%s (active=%t restricted=%t)", d.Name, d.Active, d.Restricted))
-	}
-	device, matchedBy, resolveErr := s.resolveDevice(target, devices)
-	if resolveErr != nil {
-		report.Notes = append(report.Notes, "No device match. Check that the target device is running and spotify_device_name matches.")
-		return report, resolveErr
-	}
-	report.MatchedBy = matchedBy
-	report.MatchedName = device.Name
-	if device.Restricted {
-		report.Notes = append(report.Notes, "Matched device is restricted and cannot receive commands.")
-	}
-	if !device.Active {
-		report.Notes = append(report.Notes, "Device is discoverable but not active; transfer will be attempted on play actions.")
-	}
-	return report, nil
 }
 
 func (s *Service) EnsureDeviceActive(ctx context.Context, target string) (*spotifyapi.PlayerDevice, error) {
@@ -203,12 +172,10 @@ func (s *Service) transferWithRetry(ctx context.Context, deviceID spotifyapi.ID)
 		if !IsTransientAPIError(err) {
 			return err
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(wait):
-			wait *= 2
+		if err := sleepWithContext(ctx, wait); err != nil {
+			return err
 		}
+		wait *= 2
 	}
 	return errors.New("transfer playback failed after retries")
 }

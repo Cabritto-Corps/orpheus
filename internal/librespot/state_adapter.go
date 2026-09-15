@@ -1,18 +1,20 @@
 package librespot
 
 import (
-	"context"
 	"strconv"
 	"strings"
-	"time"
 
 	golibrespot "github.com/elxgy/go-librespot"
 	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
 )
 
-const queueOverrideMaxTracks = 500
+const queueOverrideMaxTracks = 64
 
 func (p *AppPlayer) BuildPlaybackStateUpdate() *PlaybackStateUpdate {
+	return p.buildPlaybackStateUpdate(true)
+}
+
+func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUpdate {
 	if p.state == nil || p.state.player == nil {
 		return nil
 	}
@@ -32,21 +34,31 @@ func (p *AppPlayer) BuildPlaybackStateUpdate() *PlaybackStateUpdate {
 		RepeatTrack:   p.state.player.Options != nil && p.state.player.Options.RepeatingTrack,
 	}
 
-	if p.state.tracks != nil {
-		ctx, cancel := context.WithTimeout(p.ownerContext(), 8*time.Second)
-		defer cancel()
-		upcoming := p.state.tracks.UpcomingTracks(ctx, queueOverrideMaxTracks)
-		out.Queue = providedTracksToQueueEntries(p, upcoming)
-		out.QueueHasMore = len(upcoming) >= queueOverrideMaxTracks
+	if includeQueue {
+		out.QueueIncluded = true
+		if p.state.tracks != nil {
+			// Loaded-only read: this runs on the Run goroutine where a page
+			// fetch would stall the select loop (B3). The queue top-up timer
+			// extends the loaded pages off the emit path.
+			upcoming := p.state.tracks.UpcomingTracksLoaded(queueOverrideMaxTracks)
+			out.Queue = providedTracksToQueueEntries(p, upcoming)
+			out.QueueHasMore = len(upcoming) >= queueOverrideMaxTracks
+			if out.QueueHasMore {
+				p.scheduleQueueTopUp()
+			}
+		} else {
+			out.Queue = nil
+			out.QueueHasMore = false
+		}
 	}
 
-	if p.primaryStream == nil && p.state.player.Track != nil {
+	if p.state.player.Track != nil {
 		out.TrackID = golibrespot.NormalizeSpotifyId(p.state.player.Track.Uri)
-		if p.state.player.Track.Metadata != nil {
-			out.TrackName = metadataValue(p.state.player.Track.Metadata, "title", "name", "track_name")
-			out.ArtistName = metadataValue(p.state.player.Track.Metadata, "artist_name", "artist", "artists", "show_name")
-			out.AlbumName = metadataValue(p.state.player.Track.Metadata, "album_title", "album_name", "album")
-		}
+	}
+	if p.primaryStream == nil && p.state.player.Track != nil && p.state.player.Track.Metadata != nil {
+		out.TrackName = metadataValue(p.state.player.Track.Metadata, "title", "name", "track_name")
+		out.ArtistName = metadataValue(p.state.player.Track.Metadata, "artist_name", "artist", "artists", "show_name")
+		out.AlbumName = metadataValue(p.state.player.Track.Metadata, "album_title", "album_name", "album")
 	}
 	if p.primaryStream != nil && p.prodInfo != nil {
 		durationMs := int64(p.primaryStream.Media.Duration())

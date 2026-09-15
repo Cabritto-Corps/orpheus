@@ -32,3 +32,6 @@ go.work.sum
 # .vscode/
 crashes/
 docs
+orpheus
+*.bin
+improvements-fixes/

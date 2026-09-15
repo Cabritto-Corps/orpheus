@@ -13,7 +13,6 @@ import (
 )
 
 func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) (*AppPlayer, error) {
-	countryCode := new(string)
 	volumeUpdate := make(chan float32, 1)
 
 	p := &AppPlayer{
@@ -21,9 +20,7 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 		sess:           sess,
 		baseCtx:        ctx,
 		stop:           make(chan struct{}, 1),
-		logout:         make(chan *AppPlayer, 1),
 		runDone:        make(chan struct{}),
-		countryCode:    countryCode,
 		volumeUpdate:   volumeUpdate,
 		prefetchJobs:   make(chan prefetchJob, 16),
 		prefetchDone:   make(chan prefetchResult, 16),
@@ -33,6 +30,11 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 	p.prefetchTimer.Stop()
 	p.shuffleRefreshTimer = time.NewTimer(math.MaxInt64)
 	p.shuffleRefreshTimer.Stop()
+	p.connectStateTimer = time.NewTimer(math.MaxInt64)
+	p.connectStateTimer.Stop()
+	p.queueTopUpTimer = time.NewTimer(math.MaxInt64)
+	p.queueTopUpTimer.Stop()
+	p.transitionCache = newTransitionCache()
 
 	p.initState()
 
@@ -45,7 +47,7 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 		NormalisationEnabled:      true,
 		NormalisationUseAlbumGain: false,
 		NormalisationPregain:      0,
-		CountryCode:               countryCode,
+		CountryCode:               new(string),
 		AudioBackend:              runtime.Cfg.AudioBackend,
 		AudioDevice:               runtime.Cfg.AudioDevice,
 		MixerDevice:               runtime.Cfg.MixerDevice,

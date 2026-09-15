@@ -3,6 +3,8 @@ package tui
 import (
 	"image"
 	"image/color"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 const likedSongsImageURL = "orpheus://liked-songs"
@@ -12,7 +14,7 @@ func generateLikedSongsImage(size int) image.Image {
 		size = 2
 	}
 
-	ssFactor := 16
+	ssFactor := 4
 	ssSize := size * ssFactor
 	ssImg := image.NewRGBA(image.Rect(0, 0, ssSize, ssSize))
 
@@ -96,10 +98,17 @@ func lerp4(tl, tr, bl, br uint8, tx, ty float64) uint8 {
 const likedSongsArtSize = 600
 
 func (m *model) preloadLikedSongsArt() {
-	if m.imgs == nil {
+	if m.ui.imgs == nil {
 		return
 	}
 	img := generateLikedSongsImage(likedSongsArtSize)
-	m.imgs.setImage(likedSongsImageURL, img, likedSongsArtSize, likedSongsArtSize)
-	m.imgs.pinURL(likedSongsImageURL)
+	m.ui.imgs.setImage(likedSongsImageURL, img, likedSongsArtSize, likedSongsArtSize)
+	m.ui.imgs.pinURL(likedSongsImageURL)
+}
+
+func preloadLikedSongsArtCmd(m model) tea.Cmd {
+	return func() tea.Msg {
+		m.preloadLikedSongsArt()
+		return nil
+	}
 }

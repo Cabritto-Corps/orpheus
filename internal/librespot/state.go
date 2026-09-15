@@ -59,8 +59,36 @@ func (p *AppPlayer) initState() {
 	p.state.reset()
 }
 
-func (p *AppPlayer) updateState(ctx context.Context) {
-	if err := p.putConnectState(ctx, connectpb.PutStateReason_PLAYER_STATE_CHANGED); err != nil {
+func (p *AppPlayer) updateState() {
+	p.scheduleConnectState(connectpb.PutStateReason_PLAYER_STATE_CHANGED)
+}
+
+func (p *AppPlayer) scheduleConnectState(reason connectpb.PutStateReason) {
+	if p == nil {
+		return
+	}
+	if p.connectStateTimer == nil {
+		ctx, cancel := context.WithTimeout(p.ownerContext(), shuffleContextTimeout)
+		defer cancel()
+		if err := p.putConnectState(ctx, reason); err != nil {
+			p.runtime.Log.WithError(err).Error("failed put state after update")
+		}
+		return
+	}
+	p.pendingConnectReason = reason
+	p.pendingConnectPut = true
+	stopAndResetTimer(p.connectStateTimer, connectStateDebounce)
+}
+
+func (p *AppPlayer) flushConnectState() {
+	if p == nil || !p.pendingConnectPut {
+		return
+	}
+	reason := p.pendingConnectReason
+	p.pendingConnectPut = false
+	ctx, cancel := context.WithTimeout(p.ownerContext(), shuffleContextTimeout)
+	defer cancel()
+	if err := p.putConnectState(ctx, reason); err != nil {
 		p.runtime.Log.WithError(err).Error("failed put state after update")
 	}
 }

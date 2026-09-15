@@ -27,7 +27,21 @@ import (
 	"orpheus/internal/cache"
 )
 
-const volumeUpdateDebounce = 100 * time.Millisecond
+const (
+	volumeUpdateDebounce = 100 * time.Millisecond
+	connectStateDebounce = 75 * time.Millisecond
+
+	// queueTopUpDelay keeps the bounded extending fetch off the same Run
+	// iteration as the dealer reply that triggered the emit.
+	queueTopUpDelay = 250 * time.Millisecond
+
+	// endGuardMaxFailures bounds the end-of-track guard's retry loop before
+	// it surfaces the stuck state instead of retrying forever.
+	endGuardMaxFailures = 3
+
+	// stateReconcileInterval is the push-mode self-heal period.
+	stateReconcileInterval = 30 * time.Second
+)
 
 type AppPlayer struct {
 	runtime *Runtime
@@ -35,7 +49,6 @@ type AppPlayer struct {
 	baseCtx context.Context
 
 	stop      chan struct{}
-	logout    chan *AppPlayer
 	runDone   chan struct{}
 	closeOnce sync.Once
 
@@ -47,8 +60,7 @@ type AppPlayer struct {
 
 	suppressEmit bool
 
-	prodInfo    *ap.ProductInfo
-	countryCode *string
+	prodInfo *ap.ProductInfo
 
 	state           *State
 	primaryStream   *player.Stream
@@ -56,13 +68,16 @@ type AppPlayer struct {
 
 	prefetchTimer       *time.Timer
 	shuffleRefreshTimer *time.Timer
+	connectStateTimer   *time.Timer
+	queueTopUpTimer     *time.Timer
+	queueTopUpInFlight  bool
 	prefetchJobs        chan prefetchJob
 	prefetchDone        chan prefetchResult
 
-	transitionStreamMu    sync.Mutex
-	transitionStreamCache map[string]*player.Stream
-	transitionStreamOrder []string
-	prefetchPending       map[string]struct{}
+	pendingConnectPut    bool
+	pendingConnectReason connectpb.PutStateReason
+
+	transitionCache       *transitionCache
 	prefetchGen           atomic.Uint64
 	shuffleRefreshPending bool
 	shuffleRefreshGen     uint64
@@ -70,13 +85,9 @@ type AppPlayer struct {
 	queueMetaCache *cache.LRU[string, PlaybackStateQueueEntry]
 	queueMetaMu    sync.RWMutex
 
-	queueResolveMu       sync.Mutex
-	queueResolveInFlight bool
-	namePreloadContext   string
-	namePreloadToken     uint64
-	namePreloadDone      bool
-
-	advanceInFlight atomic.Bool
+	advanceInFlight       atomic.Bool
+	connectionLostEmitted atomic.Bool
+	endGuardFailures      int
 }
 
 func (p *AppPlayer) setRunContext(ctx context.Context) {
@@ -168,7 +179,10 @@ func (p *AppPlayer) handleAccesspointPacket(pktType ap.PacketType, payload []byt
 		p.prodInfo = &prod
 		return nil
 	case ap.PacketTypeCountryCode:
-		*p.countryCode = string(payload)
+		// The fork's player reads the country code from its own goroutines;
+		// route the update through its atomic setter instead of writing the
+		// shared pointer here.
+		p.player.SetCountryCode(string(payload))
 		return nil
 	default:
 		return nil
@@ -176,7 +190,7 @@ func (p *AppPlayer) handleAccesspointPacket(pktType ap.PacketType, payload []byt
 }
 
 func (p *AppPlayer) handleDealerMessage(ctx context.Context, msg dealer.Message) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, spclientTimeout)
 	defer cancel()
 	if strings.HasPrefix(msg.Uri, "hm://pusher/v1/connections/") {
 		p.spotConnId = msg.Headers["Spotify-Connection-Id"]
@@ -198,12 +212,6 @@ func (p *AppPlayer) handleDealerMessage(ctx context.Context, msg dealer.Message)
 			return fmt.Errorf("failed unmarshalling SetVolumeCommand: %w", err)
 		}
 		p.updateVolume(uint32(setVolCmd.Volume))
-	} else if strings.HasPrefix(msg.Uri, "hm://connect-state/v1/connect/logout") {
-		p.runtime.Log.WithField("username", golibrespot.ObfuscateUsername(p.sess.Username())).Debugf("requested logout")
-		select {
-		case p.logout <- p:
-		default:
-		}
 	} else if strings.HasPrefix(msg.Uri, "hm://connect-state/v1/cluster") {
 		var clusterUpdate connectpb.ClusterUpdate
 		if err := proto.Unmarshal(msg.Payload, &clusterUpdate); err != nil {
@@ -228,12 +236,17 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 	switch req.Command.Endpoint {
 	case "transfer":
 		if len(req.Command.Data) == 0 {
-			p.runtime.Emit(&ApiEvent{Type: ApiEventTypeActive})
 			return nil
 		}
 		var transferState connectpb.TransferState
 		if err := proto.Unmarshal(req.Command.Data, &transferState); err != nil {
 			return fmt.Errorf("failed unmarshalling TransferState: %w", err)
+		}
+		if transferState.CurrentSession == nil || transferState.CurrentSession.Context == nil {
+			return fmt.Errorf("transfer state without current session context")
+		}
+		if transferState.Options == nil {
+			transferState.Options = &connectpb.ContextPlayerOptions{}
 		}
 		p.state.lastTransferTimestamp = transferState.Playback.Timestamp
 		ctxTracks, err := tracks.NewTrackListFromContext(ctx, p.runtime.Log, p.sess.Spclient(), transferState.CurrentSession.Context, 0)
@@ -275,33 +288,42 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 			return fmt.Errorf("failed shuffling context")
 		}
 		p.state.queueID = 0
-		for _, track := range transferState.Queue.Tracks {
-			if track.Uid == "" || track.Uid[0] != 'q' {
-				continue
+		if transferState.Queue != nil {
+			for _, track := range transferState.Queue.Tracks {
+				if track.Uid == "" || track.Uid[0] != 'q' {
+					continue
+				}
+				n, err := strconv.ParseUint(track.Uid[1:], 10, 64)
+				if err != nil {
+					continue
+				}
+				p.state.queueID = max(p.state.queueID, n)
 			}
-			n, err := strconv.ParseUint(track.Uid[1:], 10, 64)
-			if err != nil {
-				continue
+			for _, track := range transferState.Queue.Tracks {
+				ctxTracks.AddToQueue(track)
 			}
-			p.state.queueID = max(p.state.queueID, n)
+			ctxTracks.SetPlayingQueue(transferState.Queue.IsPlayingQueue)
 		}
-		for _, track := range transferState.Queue.Tracks {
-			ctxTracks.AddToQueue(track)
-		}
-		ctxTracks.SetPlayingQueue(transferState.Queue.IsPlayingQueue)
 		p.state.tracks = ctxTracks
-		p.syncPlayerTrackState(ctx, ctxTracks, nil)
-		p.resetQueueMetaForContext(strings.TrimSpace(p.state.player.ContextUri))
+		p.syncPlayerTrackState(ctxTracks, nil)
+		p.resetQueueMetaForContext()
+		p.resetPlaybackCaches(true)
 		if err := p.loadCurrentTrack(ctx, pause, true); err != nil {
 			return fmt.Errorf("failed loading current track (transfer): %w", err)
 		}
-		p.runtime.Emit(&ApiEvent{Type: ApiEventTypeActive})
+		p.scheduleQueueTopUp()
 		return nil
 	case "play":
+		if req.Command.Context == nil {
+			return fmt.Errorf("play command without context")
+		}
 		p.state.setActive(true)
 		p.state.player.PlayOrigin = req.Command.PlayOrigin
 		p.state.player.PlayOrigin.DeviceIdentifier = req.SentByDeviceId
 		p.state.player.Suppressions = req.Command.Options.Suppressions
+		if p.state.player.Options == nil {
+			p.state.player.Options = &connectpb.ContextPlayerOptions{}
+		}
 		if req.Command.Options.PlayerOptionsOverride != nil {
 			p.state.player.Options.ShufflingContext = req.Command.Options.PlayerOptionsOverride.ShufflingContext
 			p.state.player.Options.RepeatingTrack = req.Command.Options.PlayerOptionsOverride.RepeatingTrack
@@ -356,7 +378,7 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 	case "skip_next":
 		return p.skipNext(ctx, req.Command.Track)
 	case "update_context":
-		if req.Command.Context.Uri != p.state.player.ContextUri {
+		if req.Command.Context == nil || req.Command.Context.Uri != p.state.player.ContextUri {
 			p.runtime.Log.Warnf("ignoring context update for wrong uri: %s", req.Command.Context.Uri)
 			return nil
 		}
@@ -365,7 +387,7 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 			p.state.player.ContextMetadata = map[string]string{}
 		}
 		maps.Copy(p.state.player.ContextMetadata, req.Command.Context.Metadata)
-		p.updateState(ctx)
+		p.updateState()
 		return nil
 	case "set_repeating_context":
 		val, ok := req.Command.Value.(bool)
@@ -402,7 +424,7 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 }
 
 func (p *AppPlayer) handleDealerRequest(ctx context.Context, req dealer.Request) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, contextResolveTimeout)
 	defer cancel()
 	switch req.MessageIdent {
 	case "hm://connect-state/v1/player/command":
@@ -414,7 +436,7 @@ func (p *AppPlayer) handleDealerRequest(ctx context.Context, req dealer.Request)
 }
 
 func (p *AppPlayer) handleTUICommand(ctx context.Context, cmd TUICommand) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, contextResolveTimeout)
 	defer cancel()
 	if handled, err := p.handleTUIContextCommand(ctx, cmd); handled || err != nil {
 		return err
@@ -426,10 +448,26 @@ func (p *AppPlayer) handleTUICommand(ctx context.Context, cmd TUICommand) error 
 }
 
 func (p *AppPlayer) emitPlaybackState() {
+	p.emitPlaybackStateWithQueue(true)
+}
+
+func (p *AppPlayer) emitPlaybackStateLight() {
+	p.emitPlaybackStateWithQueue(false)
+}
+
+func (p *AppPlayer) emitConnectionLost(reason string) {
+	if p.connectionLostEmitted.Swap(true) {
+		return
+	}
+	p.runtime.Log.Errorf("connection lost: %s", reason)
+	p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "connection lost: " + reason})
+}
+
+func (p *AppPlayer) emitPlaybackStateWithQueue(includeQueue bool) {
 	if p.suppressEmit {
 		return
 	}
-	u := p.BuildPlaybackStateUpdate()
+	u := p.buildPlaybackStateUpdate(includeQueue)
 	if u != nil {
 		p.runtime.EmitPlaybackState(u)
 	}
@@ -448,6 +486,8 @@ func (p *AppPlayer) Close() {
 		p.clearTransitionStreamCache()
 		p.prefetchTimer.Stop()
 		p.shuffleRefreshTimer.Stop()
+		p.connectStateTimer.Stop()
+		p.queueTopUpTimer.Stop()
 		p.player.Close()
 	})
 }
@@ -474,6 +514,8 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 	volumeTimer.Stop()
 	endTransitionGuardTicker := time.NewTicker(endTransitionGuardInterval)
 	defer endTransitionGuardTicker.Stop()
+	reconcileTicker := time.NewTicker(stateReconcileInterval)
+	defer reconcileTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -482,6 +524,7 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			return
 		case pkt, ok := <-apRecv:
 			if !ok {
+				apRecv = nil
 				continue
 			}
 			if err := p.handleAccesspointPacket(pkt.Type, pkt.Payload); err != nil {
@@ -489,6 +532,8 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			}
 		case msg, ok := <-msgRecv:
 			if !ok {
+				msgRecv = nil
+				p.emitConnectionLost("dealer message channel closed")
 				continue
 			}
 			if err := p.handleDealerMessage(ctx, msg); err != nil {
@@ -496,6 +541,8 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			}
 		case req, ok := <-reqRecv:
 			if !ok {
+				reqRecv = nil
+				p.emitConnectionLost("dealer request channel closed")
 				continue
 			}
 			if err := p.handleDealerRequest(ctx, req); err != nil {
@@ -506,6 +553,7 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			}
 		case cmd, ok := <-tuiCmdCh:
 			if !ok {
+				tuiCmdCh = nil
 				continue
 			}
 			if err := p.handleTUICommand(ctx, cmd); err != nil {
@@ -513,6 +561,7 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			}
 		case ev, ok := <-playerRecv:
 			if !ok {
+				playerRecv = nil
 				continue
 			}
 			p.handlePlayerEvent(ctx, &ev)
@@ -523,12 +572,33 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 		case res := <-p.prefetchDone:
 			p.handlePrefetchResult(res)
 		case volume := <-p.volumeUpdate:
+			// Coalesce bursts: only the most recent value matters.
+		drain:
+			for {
+				select {
+				case v := <-p.volumeUpdate:
+					volume = v
+				default:
+					break drain
+				}
+			}
 			p.state.device.Volume = uint32(math.Round(float64(volume * player.MaxStateVolume)))
 			volumeTimer.Reset(volumeUpdateDebounce)
 		case <-volumeTimer.C:
 			p.volumeUpdated(ctx)
+		case <-p.connectStateTimer.C:
+			p.flushConnectState()
+		case <-p.queueTopUpTimer.C:
+			p.topUpQueue(ctx)
 		case <-endTransitionGuardTicker.C:
 			p.maybeAdvanceOnTrackEndGuard()
+		case <-reconcileTicker.C:
+			// Push-mode backstop: a dropped playbackStateCh send would
+			// otherwise leave the TUI stale until the next event. Cheap:
+			// the light path reads only in-memory state, no network.
+			if p.state != nil && p.state.player != nil && p.state.player.ContextUri != "" {
+				p.emitPlaybackStateLight()
+			}
 		}
 	}
 }

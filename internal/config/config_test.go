@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -152,5 +154,60 @@ func TestSplitCSV(t *testing.T) {
 	got = splitCSV("single")
 	if len(got) != 1 || got[0] != "single" {
 		t.Fatalf("unexpected: %v", got)
+	}
+}
+
+func TestLoadEnvFileFallsBackToConfigDir(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "orpheus")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	envPath := filepath.Join(configDir, ".env")
+	if err := os.WriteFile(envPath, []byte("ORPHEUS_TEST_FROM_CONFIG_DIR=from-config-env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ORPHEUS_CONFIG_DIR", configDir)
+	os.Unsetenv("ORPHEUS_TEST_FROM_CONFIG_DIR")
+
+	emptyDir := t.TempDir()
+	t.Chdir(emptyDir)
+
+	loadEnvFile()
+
+	if got := os.Getenv("ORPHEUS_TEST_FROM_CONFIG_DIR"); got != "from-config-env" {
+		t.Fatalf("expected env var from config-dir .env, got %q", got)
+	}
+}
+
+func TestLoadEnvFileCwdTakesPrecedence(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "orpheus")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, ".env"), []byte("ORPHEUS_PRECEDENCE_TEST=from-config\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cwdDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwdDir, ".env"), []byte("ORPHEUS_PRECEDENCE_TEST=from-cwd\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ORPHEUS_CONFIG_DIR", configDir)
+	os.Unsetenv("ORPHEUS_PRECEDENCE_TEST")
+	t.Chdir(cwdDir)
+
+	loadEnvFile()
+
+	if got := os.Getenv("ORPHEUS_PRECEDENCE_TEST"); got != "from-cwd" {
+		t.Fatalf("expected cwd .env to take precedence, got %q", got)
+	}
+}
+
+func TestDefaultConfigDirRespectsEnv(t *testing.T) {
+	t.Setenv("ORPHEUS_CONFIG_DIR", "/custom/orpheus")
+	got, err := DefaultConfigDir()
+	if err != nil || got != "/custom/orpheus" {
+		t.Fatalf("expected /custom/orpheus, got %q err=%v", got, err)
 	}
 }

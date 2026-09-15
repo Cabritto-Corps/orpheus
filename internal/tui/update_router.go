@@ -13,6 +13,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleTickMsg()
 	case playbackStateMsg:
 		return m.handlePlaybackStateMsg(msg)
+	case connectionLostMsg:
+		m.transport.playbackErr = msg.err
+		return m, nil
 	case pollMsg:
 		return m.handlePollMsg(msg)
 	case playlistsMsg:
@@ -41,6 +44,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleVolDebounceMsg(msg)
 	case seekDebounceMsg:
 		return m.handleSeekDebounceMsg(msg)
+	case tuiCmdRetryMsg:
+		return m.handleTUICmdRetryMsg(msg)
 	case trackPopupItemsMsg:
 		return m.handleTrackPopupItemsMsg(msg)
 	case list.FilterMatchesMsg:

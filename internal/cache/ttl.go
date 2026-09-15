@@ -75,10 +75,6 @@ func (c *TTL[K, V]) Capacity() int {
 	return c.lru.Capacity()
 }
 
-func (c *TTL[K, V]) Stats() Stats {
-	return c.lru.Stats()
-}
-
 func (c *TTL[K, V]) Keys() []K {
 	keys := c.lru.Keys()
 	if c.ttl <= 0 {

@@ -4,8 +4,11 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -26,11 +29,7 @@ type Config struct {
 }
 
 func LoadFromEnv() (Config, error) {
-	if err := godotenv.Load(); err != nil {
-		if _, statErr := os.Stat(".env"); statErr == nil {
-			slog.Warn("failed to parse .env file", "error", err)
-		}
-	}
+	loadEnvFile()
 
 	cfg := Config{
 		SpotifyClientID:      envAny("spotify_client_id", "SPOTIFY_CLIENT_ID"),
@@ -41,7 +40,7 @@ func LoadFromEnv() (Config, error) {
 		AllowActiveFallback:  envBool("orpheus_allow_active_fallback", false),
 		TokenPath:            envDefault("orpheus_token_path", defaultTokenPath()),
 		PollInterval:         envDuration("orpheus_poll_interval", 1500*time.Millisecond),
-		NerdFonts:            envBool("orpheus_nerd_fonts", false),
+		NerdFonts:            resolveNerdFonts(os.Getenv("orpheus_nerd_fonts")),
 		OnSongChange:         envDefault("orpheus_on_song_change", ""),
 		LogFile:              envDefault("orpheus_log_file", defaultLogPath()),
 	}
@@ -110,9 +109,40 @@ func envBool(key string, fallback bool) bool {
 	}
 	v, err := strconv.ParseBool(raw)
 	if err != nil {
+		slog.Warn("invalid boolean value, using default", "key", key, "value", raw, "default", fallback)
 		return fallback
 	}
 	return v
+}
+
+// resolveNerdFonts honors explicit true/false and falls back to auto-detection
+// ("auto" or unset): Nerd Font glyphs can only render if a Nerd Font family is
+// installed and selectable by the terminal, so the fontconfig list is the best
+// available signal.
+func resolveNerdFonts(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return nerdFontsInstalled()
+	case "auto":
+		return nerdFontsInstalled()
+	case "true", "1", "yes", "on":
+		return true
+	case "false", "0", "no", "off":
+		return false
+	default:
+		slog.Warn("invalid orpheus_nerd_fonts value, auto-detecting", "value", raw)
+		return nerdFontsInstalled()
+	}
+}
+
+var nerdFontsInstalled = sync.OnceValue(detectNerdFontsInstalled)
+
+func detectNerdFontsInstalled() bool {
+	out, err := exec.Command("fc-list", ":", "family").Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(string(out)), "nerd font")
 }
 
 func envDuration(key string, fallback time.Duration) time.Duration {
@@ -122,6 +152,7 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 	}
 	v, err := time.ParseDuration(raw)
 	if err != nil {
+		slog.Warn("invalid duration value, using default", "key", key, "value", raw, "default", fallback)
 		return fallback
 	}
 	return v
@@ -140,18 +171,48 @@ func splitCSV(input string) []string {
 	return out
 }
 
+func DefaultConfigDir() (string, error) {
+	if v := strings.TrimSpace(os.Getenv("ORPHEUS_CONFIG_DIR")); v != "" {
+		return v, nil
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "orpheus"), nil
+}
+
+func loadEnvFile() {
+	if _, err := os.Stat(".env"); err == nil {
+		if loadErr := godotenv.Load(); loadErr != nil {
+			slog.Warn("failed to parse .env file", "error", loadErr)
+		}
+		return
+	}
+	dir, err := DefaultConfigDir()
+	if err != nil {
+		return
+	}
+	path := filepath.Join(dir, ".env")
+	if _, err := os.Stat(path); err == nil {
+		if loadErr := godotenv.Load(path); loadErr != nil {
+			slog.Warn("failed to parse .env file", "path", path, "error", loadErr)
+		}
+	}
+}
+
 func defaultTokenPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
+	dir, err := DefaultConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
 		return ".orpheus-token.json"
 	}
-	return home + "/.config/orpheus/token.json"
+	return filepath.Join(dir, "token.json")
 }
 
 func defaultLogPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
+	dir, err := DefaultConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
 		return ""
 	}
-	return home + "/.config/orpheus/orpheus.log"
+	return filepath.Join(dir, "orpheus.log")
 }
