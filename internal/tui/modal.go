@@ -118,10 +118,13 @@ func modalRow(label, value string, selected bool, width int) string {
 	if selected && width >= 40 {
 		rendered := styleModalSelectedRow.Render(row)
 		// Fragments inside the row (gauges, swatches) end with a reset that
-		// would let the box's panel re-assertion split the highlight;
-		// re-assert the selection bg here so it lands after the panel
-		// injection and wins inside the row.
-		return reassertBg(rendered, bgSequence(colorSelectionBg))
+		// would let the box's background re-assertion split the highlight;
+		// re-assert the selection bg after each so it wins inside the row,
+		// then close the span with the box's own background so the line
+		// never ends with the selection active — a line that ends on the
+		// selection bg spills it onto whatever is drawn after it.
+		return reassertBg(rendered, bgSequence(colorSelectionBg)) +
+			bgSequence(modalBoxBackground())
 	}
 	return row
 }
