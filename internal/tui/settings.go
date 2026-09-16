@@ -176,7 +176,6 @@ func (m model) handleSettingsTheme(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-
 func itoa64(v int64) string {
 	return strconv.FormatInt(v, 10)
 }
@@ -397,7 +396,7 @@ func (m model) themePickerView(modalW, innerH int) string {
 			marker = "✓"
 		}
 		bar := swatchBar(themeSwatches(colors))
-		row := fmt.Sprintf(" %s %-14s %s %s", marker, name, bar, lipgloss.Color(colors.Blue))
+		row := fmt.Sprintf(" %s %-14s %s", marker, name, bar)
 		rows = append(rows, modalRow(row, "", s.themeCursor == i, modalW))
 	}
 
@@ -479,7 +478,7 @@ func (m model) settingsModalView() string {
 
 func (m model) themeValue(preset string) string {
 	colors := resolveThemeColors(preset, loadThemeOverrides(m.ui.settings.themePath))
-	return preset + "  " + swatchBar(themeSwatches(colors)) + " " + colors.Blue
+	return preset + "  " + swatchBar(themeSwatches(colors))
 }
 
 func settingsActionLabel(action string) string {
