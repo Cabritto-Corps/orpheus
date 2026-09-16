@@ -189,8 +189,8 @@ func (m model) playerBarView() string {
 }
 
 func (m model) trackPopupView() string {
-	modalW := min(m.ui.width-8, 60)
-	innerH := max(8, m.ui.height-headerH-6)
+	modalW := m.ui.width - 4
+	innerH := max(8, m.ui.height-headerH-2)
 
 	title := styleTrackPopupTitle.Render("  " + m.ui.trackPopupName)
 
@@ -212,14 +212,20 @@ func (m model) trackPopupView() string {
 	return modalFrame(m.ui.width, m.ui.height, title, hint, body, modalW, innerH)
 }
 
+// helpModalSize is the single source for the help modal's dimensions so the
+// Update-side viewport rebuild and the View-side render can never drift.
+func helpModalSize(termW, termH int) (modalW, innerH, contentW int) {
+	modalW = termW - 4
+	innerH = max(6, termH-headerH-2)
+	contentW = max(12, modalW-4)
+	return modalW, innerH, contentW
+}
+
 // ensureHelpViewport builds (or rebuilds) the help modal's viewport when the
 // grouped help body overflows the modal. It runs from Update paths (open,
 // resize) because View cannot persist state.
 func (m *model) ensureHelpViewport() {
-	modalW := min(m.ui.width-8, 80)
-	outerH := m.ui.height - headerH
-	innerH := max(6, outerH-4)
-	contentW := max(12, modalW-4)
+	_, innerH, contentW := helpModalSize(m.ui.width, m.ui.height)
 	body := m.helpGroupedBody(contentW, innerH-4)
 	if lipgloss.Height(body) > innerH-2 {
 		v := viewport.New(contentW, innerH-2)
@@ -247,10 +253,7 @@ func (m model) scrollHelp(dy int) model {
 }
 
 func (m model) helpModalView() string {
-	modalW := min(m.ui.width-8, 80)
-	outerH := m.ui.height - headerH
-	innerH := max(6, outerH-4)
-	contentW := max(12, modalW-4)
+	modalW, innerH, contentW := helpModalSize(m.ui.width, m.ui.height)
 
 	body := m.helpGroupedBody(contentW, innerH-4)
 	if vp := m.ui.helpViewport; vp != nil {

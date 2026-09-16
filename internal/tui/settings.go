@@ -347,8 +347,8 @@ func tableStyles() table.Styles {
 }
 
 func (m model) settingsModalView() string {
-	modalW := min(m.ui.width-8, 52)
-	innerH := max(8, m.ui.height-headerH-6)
+	modalW := m.ui.width - 4
+	innerH := max(8, m.ui.height-headerH-2)
 
 	s := m.ui.settings
 
