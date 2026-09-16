@@ -39,7 +39,7 @@ Press `o` → **Theme options**. Every row cycles with `+`/`-` (or enter) and pr
 
 ## theme.json
 
-Location: `~/.config/orpheus/theme.json`. You can move it with `orpheus_theme_file` in your `.env` (see [tutorial](../tutorial.md) for how the `.env` works), and set the preset name directly with `orpheus_theme`.
+Location: `~/.config/orpheus/theme.json`. You can move it with `orpheus_theme_file` in your `.env` and set the preset name directly with `orpheus_theme`. See [configuration files](config.md) for the whole `.env` story.
 
 The file only stores what you changed from the preset. Everything you leave out keeps following the preset, so your file stays short and survives preset improvements.
 
