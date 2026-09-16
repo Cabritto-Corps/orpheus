@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -62,7 +61,9 @@ type playlistItem struct {
 
 func (p playlistItem) Title() string {
 	if p.nowPlaying {
-		return p.summary.Name + " ♪"
+		if glyph := themeNowPlayingGlyph(); glyph != "" {
+			return p.summary.Name + " " + glyph
+		}
 	}
 	return p.summary.Name
 }
@@ -102,13 +103,14 @@ func newTrackPopupDelegate() cachedDelegate {
 	d.SetSpacing(0)
 
 	d.Styles.SelectedTitle = lipgloss.NewStyle().
-		Bold(true).
+		Bold(themeBoldTitles).
 		Foreground(colorBlue).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
 		BorderForeground(colorBlue).
 		Padding(0, 0, 0, 1)
 
 	d.Styles.SelectedDesc = lipgloss.NewStyle().
+		Italic(themeItalicDescs).
 		Foreground(colorMutedBlue).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
 		BorderForeground(colorBlue).
@@ -119,6 +121,7 @@ func newTrackPopupDelegate() cachedDelegate {
 		Padding(0, 0, 0, 2)
 
 	d.Styles.NormalDesc = lipgloss.NewStyle().
+		Italic(themeItalicDescs).
 		Foreground(colorMutedBlue).
 		Padding(0, 0, 0, 2)
 
@@ -157,7 +160,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 			pollInterval:           cfg.PollInterval,
 			activeTab:              tabPlaylists,
 			imgs:                   newImgCache(),
-			spinner:                spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+			spinner:                themedSpinner(),
 			statusQueueCache:       newStatusQueueSnapshotCache(),
 			startupCoverBoostTicks: 40,
 			cover:                  newCoverManager(),
@@ -210,6 +213,11 @@ func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.
 	contextTracksCh := make(chan librespot.ContextTracksResult, 1)
 	ldr := loader.New(ctx, 128, NewTUIExecutor(ctx, catalog))
 	m := newModel(ctx, catalog, service, cfg, tuiCmdCh, contextTracksCh, ldr)
+	// Match the terminal's own background (the padding around the grid)
+	// to the theme's page color for the session; restore on exit.
+	CaptureTerminalBG()
+	defer RestoreTerminalBG()
+	ApplyTerminalBG(colorPage)
 	p := tea.NewProgram(m,
 		tea.WithAltScreen(),
 	)

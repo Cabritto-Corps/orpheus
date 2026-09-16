@@ -126,6 +126,7 @@ const (
 	settingsModeKeys
 	settingsModeTheme
 	settingsModeCapture
+	settingsModeThemeOptions
 )
 
 type settingsModel struct {
@@ -138,9 +139,18 @@ type settingsModel struct {
 	themePreset string
 	themeCursor int
 	themeBackup string
-	keysPath    string
-	themePath   string
-	envPath     string
+
+	// themeOptionsPreset is the editor's base palette (row 0 may change
+	// it); pendingState is the live draft; stateBackup holds the applied
+	// theme to restore on esc.
+	themeOptionsPreset string
+	themeStatePending  themeState
+	themeStateBackup   themeState
+	optionsCursor      int
+	optionsOffset      int
+	keysPath           string
+	themePath          string
+	envPath            string
 
 	keysTable *table.Model
 	conflicts map[string]bool
@@ -153,6 +163,7 @@ type settingsModel struct {
 	restartRequiredCrossfade bool
 	restartRequiredCache     bool
 	keysTableDirty           bool
+	saveErr                  string
 }
 
 // settingsKeyActions derives the settings keys-menu rows (order + labels)

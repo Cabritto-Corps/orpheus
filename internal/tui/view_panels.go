@@ -279,16 +279,45 @@ func (m model) coverOrPlaceholder(url string, cols, rows int) string {
 	if m.ui.imgs == nil {
 		return m.placeholderArt(cols, rows)
 	}
+	framed := coverFrameFits(cols, rows)
 	if m.ui.imgs.protocolForRender() == imageProtocolKitty {
 		if m.ui.imgs.hasKittyEncoding(url) {
+			if framed {
+				return coverFrameBox(cols, rows)
+			}
 			return m.blankArt(cols, rows)
 		}
 		return m.placeholderArt(cols, rows)
 	}
-	if s, ok := m.ui.imgs.cover(url, cols, rows); ok {
+	artCols, artRows := cols, rows
+	if framed {
+		// The frame lives on the cell's outer ring; the art insets inside
+		// so the panel layout never shifts when the frame toggles.
+		artCols, artRows = cols-2, rows-2
+	}
+	if s, ok := m.ui.imgs.cover(url, artCols, artRows); ok {
+		if framed {
+			return coverFrameBoxWith(s, cols, rows)
+		}
 		return s
 	}
 	return m.placeholderArt(cols, rows)
+}
+
+// coverFrameBox renders the frame with an empty interior: the kitty image
+// is placed over the blank inner cells at the inset offset.
+func coverFrameBox(cols, rows int) string {
+	return coverFrameBoxWith(strings.Repeat(" ", cols-2), cols, rows)
+}
+
+func coverFrameBoxWith(art string, cols, rows int) string {
+	border, _ := coverFrameBorder()
+	return lipgloss.NewStyle().
+		Border(border).
+		BorderForeground(colorBlue).
+		Width(cols - 2).
+		Height(rows - 2).
+		Render(art)
 }
 
 func (m model) blankArt(cols, rows int) string {
@@ -315,7 +344,7 @@ func (m model) placeholderArt(cols, rows int) string {
 	}
 	// Border accounts for its own 2 cells: Width/Height size the content.
 	out := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(themeBorder()).
 		BorderForeground(colorDivider).
 		Width(cols - 2).
 		Height(rows - 2).
@@ -390,7 +419,11 @@ func (g queueGrid) row(w, num int, title, artist string, durMS int, playing, sel
 	b.WriteString(alignRight(dur, g.durW))
 	if g.markerW > 0 {
 		if playing {
-			b.WriteString(" " + iconNowPlaying + " ")
+			if glyph := themeNowPlayingGlyph(); glyph != "" {
+				b.WriteString(" " + glyph + " ")
+			} else {
+				b.WriteString("   ")
+			}
 		} else {
 			b.WriteString("   ")
 		}
@@ -411,5 +444,3 @@ func (g queueGrid) row(w, num int, title, artist string, durMS int, playing, sel
 		return styleQueueTrack.Render(row)
 	}
 }
-
-const iconNowPlaying = "♪"

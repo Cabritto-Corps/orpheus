@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 const (
@@ -78,9 +79,88 @@ func (m model) View() string {
 		body = m.playbackScreenView()
 	}
 
+	// Three panels on the existing line divisions: the header band ends
+	// exactly at the tab underline, the middle and the footer share the
+	// page tone. Solid mode drops the band so the frame is one surface.
+	bandBg := colorPanel
+	if activeBackgrounds.Style == "solid" {
+		bandBg = colorPage
+	}
 	bar := m.playerBarView()
-	parts := []string{header, tabBar, body, bar}
-	return lipgloss.JoinVertical(lipgloss.Left, parts...) + m.kittyOverlay()
+	parts := []string{paintPanel(header, m.ui.width, bandBg), paintPanel(tabBar, m.ui.width, bandBg), body, bar}
+	return paintPage(lipgloss.JoinVertical(lipgloss.Left, parts...), m.ui.width) + m.kittyOverlay()
+}
+
+// bgSequence returns the terminal SGR that sets c as the background
+// (profile-aware, so ANSI palettes quantize correctly), or "" on ASCII
+// profiles where a themed background is not representable.
+func bgSequence(c lipgloss.Color) string {
+	if c == "" {
+		return ""
+	}
+	profile := lipgloss.DefaultRenderer().ColorProfile()
+	if profile == termenv.Ascii {
+		return ""
+	}
+	st := termenv.Style{}.Background(profile.Color(string(c)))
+	return strings.TrimSuffix(st.Styled(""), termenv.CSI+termenv.ResetSeq+"m")
+}
+
+// reassertBgLines asserts the background at every line start as well as
+// after every reset: lipgloss draws box borders with the border-foreground
+// style only (no background), so border-ring lines would otherwise print
+// on the terminal's default color.
+func reassertBgLines(text, seq string) string {
+	if seq == "" {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		lines[i] = seq + reassertBg(l, seq)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// reassertBg re-emits the background sequence after every style reset.
+// Terminals have no layers: an inner style's trailing reset clears the
+// active background for the rest of the line, so a painted band would show
+// holes wherever styled fragments, icons or glyphs sit. Re-asserting after
+// every reset composes the band UNDER every element instead.
+func reassertBg(text, seq string) string {
+	if seq == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+seq)
+}
+
+// paintBand fills every line of a band with a background tone that
+// survives inner resets: the sequence is asserted at the line start,
+// re-asserted after each reset, and forced again under the trailing
+// padding (which would otherwise inherit an inner element's own bg).
+func paintBand(band string, width int, bg lipgloss.Color) string {
+	seq := bgSequence(bg)
+	if seq == "" {
+		return band
+	}
+	lines := strings.Split(band, "\n")
+	for i, l := range lines {
+		pad := max(0, width-lipgloss.Width(l))
+		lines[i] = seq + reassertBg(l, seq) + "\x1b[0m" + seq + strings.Repeat(" ", pad) + "\x1b[0m"
+	}
+	return strings.Join(lines, "\n")
+}
+
+// paintPage fills the whole frame with the theme's page tone: every line
+// is padded to the terminal width and drawn on the page background, so a
+// theme owns the full canvas instead of the terminal's default color.
+func paintPage(frame string, width int) string {
+	return paintBand(frame, width, colorPage)
+}
+
+// paintPanel fills a chrome band (header, tab bar, player bar) with the
+// panel tone over the page: the lifted layer that gives the frame depth.
+func paintPanel(band string, width int, bg lipgloss.Color) string {
+	return paintBand(band, width, bg)
 }
 
 type bodyLayout struct {
@@ -147,6 +227,15 @@ func (m model) icon(unicode, nerd string) string {
 	return unicode
 }
 
+// playPauseGlyphs returns the theme's transport pair, upgraded to the
+// nerd-font glyphs when the terminal advertises them.
+func (m model) playPauseGlyphs() (play, pause string) {
+	if m.ui.nerdFonts {
+		return iconPlayNF, iconPauseNF
+	}
+	return themePlayPauseGlyphs()
+}
+
 func (m model) selectedPlaylist() (playlistItem, bool) {
 	sel, ok := m.browse.playlistList.SelectedItem().(playlistItem)
 	return sel, ok
@@ -165,11 +254,14 @@ func gradientBar(frac float64, width int) string {
 		return ""
 	}
 	frac = max(0, min(1, frac))
-	return progress.New(
+	p := progress.New(
 		progress.WithWidth(width),
 		progress.WithoutPercentage(),
 		progress.WithGradient(string(colorBlue), string(colorBlueLight)),
-	).ViewAs(frac)
+	)
+	full, empty := themeBarRunes()
+	p.Full, p.Empty = full, empty
+	return p.ViewAs(frac)
 }
 
 func fmtDuration(ms int) string {

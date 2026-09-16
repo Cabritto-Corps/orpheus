@@ -86,7 +86,7 @@ func TestSwatchBarRendersSpacedSwatches(t *testing.T) {
 	t.Cleanup(func() { lipgloss.DefaultRenderer().SetColorProfile(termenv.Ascii) })
 	lipgloss.DefaultRenderer().SetColorProfile(termenv.TrueColor)
 
-	swatches := themeSwatches(themePreset("default"))
+	swatches := themeSwatches(themePresetState("default").colors)
 	if len(swatches) != 7 {
 		t.Fatalf("swatch colors = %d, want 7", len(swatches))
 	}
@@ -110,6 +110,7 @@ func TestKeyConflictDetection(t *testing.T) {
 
 	// two actions rebound to the same key: both flagged
 	next := openSettingsForTest(m)
+	next = send(next, teaDown()) // theme options row
 	next = send(next, teaDown()) // keybinds row
 	next = sendEnter(next)       // keys list
 	next = sendEnter(next)       // capture tab
@@ -151,6 +152,7 @@ func TestHelpGroupedBodyHasGroups(t *testing.T) {
 
 	// rebind next -> j: help must show j, not n
 	next := openSettingsForTest(wide)
+	next = send(next, teaDown()) // theme options row
 	next = send(next, teaDown()) // keybinds row
 	next = sendEnter(next)       // keys list
 	next = send(next, teaDown()) // play_pause

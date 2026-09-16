@@ -44,6 +44,8 @@ func (m model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch s.mode {
 	case settingsModeCapture:
 		return m.handleSettingsCapture(msg)
+	case settingsModeThemeOptions:
+		return m.handleSettingsThemeOptions(msg)
 	case settingsModeKeys:
 		return m.handleSettingsKeysMode(msg)
 	case settingsModeTheme:
@@ -60,10 +62,10 @@ func (m model) handleSettingsRoot(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.ui.settings.open = false
 		return m, nil
 	case keyMatches(msg, k.QueueUp):
-		m.ui.settings.cursor = (m.ui.settings.cursor + 3) % 4
+		m.ui.settings.cursor = (m.ui.settings.cursor + 4) % 5
 		return m, nil
 	case keyMatches(msg, k.QueueDown):
-		m.ui.settings.cursor = (m.ui.settings.cursor + 1) % 4
+		m.ui.settings.cursor = (m.ui.settings.cursor + 1) % 5
 		return m, nil
 	case keyMatches(msg, k.Select):
 		return m.settingsActivate()
@@ -75,20 +77,50 @@ func (m model) handleSettingsRoot(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) handleSettingsThemeOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	s := &m.ui.settings
+	k := m.ui.keys
+	switch {
+	case keyMatches(msg, k.CloseModal):
+		return m.themeOptionsRevert()
+	case keyMatches(msg, k.QueueUp):
+		s.optionsCursor = (s.optionsCursor + themeOptionsRowCount() - 1) % themeOptionsRowCount()
+		return m, nil
+	case keyMatches(msg, k.QueueDown):
+		s.optionsCursor = (s.optionsCursor + 1) % themeOptionsRowCount()
+		return m, nil
+	case keyMatches(msg, k.Select):
+		if themeOptionsRow(s.optionsCursor).kind == optionSave {
+			return m.themeOptionsSave()
+		}
+		if themeOptionsRow(s.optionsCursor).kind == optionReset {
+			return m.themeOptionsReset()
+		}
+		return m.themeOptionsCycle(1)
+	case keyMatches(msg, k.VolUp):
+		return m.themeOptionsCycle(1)
+	case keyMatches(msg, k.VolDown):
+		return m.themeOptionsCycle(-1)
+	}
+	return m, nil
+}
+
 func (m model) settingsActivate() (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
 	switch s.cursor {
 	case 0: // theme: open the live-preview picker
 		m.openThemePicker()
-	case 1: // keybinds: open the action list
+	case 1: // theme options: open the theming editor
+		m.openThemeOptions()
+	case 2: // keybinds: open the action list
 		s.mode = settingsModeKeys
 		s.keysCursor = 0
 		s.captureKey = ""
-	case 2: // crossfade: toggle; +/- edits seconds
+	case 3: // crossfade: toggle; +/- edits seconds
 		s.crossfadeEnabled = !s.crossfadeEnabled
 		s.restartRequiredCrossfade = true
 		m.saveCrossfadeEnv()
-	case 3: // audio cache: toggle; +/- edits size
+	case 4: // audio cache: toggle; +/- edits size
 		s.cacheEnabled = !s.cacheEnabled
 		s.restartRequiredCache = true
 		m.saveCacheEnv()
@@ -99,11 +131,11 @@ func (m model) settingsActivate() (tea.Model, tea.Cmd) {
 func (m model) settingsAdjust(step int) (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
 	switch s.cursor {
-	case 2:
+	case 3:
 		s.crossfadeSeconds = clampCrossfadeSeconds(s.crossfadeSeconds + float64(step))
 		s.restartRequiredCrossfade = true
 		m.saveCrossfadeEnv()
-	case 3:
+	case 4:
 		s.cacheSizeMB = clampCacheSizeMB(s.cacheSizeMB + int64(step)*256)
 		s.restartRequiredCache = true
 		m.saveCacheEnv()
@@ -139,12 +171,16 @@ func (m *model) openThemePicker() {
 	s.themeCursor = max(0, slices.Index(settingsThemeOrder, themePresetName(s.themePreset)))
 }
 
-func (m model) themePreviewApply(name string) model {
-	colors := resolveThemeColors(name, loadThemeOverrides(m.ui.settings.themePath))
-	applyTheme(colors)
+func (m model) themePreviewApply(name string) (tea.Model, tea.Cmd) {
+	state := resolveThemeState(name, loadThemeOverrides(m.ui.settings.themePath))
+	applyTheme(state)
 	m.rethemeBrowseLists()
+	// The spinner preset is a theme choice: swap in the themed one; the
+	// app tick keeps advancing whatever model is current.
+	m.ui.spinner = themedSpinner()
+	m.refreshLikedSongsArt()
 	m.ui.settings.keysTableDirty = true
-	return m
+	return m, TerminalBGSync
 }
 
 func (m model) handleSettingsTheme(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -153,10 +189,10 @@ func (m model) handleSettingsTheme(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case keyMatches(msg, k.QueueUp):
 		s.themeCursor = (s.themeCursor + len(settingsThemeOrder) - 1) % len(settingsThemeOrder)
-		return m.themePreviewApply(settingsThemeOrder[s.themeCursor]), nil
+		return m.themePreviewApply(settingsThemeOrder[s.themeCursor])
 	case keyMatches(msg, k.QueueDown):
 		s.themeCursor = (s.themeCursor + 1) % len(settingsThemeOrder)
-		return m.themePreviewApply(settingsThemeOrder[s.themeCursor]), nil
+		return m.themePreviewApply(settingsThemeOrder[s.themeCursor])
 	case keyMatches(msg, k.Select):
 		picked := settingsThemeOrder[s.themeCursor]
 		s.themePreset = themePresetName(picked)
@@ -167,10 +203,11 @@ func (m model) handleSettingsTheme(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case keyMatches(msg, k.CloseModal):
 		// Revert to the theme that was active when the picker opened.
-		s.themePreset = s.themeBackup
-		m = m.themePreviewApply(s.themeBackup)
+		// The mode must be set before the preview apply: value receivers
+		// copy the model, so the returned copy must already carry it.
 		s.mode = settingsModeRoot
-		return m, nil
+		s.themePreset = s.themeBackup
+		return m.themePreviewApply(s.themeBackup)
 	}
 	return m, nil
 }
@@ -208,15 +245,28 @@ func formatEnvFloat(v float64) string {
 	return formatSecondsFloat(v)
 }
 
+// persistEnv writes settings to the .env the next start will read: the
+// configured path when set, else the resolved write target (created on
+// demand — a first save must never vanish into a missing path). Failures
+// surface in the settings modal instead of the log alone.
 func (m *model) persistEnv(values map[string]string) {
 	s := &m.ui.settings
-	if s.envPath == "" {
-		slog.Warn("no .env file found; crossfade/cache changes not persisted")
+	target := s.envPath
+	if target == "" {
+		target = config.EnsureEnvFilePath()
+	}
+	if target == "" {
+		s.saveErr = "no config directory; settings not saved"
+		slog.Warn("no .env target; crossfade/cache changes not persisted")
 		return
 	}
-	if err := config.UpsertEnvFile(s.envPath, values); err != nil {
-		slog.Warn("failed writing .env", "path", s.envPath, "error", err)
+	if err := config.UpsertEnvFile(target, values); err != nil {
+		s.saveErr = "save failed: " + err.Error()
+		slog.Warn("failed writing .env", "path", target, "error", err)
+		return
 	}
+	s.saveErr = ""
+	s.envPath = target
 }
 
 func (m model) handleSettingsKeysMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -422,6 +472,9 @@ func (m model) settingsModalView() string {
 	s := m.ui.settings
 
 	switch s.mode {
+	case settingsModeThemeOptions:
+		return m.themeOptionsView(modalW, innerH)
+
 	case settingsModeCapture:
 		var body string
 		if s.pendingKey == "" {
@@ -468,9 +521,10 @@ func (m model) settingsModalView() string {
 		}
 		rows := []string{
 			modalRow("Theme", m.themeValue(s.themePreset), s.cursor == 0, modalW),
-			modalRow("Keybinds", "edit...", s.cursor == 1, modalW),
-			modalRow("Crossfade", settingsCrossfadeLabel(&s)+crossfadeGauge, s.cursor == 2, modalW),
-			modalRow("Audio cache", settingsCacheLabel(&s)+cacheGauge, s.cursor == 3, modalW),
+			modalRow("Theme options", "edit...", s.cursor == 1, modalW),
+			modalRow("Keybinds", "edit...", s.cursor == 2, modalW),
+			modalRow("Crossfade", settingsCrossfadeLabel(&s)+crossfadeGauge, s.cursor == 3, modalW),
+			modalRow("Audio cache", settingsCacheLabel(&s)+cacheGauge, s.cursor == 4, modalW),
 		}
 		body := "\n" + lipgloss.JoinVertical(lipgloss.Left, rows...) + "\n"
 		body += "\n" + styleModalHint.Render(hintLine([]key.Binding{withDesc(m.ui.keys.Select, "change"), m.ui.keys.VolUp, m.ui.keys.VolDown}, modalW-modalContentInset)) + "\n"
@@ -479,6 +533,16 @@ func (m model) settingsModalView() string {
 		}
 		if s.restartRequiredCache {
 			body += styleError.Render("  cache applies on restart") + "\n"
+		}
+		if s.saveErr != "" {
+			body += styleError.Render("  ⚠ "+truncate(s.saveErr, modalW-modalContentInset-2)) + "\n"
+		}
+		for i, w := range config.Warnings() {
+			if i == 2 {
+				body += styleError.Render("  ⚠ more config warnings…") + "\n"
+				break
+			}
+			body += styleError.Render("  ⚠ "+truncate(w, modalW-modalContentInset-2)) + "\n"
 		}
 		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"),
 			styleModalHint.Render(hintLine([]key.Binding{m.ui.keys.CloseModal}, modalW-modalContentInset)), body, modalW, innerH)

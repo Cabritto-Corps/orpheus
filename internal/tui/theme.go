@@ -22,6 +22,50 @@ type themeColors struct {
 	Scrim       string `json:"scrim"`
 	SelectionFg string `json:"selection_fg"`
 	SelectionBg string `json:"selection_bg"`
+	Page        string `json:"page"`
+	Panel       string `json:"panel"`
+}
+
+// themeGlyphs picks the character families a theme can swap without
+// touching the palette: box border family, the now-playing marker, the
+// transport play/pause pair, the spinner animation and the progress bar
+// charset.
+type themeGlyphs struct {
+	Border     string `json:"border"`
+	NowPlaying string `json:"now_playing"`
+	PlayPause  string `json:"play_pause"`
+	Spinner    string `json:"spinner"`
+	Bar        string `json:"bar"`
+}
+
+// themeTypography is the text-attribute layer: weight for title lines,
+// italics for description lines.
+type themeTypography struct {
+	BoldTitles  bool `json:"bold_titles"`
+	ItalicDescs bool `json:"italic_descriptions"`
+}
+
+// themeBackgrounds picks how the frame's background zones are painted:
+// "divided" lifts the header band over the shared page tone; "solid" uses
+// one uniform color for the whole frame.
+type themeBackgrounds struct {
+	Style string `json:"style"`
+}
+
+// themeCover styles the cover-art cell: a themed frame drawn around the
+// art (none keeps the bare look).
+type themeCover struct {
+	Frame string `json:"frame"`
+}
+
+// themeState is one fully-resolved theme: palette plus the glyph,
+// typography and cover layers.
+type themeState struct {
+	colors      themeColors
+	glyphs      themeGlyphs
+	typography  themeTypography
+	cover       themeCover
+	backgrounds themeBackgrounds
 }
 
 // themeEntry is one shipped preset in the registry.
@@ -47,6 +91,7 @@ var themeRegistry = []themeEntry{
 		Scrim:       "#0D1018",
 		SelectionFg: "#C8CDD4",
 		SelectionBg: "#2E4A66",
+		Page:        "#0A0D12",
 	}},
 	{"minimal", themeColors{
 		Blue:      "7",
@@ -61,6 +106,7 @@ var themeRegistry = []themeEntry{
 		Scrim:       "0",
 		SelectionFg: "0",
 		SelectionBg: "7",
+		Page:        "0",
 	}},
 	{"high_contrast", themeColors{
 		Blue:      "#00FF87",
@@ -75,6 +121,7 @@ var themeRegistry = []themeEntry{
 		Scrim:       "#101010",
 		SelectionFg: "#000000",
 		SelectionBg: "#00FF87",
+		Page:        "#000000",
 	}},
 	{"catppuccin", themeColors{
 		Blue:      "#89B4FA",
@@ -89,6 +136,7 @@ var themeRegistry = []themeEntry{
 		Scrim:       "#181825",
 		SelectionFg: "#CDD6F4",
 		SelectionBg: "#45475A",
+		Page:        "#11111B",
 	}},
 	{"tokyo_night", themeColors{
 		Blue:      "#7AA2F7",
@@ -103,6 +151,7 @@ var themeRegistry = []themeEntry{
 		Scrim:       "#16161E",
 		SelectionFg: "#C0CAF5",
 		SelectionBg: "#2E3C64",
+		Page:        "#0F1017",
 	}},
 	{"gruvbox", themeColors{
 		Blue:      "#FE8019",
@@ -117,6 +166,7 @@ var themeRegistry = []themeEntry{
 		Scrim:       "#141414",
 		SelectionFg: "#EBDBB2",
 		SelectionBg: "#504945",
+		Page:        "#0F0F0D",
 	}},
 	{"nord", themeColors{
 		Blue:      "#88C0D0",
@@ -131,6 +181,7 @@ var themeRegistry = []themeEntry{
 		Scrim:       "#242933",
 		SelectionFg: "#ECEFF4",
 		SelectionBg: "#434C5E",
+		Page:        "#20242F",
 	}},
 	{"dracula", themeColors{
 		Blue:      "#BD93F9",
@@ -145,6 +196,7 @@ var themeRegistry = []themeEntry{
 		Scrim:       "#16171F",
 		SelectionFg: "#F8F8F2",
 		SelectionBg: "#44475A",
+		Page:        "#0E0F16",
 	}},
 	{"solarized_dark", themeColors{
 		Blue:      "#268BD2",
@@ -161,6 +213,7 @@ var themeRegistry = []themeEntry{
 		// body-text base0, which misses 4.5:1 on the selection bg.
 		SelectionFg: "#93A1A1",
 		SelectionBg: "#073642",
+		Page:        "#000B10",
 	}},
 	{"rose_pine", themeColors{
 		Blue:      "#C4A7E7",
@@ -175,6 +228,7 @@ var themeRegistry = []themeEntry{
 		Scrim:       "#0F0C15",
 		SelectionFg: "#E0DEF4",
 		SelectionBg: "#403D52",
+		Page:        "#0C0A11",
 	}},
 	{"kanagawa", themeColors{
 		Blue:      "#7E9CD8",
@@ -189,42 +243,136 @@ var themeRegistry = []themeEntry{
 		Scrim:       "#16161D",
 		SelectionFg: "#DCD7BA",
 		SelectionBg: "#2D4F67",
+		Page:        "#0E0E14",
 	}},
 }
+
+// themeGlyphSets are the curated value sets for every glyph option; the
+// registry entries below are the display names used by both the JSON
+// schema and the settings cycles.
+var (
+	glyphBorderChoices     = []string{"rounded", "thick", "double", "ascii"}
+	glyphNowPlayingChoices = []string{"note", "dot", "play", "arrow", "plain"}
+	glyphPlayPauseChoices  = []string{"modern", "bold", "thin", "ascii"}
+	glyphSpinnerChoices    = []string{"minidot", "dot", "line", "points", "meter", "pulse"}
+	glyphBarChoices        = []string{"block", "line"}
+)
+
+var defaultGlyphs = themeGlyphs{Border: "rounded", NowPlaying: "note", PlayPause: "modern", Spinner: "minidot", Bar: "block"}
+var defaultTypography = themeTypography{}
+var defaultCover = themeCover{Frame: "none"}
+var defaultBackgrounds = themeBackgrounds{Style: "divided"}
+
+var validGlyphBorder = stringSet(glyphBorderChoices)
+var validGlyphNowPlaying = stringSet(glyphNowPlayingChoices)
+var validGlyphPlayPause = stringSet(glyphPlayPauseChoices)
+var validGlyphSpinner = stringSet(glyphSpinnerChoices)
+var validGlyphBar = stringSet(glyphBarChoices)
+var validCoverFrame = stringSet([]string{"none", "rounded", "thick"})
+var validBackgroundStyle = stringSet([]string{"divided", "solid"})
 
 var validThemeColors = map[string]bool{
 	"blue": true, "blue_light": true, "off_white": true, "gray": true,
 	"muted_blue": true, "dim_blue": true, "divider": true, "error": true,
 	"scrim": true, "selection_fg": true, "selection_bg": true,
+	"page": true, "panel": true,
 }
 
-// LoadTheme resolves the configured preset plus optional per-color overrides
-// from a theme.json file. Unknown or invalid input warns and falls back, so
-// the result is always renderable.
-func LoadTheme(preset, path string) themeColors {
-	colors := themePreset(preset)
+func stringSet(values []string) map[string]bool {
+	out := make(map[string]bool, len(values))
+	for _, v := range values {
+		out[v] = true
+	}
+	return out
+}
+
+// LoadTheme resolves the configured preset plus optional per-color and
+// section overrides from a theme.json file. Unknown or invalid input warns
+// and falls back, so the result is always renderable.
+func LoadTheme(preset, path string) themeState {
+	st := themePresetState(preset)
 
 	if path == "" {
-		return colors
+		return st
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			slog.Warn("failed reading theme file, using preset", "path", path, "error", err)
 		}
-		return colors
+		return st
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
 		slog.Warn("malformed theme file, using preset", "path", path, "error", err)
-		return colors
+		return st
 	}
 	if p, ok := raw["preset"].(string); ok {
-		colors = themePreset(p)
+		st = themePresetState(p)
 		delete(raw, "preset")
 	}
-	applyThemeOverrides(&colors, raw)
-	return colors
+	applyThemeStateOverrides(&st.glyphs, &st.typography, &st.cover, &st.backgrounds, raw)
+	applyThemeOverrides(&st.colors, colorOverridesOnly(raw))
+	return st
+}
+
+// colorOverridesOnly strips the structured sections (and the preset marker)
+// from a raw theme.json map, leaving only the flat per-color overrides.
+func colorOverridesOnly(raw map[string]any) map[string]any {
+	out := make(map[string]any, len(raw))
+	for k, v := range raw {
+		switch k {
+		case "glyphs", "typography", "cover":
+		default:
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// applyGlyphOverrides merges a raw glyphs map into g, warning and keeping
+// the current value on unknown or wrongly-typed entries.
+func applyGlyphOverrides(g *themeGlyphs, raw map[string]any) {
+	applyStringField(raw, "border", validGlyphBorder, &g.Border, "glyphs.border")
+	applyStringField(raw, "now_playing", validGlyphNowPlaying, &g.NowPlaying, "glyphs.now_playing")
+	applyStringField(raw, "play_pause", validGlyphPlayPause, &g.PlayPause, "glyphs.play_pause")
+	applyStringField(raw, "spinner", validGlyphSpinner, &g.Spinner, "glyphs.spinner")
+	applyStringField(raw, "bar", validGlyphBar, &g.Bar, "glyphs.bar")
+}
+
+func applyStringField(raw map[string]any, key string, valid map[string]bool, dst *string, where string) {
+	v, ok := raw[key]
+	if !ok {
+		return
+	}
+	s, ok := v.(string)
+	if !ok || !valid[s] {
+		slog.Warn("invalid theme option, keeping current value", "where", where, "value", v)
+		return
+	}
+	*dst = s
+}
+
+// applyThemeStateOverrides merges the structured sections of a raw
+// theme.json into glyph/typography/cover/backgrounds values.
+func applyThemeStateOverrides(g *themeGlyphs, typ *themeTypography, cover *themeCover, bg *themeBackgrounds, raw map[string]any) {
+	if gm, ok := raw["glyphs"].(map[string]any); ok {
+		applyGlyphOverrides(g, gm)
+	}
+	if tm, ok := raw["typography"].(map[string]any); ok {
+		if v, ok := tm["bold_titles"].(bool); ok {
+			typ.BoldTitles = v
+		}
+		if v, ok := tm["italic_descriptions"].(bool); ok {
+			typ.ItalicDescs = v
+		}
+	}
+	if cm, ok := raw["cover"].(map[string]any); ok {
+		applyStringField(cm, "frame", validCoverFrame, &cover.Frame, "cover.frame")
+	}
+	if bm, ok := raw["backgrounds"].(map[string]any); ok {
+		applyStringField(bm, "style", validBackgroundStyle, &bg.Style, "backgrounds.style")
+	}
 }
 
 // loadThemeOverrides reads the valid per-color overrides stored in a
@@ -248,8 +396,78 @@ func loadThemeOverrides(path string) map[string]any {
 // resolveThemeColors combines a preset with stored per-color overrides.
 func resolveThemeColors(preset string, overrides map[string]any) themeColors {
 	colors := themePreset(preset)
-	applyThemeOverrides(&colors, overrides)
+	applyThemeOverrides(&colors, colorOverridesOnly(overrides))
 	return colors
+}
+
+// resolveThemeState combines a preset with stored per-color and section
+// overrides — the preview path for the options editor.
+func resolveThemeState(preset string, overrides map[string]any) themeState {
+	st := themePresetState(preset)
+	applyThemeStateOverrides(&st.glyphs, &st.typography, &st.cover, &st.backgrounds, overrides)
+	applyThemeOverrides(&st.colors, colorOverridesOnly(overrides))
+	return st
+}
+
+// themePresetState resolves a preset into all layers.
+func themePresetState(name string) themeState {
+	return themeState{colors: themePreset(name), glyphs: defaultGlyphs, typography: defaultTypography, cover: defaultCover, backgrounds: defaultBackgrounds}
+}
+
+// SaveThemeOptions persists the full resolved state: the preset marker,
+// per-color deltas against the preset, and the glyph/typography/cover
+// sections. Deltas only, so a saved file keeps tracking its preset for
+// everything the user left untouched. The write is atomic.
+func SaveThemeOptions(path, preset string, state themeState) error {
+	if path == "" {
+		return fmt.Errorf("no theme file path configured")
+	}
+	name := themePresetName(preset)
+	base := themePreset(name)
+	body := map[string]any{"preset": name}
+	if state.colors.Page != "" && state.colors.Page != base.Page {
+		body["page"] = state.colors.Page
+	}
+	if state.colors.Panel != "" && state.colors.Panel != base.Panel {
+		body["panel"] = state.colors.Panel
+	}
+	for _, c := range []struct {
+		preset, current string
+		json            string
+	}{
+		{base.Blue, state.colors.Blue, "blue"},
+		{base.BlueLight, state.colors.BlueLight, "blue_light"},
+		{base.OffWhite, state.colors.OffWhite, "off_white"},
+		{base.Gray, state.colors.Gray, "gray"},
+		{base.MutedBlue, state.colors.MutedBlue, "muted_blue"},
+		{base.DimBlue, state.colors.DimBlue, "dim_blue"},
+		{base.Divider, state.colors.Divider, "divider"},
+		{base.Error, state.colors.Error, "error"},
+		{base.Scrim, state.colors.Scrim, "scrim"},
+		{base.SelectionFg, state.colors.SelectionFg, "selection_fg"},
+		{base.SelectionBg, state.colors.SelectionBg, "selection_bg"},
+	} {
+		if c.current != "" && c.current != c.preset {
+			body[c.json] = c.current
+		}
+	}
+	if state.glyphs != defaultGlyphs {
+		body["glyphs"] = state.glyphs
+	}
+	if state.typography != defaultTypography {
+		body["typography"] = state.typography
+	}
+	if state.cover != defaultCover {
+		body["cover"] = state.cover
+	}
+	if state.backgrounds != defaultBackgrounds {
+		body["backgrounds"] = state.backgrounds
+	}
+	marshaled, err := json.MarshalIndent(body, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeThemeFile(path, marshaled)
 }
 
 // SaveThemePreset persists the chosen preset as a marker in theme.json.
@@ -323,6 +541,10 @@ func applyThemeOverrides(colors *themeColors, raw map[string]any) {
 			colors.SelectionFg = s
 		case "selection_bg":
 			colors.SelectionBg = s
+		case "page":
+			colors.Page = s
+		case "panel":
+			colors.Panel = s
 		}
 	}
 }

@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	modalLabelWidth = 16
+	modalLabelWidth = 20
 
 	// modalContentInset is the box's horizontal padding: header, separator,
 	// rows and the selected-row highlight all share this content width so
@@ -68,6 +68,13 @@ func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int
 		Width(width).
 		Height(height).
 		Render(lipgloss.JoinVertical(lipgloss.Left, header, sep, body))
+	// The box style paints its interior per line, but inner styled runs
+	// (rows, hints, headers) end with a full reset and the border ring is
+	// drawn foreground-only — both would punch holes in the panel tone.
+	// Re-assert at line starts and after every reset.
+	if seq := bgSequence(colorPanel); seq != "" {
+		box = reassertBgLines(box, seq)
+	}
 
 	return lipgloss.Place(
 		termW,
@@ -77,6 +84,7 @@ func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int
 		box,
 		lipgloss.WithWhitespaceChars("░"),
 		lipgloss.WithWhitespaceForeground(colorScrim),
+		lipgloss.WithWhitespaceBackground(colorPage),
 	)
 }
 

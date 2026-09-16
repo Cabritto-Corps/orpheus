@@ -262,6 +262,15 @@ func detectProtocolOverride(getenv func(string) string) bool {
 	return false
 }
 
+// refreshURL replaces an image and drops every cached render of the old
+// one — used when a procedurally generated cover's palette changes.
+func (c *imgCache) refreshURL(url string, img image.Image, w, h int) {
+	c.mu.Lock()
+	c.deleteCoversForURLLocked(url)
+	c.mu.Unlock()
+	c.setImage(url, img, w, h)
+}
+
 func (c *imgCache) pinURL(url string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

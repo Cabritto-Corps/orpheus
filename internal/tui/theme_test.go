@@ -24,7 +24,7 @@ func TestDefaultPresetMatchesOriginalColors(t *testing.T) {
 }
 
 func TestLoadThemeDefaultIsPristine(t *testing.T) {
-	colors := LoadTheme("default", filepath.Join(t.TempDir(), "missing.json"))
+	colors := LoadTheme("default", filepath.Join(t.TempDir(), "missing.json")).colors
 	if colors.Blue != "#4A90D9" || colors.Error != "#FF5757" {
 		t.Fatalf("missing theme file must yield pristine default, got %+v", colors)
 	}
@@ -36,7 +36,7 @@ func TestThemeJSONOverride(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	colors := LoadTheme("default", path)
+	colors := LoadTheme("default", path).colors
 	if colors.Blue != "#FF0000" {
 		t.Fatalf("blue override not applied: %q", colors.Blue)
 	}
@@ -53,7 +53,7 @@ func TestThemeJSONInvalidValueKeepsPreset(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"blue": "#XYZ", "gray": 5}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	colors := LoadTheme("default", path)
+	colors := LoadTheme("default", path).colors
 	if colors.Blue != "#4A90D9" {
 		t.Fatalf("invalid hex must keep preset blue, got %q", colors.Blue)
 	}
@@ -67,7 +67,7 @@ func TestThemeJSONUnknownColorIgnored(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"purple": "#F0F", "blue": "#00FF00"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	colors := LoadTheme("default", path)
+	colors := LoadTheme("default", path).colors
 	if colors.Blue != "#00FF00" {
 		t.Fatalf("valid override must apply, blue = %q", colors.Blue)
 	}
@@ -78,21 +78,21 @@ func TestThemeJSONMalformedFallsBackToPreset(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	colors := LoadTheme("high_contrast", path)
+	colors := LoadTheme("high_contrast", path).colors
 	if colors.Blue != "#00FF87" {
 		t.Fatalf("malformed file must fall back to preset, blue = %q", colors.Blue)
 	}
 }
 
 func TestUnknownPresetFallsBackToDefault(t *testing.T) {
-	colors := LoadTheme("neon_dreams", "")
+	colors := LoadTheme("neon_dreams", "").colors
 	if colors.Blue != "#4A90D9" {
 		t.Fatalf("unknown preset must fall back to default, blue = %q", colors.Blue)
 	}
 }
 
 func TestMinimalPresetUsesANSIAndNoColor(t *testing.T) {
-	colors := LoadTheme("minimal", "")
+	colors := LoadTheme("minimal", "").colors
 	// D5: minimal must keep roles distinguishable — accent (bold 7), bright
 	// (15), dim (8) and selection inverted (black on 7) — not one flat "".
 	if colors.Blue == colors.OffWhite && colors.Blue == colors.Gray {
@@ -115,7 +115,7 @@ func TestApplyThemeAppliesAndIsIdempotent(t *testing.T) {
 		t.Fatal("applyTheme is not idempotent")
 	}
 
-	applyTheme(themePreset("default"))
+	applyTheme(themePresetState("default"))
 	if c := lipgloss.Color("#4A90D9"); colorBlue != c {
 		t.Fatalf("default restore drifted, colorBlue = %v", colorBlue)
 	}

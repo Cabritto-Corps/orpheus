@@ -16,8 +16,7 @@ func (m model) headerView() string {
 	var statusStr, centerL1, rightL1 string
 
 	if m.transport.status != nil {
-		playIcon := m.icon(iconPlay, iconPlayNF)
-		pauseIcon := m.icon(iconPause, iconPauseNF)
+		playIcon, pauseIcon := m.playPauseGlyphs()
 		if m.transport.status.Playing {
 			statusStr = styleHeaderPlaying.Render("[" + playIcon + " Playing]")
 		} else {
@@ -143,8 +142,7 @@ func (m model) playerBarView() string {
 		// gutter shifts between idle and playing frames.
 		return sep + "\n"
 	}
-	playIcon := m.icon(iconPlay, iconPlayNF)
-	pauseIcon := m.icon(iconPause, iconPauseNF)
+	playIcon, pauseIcon := m.playPauseGlyphs()
 	stateIcon := styleHeaderPaused.Render(pauseIcon)
 	if m.transport.status.Playing {
 		stateIcon = styleHeaderPlaying.Render(playIcon)
@@ -175,7 +173,8 @@ func (m model) playerBarView() string {
 	progressW := barW - elapsedW - totalW - iconW - playerBarGaps*playerBarGap
 	var progressStr string
 	if m.transport.status.DurationMS <= 0 {
-		progressStr = styleProgressBarEmpty.Render(strings.Repeat("░", progressW))
+		_, empty := themeBarRunes()
+		progressStr = styleProgressBarEmpty.Render(strings.Repeat(string(empty), progressW))
 	} else {
 		progressStr = gradientBar(pct, progressW)
 	}
@@ -342,16 +341,24 @@ func (m model) kittyOverlay() string {
 	if m.ui.activeTab == tabPlayer {
 		playerEpoch = m.transport.playerCoverEpoch
 	}
-	key := fmt.Sprintf("%d:%d:%d:%d:%s:%s:%s:%d", layout.coverStartRow, layout.coverStartCol, layout.coverCols, layout.coverRows, m.ui.activeTab, subjectID, url, playerEpoch)
+	// With a cover frame the art insets inside the frame's inner ring: the
+	// panel text draws the border, the image lands one cell in.
+	artCols, artRows := layout.coverCols, layout.coverRows
+	startRow, startCol := layout.coverStartRow, layout.coverStartCol
+	if coverFrameFits(artCols, artRows) {
+		artCols, artRows = artCols-2, artRows-2
+		startRow, startCol = startRow+1, startCol+1
+	}
+	key := fmt.Sprintf("%d:%d:%d:%d:%s:%s:%s:%d", startRow, startCol, artCols, artRows, m.ui.activeTab, subjectID, url, playerEpoch)
 	changed, shouldDelete, placementChanged, urlChanged := m.ui.imgs.beginKittyOverlayState(key, url)
 	if !changed {
 		return ""
 	}
-	payload := m.ui.imgs.buildKittyPayload(url, encoded, layout.coverCols, layout.coverRows, m.ui.imgs.nextKittyImageID())
+	payload := m.ui.imgs.buildKittyPayload(url, encoded, artCols, artRows, m.ui.imgs.nextKittyImageID())
 	if payload == "" {
 		return kittyDeleteAll
 	}
-	out := fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", layout.coverStartRow, layout.coverStartCol, payload)
+	out := fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", startRow, startCol, payload)
 	if shouldDelete && (placementChanged || urlChanged) {
 		return kittyDeleteAll + out
 	}

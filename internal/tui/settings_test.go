@@ -80,7 +80,7 @@ func TestSettingsModalOpenCloseCursor(t *testing.T) {
 
 func TestSettingsThemePickerLiveAppliesAndPersists(t *testing.T) {
 	m, _, themePath, _ := newSettingsTestModel(t)
-	applyTheme(themePreset("default"))
+	applyTheme(themePresetState("default"))
 
 	next := openViaKey(m)
 	next = sendEnter(next) // theme row: open the picker
@@ -128,7 +128,7 @@ func TestSettingsThemePickerLiveAppliesAndPersists(t *testing.T) {
 
 func TestSettingsThemePickerEscReverts(t *testing.T) {
 	m, _, _, _ := newSettingsTestModel(t)
-	applyTheme(themePreset("default"))
+	applyTheme(themePresetState("default"))
 
 	next := openViaKey(m)
 	next = sendEnter(next) // open picker
@@ -149,6 +149,7 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 	m, keysPath, _, _ := newSettingsTestModel(t)
 
 	next := openViaKey(m)
+	next = send(next, tea.KeyMsg{Type: tea.KeyDown}) // to theme options row
 	next = send(next, tea.KeyMsg{Type: tea.KeyDown}) // to keybinds row
 	next = sendEnter(next)                           // -> keys list
 	if next.ui.settings.mode != settingsModeKeys {
@@ -205,8 +206,9 @@ func TestSettingsCrossfadePersistsToEnvWithRestartHint(t *testing.T) {
 	next := openViaKey(m)
 	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
 	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
-	if next.ui.settings.cursor != 2 {
-		t.Fatalf("cursor = %d, want 2", next.ui.settings.cursor)
+	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	if next.ui.settings.cursor != 3 {
+		t.Fatalf("cursor = %d, want 3", next.ui.settings.cursor)
 	}
 
 	next = sendEnter(next) // toggle on
@@ -249,8 +251,9 @@ func TestSettingsCacheTogglePersistsToEnv(t *testing.T) {
 	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
 	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
 	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
-	if next.ui.settings.cursor != 3 {
-		t.Fatalf("cursor = %d, want 3", next.ui.settings.cursor)
+	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	if next.ui.settings.cursor != 4 {
+		t.Fatalf("cursor = %d, want 4", next.ui.settings.cursor)
 	}
 
 	next = sendEnter(next)
@@ -277,6 +280,7 @@ func TestSettingsCaptureEscAndNavigation(t *testing.T) {
 	m, _, _, _ := newSettingsTestModel(t)
 
 	next := openViaKey(m)
+	next = send(next, tea.KeyMsg{Type: tea.KeyDown}) // theme options row
 	next = send(next, tea.KeyMsg{Type: tea.KeyDown}) // keybinds row
 	next = sendEnter(next)                           // keys list
 	next = sendEnter(next)                           // capture for "tab"
