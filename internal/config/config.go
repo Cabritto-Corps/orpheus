@@ -38,6 +38,7 @@ type Config struct {
 }
 
 func LoadFromEnv() (Config, error) {
+	configWarnings = nil
 	loadEnvFile()
 
 	cfg := Config{
@@ -127,6 +128,7 @@ func envBool(key string, fallback bool) bool {
 	}
 	v, err := strconv.ParseBool(raw)
 	if err != nil {
+		warnConfigValue(key, raw)
 		slog.Warn("invalid boolean value, using default", "key", key, "value", raw, "default", fallback)
 		return fallback
 	}
@@ -170,6 +172,7 @@ func envFloat64(key string, fallback float64) float64 {
 	}
 	v, err := strconv.ParseFloat(raw, 64)
 	if err != nil || v < 0 {
+		warnConfigValue(key, raw)
 		slog.Warn("invalid float value, using default", "key", key, "value", raw, "default", fallback)
 		return fallback
 	}
@@ -183,6 +186,7 @@ func envInt64(key string, fallback int64) int64 {
 	}
 	v, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || v <= 0 {
+		warnConfigValue(key, raw)
 		slog.Warn("invalid integer value, using default", "key", key, "value", raw, "default", fallback)
 		return fallback
 	}
@@ -249,6 +253,40 @@ func resolveEnvFilePath() string {
 		return path
 	}
 	return ""
+}
+
+// EnsureEnvFilePath resolves the write target for persisted settings,
+// matching the load precedence: the cwd .env when it exists, otherwise the
+// config-dir .env — which is created on demand (the config dir included) so
+// a first save never disappears into a missing path.
+func EnsureEnvFilePath() string {
+	if _, err := os.Stat(".env"); err == nil {
+		return ".env"
+	}
+	dir, err := DefaultConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
+		return ""
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return ""
+	}
+	return filepath.Join(dir, ".env")
+}
+
+// configWarnings collects human-readable load problems (malformed values
+// falling back to defaults) so the UI can surface what the log-only
+// warnings used to hide.
+var configWarnings []string
+
+func warnConfigValue(key, value string) {
+	configWarnings = append(configWarnings, key+" = "+value+" ignored (invalid value)")
+}
+
+// Warnings returns the problems found while parsing configuration values,
+// in load order. Rendered by the settings UI so what is shown can always
+// be traced back to the config files.
+func Warnings() []string {
+	return append([]string(nil), configWarnings...)
 }
 
 func defaultTokenPath() string {

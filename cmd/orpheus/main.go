@@ -357,6 +357,11 @@ func runLibrespotTUI() error {
 		ThemePath:            cfg.ThemePath,
 		KeysPath:             cfg.KeysPath,
 		EnvPath:              cfg.EnvPath,
+		Crossfade:            cfg.Crossfade,
+		CrossfadeSeconds:     cfg.CrossfadeSeconds,
+		AudioCacheEnabled:    cfg.AudioCacheEnabled,
+		AudioCacheSizeMB:     cfg.AudioCacheSizeMB,
+		AudioCacheDir:        cfg.AudioCacheDir,
 	}
 
 	var catalog spotify.PlaylistCatalog
