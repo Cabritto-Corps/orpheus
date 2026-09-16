@@ -71,6 +71,7 @@ type AppPlayer struct {
 	connectStateTimer   *time.Timer
 	queueTopUpTimer     *time.Timer
 	queueTopUpInFlight  bool
+	topUpSuppressArm    bool
 	prefetchJobs        chan prefetchJob
 	prefetchDone        chan prefetchResult
 

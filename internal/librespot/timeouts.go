@@ -10,6 +10,7 @@ const (
 	prefetchJobTimeout       = 30 * time.Second
 	metadataBatchTimeout     = 15 * time.Second
 	stateAdapterBatchTimeout = 8 * time.Second
+	queueTopUpTimeout        = 3 * time.Second
 	shuffleContextTimeout    = 5 * time.Second
 	contextTracksBgTimeout   = 30 * time.Second
 	httpClientTimeout        = 30 * time.Second

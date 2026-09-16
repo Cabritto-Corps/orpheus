@@ -233,6 +233,14 @@ func (p *AppPlayer) scheduleQueueTopUp() {
 	if p == nil || p.queueTopUpInFlight {
 		return
 	}
+	// A top-up's own emit would otherwise re-arm forever while the loaded
+	// window stays at the cap: back-to-back bounded fetches that stall Run
+	// and starve skip commands on slow networks (observed). One top-up per
+	// triggering event; fresh events re-arm.
+	if p.topUpSuppressArm {
+		p.topUpSuppressArm = false
+		return
+	}
 	p.queueTopUpInFlight = true
 	stopAndResetTimer(p.queueTopUpTimer, queueTopUpDelay)
 }
@@ -246,13 +254,14 @@ func (p *AppPlayer) topUpQueue(ctx context.Context) {
 	if p.state == nil || p.state.tracks == nil || p.primaryStream == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, stateAdapterBatchTimeout)
+	ctx, cancel := context.WithTimeout(ctx, queueTopUpTimeout)
 	defer cancel()
 	full := p.state.tracks.UpcomingTracks(ctx, queueOverrideMaxTracks)
 	if ctx.Err() != nil || len(full) == 0 {
 		return
 	}
 	p.syncPlayerTrackState(p.state.tracks, nil)
+	p.topUpSuppressArm = true
 	p.updateState()
 	p.emitPlaybackState()
 }
