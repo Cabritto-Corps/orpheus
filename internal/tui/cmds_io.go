@@ -159,12 +159,8 @@ func (m *model) loadImageCmd(url string, priority bool) tea.Cmd {
 		defer cache.finishLoad(url)
 
 		if img, ok := cache.getImage(url); ok {
-			displayCols, displayRows := 0, 0
 			coverSizes := m.currentCoverSizes()
-			if len(coverSizes) > 0 {
-				displayCols, displayRows = coverSizes[0][0], coverSizes[0][1]
-			}
-			if err := cache.ensureKittyEncoding(url, img, displayCols, displayRows); err != nil {
+			if err := cache.ensureKittyEncoding(url, img); err != nil {
 				return imageLoadedMsg{url: url, err: err}
 			}
 			cache.preRenderCovers(url, coverSizes)
@@ -198,7 +194,7 @@ func (m *model) loadImageCmd(url string, priority bool) tea.Cmd {
 			displayCols, displayRows = coverSizes[0][0], coverSizes[0][1]
 		}
 		cache.setImage(url, img, displayCols, displayRows)
-		if err := cache.ensureKittyEncoding(url, img, displayCols, displayRows); err != nil {
+		if err := cache.ensureKittyEncoding(url, img); err != nil {
 			return imageLoadedMsg{url: url, err: err}
 		}
 		cache.preRenderCovers(url, coverSizes)
@@ -447,7 +443,7 @@ func (m *model) loadImagesBatchCmd(urls []string) tea.Cmd {
 					return
 				}
 				m.ui.imgs.setImage(target, img, decodeCols, decodeRows)
-				if err := m.ui.imgs.ensureKittyEncoding(target, img, decodeCols, decodeRows); err != nil {
+				if err := m.ui.imgs.ensureKittyEncoding(target, img); err != nil {
 					done <- indexedImageMsg{idx, imageLoadedMsg{url: target, err: err}}
 					return
 				}

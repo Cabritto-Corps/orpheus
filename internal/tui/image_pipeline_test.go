@@ -1,9 +1,13 @@
 package tui
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"strings"
 	"testing"
 	"time"
@@ -113,5 +117,34 @@ func TestBatchImageFailureUsesRetryLadder(t *testing.T) {
 	got = next.(model)
 	if _, stamped := got.ui.imgs.failedAt["u1"]; !stamped {
 		t.Fatal("expected failed stamp after retries exhausted")
+	}
+}
+
+func TestKittyEncodeDownscalesToBudget(t *testing.T) {
+	cases := []struct {
+		w, h, wantW, wantH int
+	}{
+		{640, 640, 512, 512},
+		{640, 480, 512, 384},
+		{480, 640, 384, 512},
+		{300, 300, 300, 300},
+	}
+	for _, tc := range cases {
+		src := image.NewRGBA(image.Rect(0, 0, tc.wantW*0+tc.w, tc.h))
+		encoded, err := encodeImageAsPNGBase64(src)
+		if err != nil {
+			t.Fatalf("encode %dx%d: %v", tc.w, tc.h, err)
+		}
+		raw, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			t.Fatalf("base64 %dx%d: %v", tc.w, tc.h, err)
+		}
+		cfg, err := png.DecodeConfig(bytes.NewReader(raw))
+		if err != nil {
+			t.Fatalf("png config %dx%d: %v", tc.w, tc.h, err)
+		}
+		if cfg.Width != tc.wantW || cfg.Height != tc.wantH {
+			t.Fatalf("encode %dx%d: got %dx%d, want %dx%d", tc.w, tc.h, cfg.Width, cfg.Height, tc.wantW, tc.wantH)
+		}
 	}
 }

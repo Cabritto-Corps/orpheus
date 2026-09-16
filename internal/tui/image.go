@@ -206,7 +206,7 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 	c.mu.RUnlock()
 	encoded := ""
 	if protocol == imageProtocolKitty {
-		if s, err := encodeImageAsPNGBase64AtSize(img, displayCols, displayRows); err == nil {
+		if s, err := encodeImageAsPNGBase64(img); err == nil {
 			encoded = s
 		} else {
 			slog.Warn("kitty encode failed", "url", url, "cols", displayCols, "rows", displayRows, "error", err)
@@ -380,7 +380,7 @@ func (c *imgCache) hasKittyEncodingLocked(url string) bool {
 	return strings.TrimSpace(c.encoded[url]) != ""
 }
 
-func (c *imgCache) ensureKittyEncoding(url string, img image.Image, displayCols, displayRows int) error {
+func (c *imgCache) ensureKittyEncoding(url string, img image.Image) error {
 	if url == "" || img == nil {
 		return nil
 	}
@@ -390,7 +390,7 @@ func (c *imgCache) ensureKittyEncoding(url string, img image.Image, displayCols,
 	if !needsEncode {
 		return nil
 	}
-	encoded, err := encodeImageAsPNGBase64AtSize(img, displayCols, displayRows)
+	encoded, err := encodeImageAsPNGBase64(img)
 	if err != nil {
 		return err
 	}
@@ -498,7 +498,7 @@ const (
 	maxCachedImages                = 256
 	maxCachedCoverRenders          = 512
 	maxKittyChunkCacheEntries      = 64
-	kittyEncodeMaxSize             = 1024
+	kittyEncodePixelBudget         = 512
 )
 
 func (c *imgCache) deleteCoversForURLLocked(url string) {
@@ -531,32 +531,28 @@ func (c *imgCache) deleteKittyChunksLocked(url string) {
 	}
 }
 
-func encodeImageAsPNGBase64AtSize(img image.Image, displayCols, displayRows int) (string, error) {
+func encodeImageAsPNGBase64(img image.Image) (string, error) {
 	if img == nil {
 		return "", nil
 	}
-	if displayCols > 0 && displayRows > 0 {
-		sb := img.Bounds()
-		pw := sb.Dx()
-		ph := sb.Dy()
-		if pw > kittyEncodeMaxSize || ph > kittyEncodeMaxSize {
-			if pw > ph {
-				ph = ph * kittyEncodeMaxSize / pw
-				pw = kittyEncodeMaxSize
-			} else {
-				pw = pw * kittyEncodeMaxSize / ph
-				ph = kittyEncodeMaxSize
-			}
-			if pw < 1 {
-				pw = 1
-			}
-			if ph < 1 {
-				ph = 1
-			}
+	sb := img.Bounds()
+	pw, ph := sb.Dx(), sb.Dy()
+	longest := max(pw, ph)
+	if longest > kittyEncodePixelBudget {
+		if pw >= ph {
+			ph = ph * kittyEncodePixelBudget / pw
+			pw = kittyEncodePixelBudget
+		} else {
+			pw = pw * kittyEncodePixelBudget / ph
+			ph = kittyEncodePixelBudget
 		}
-		if pw != sb.Dx() || ph != sb.Dy() {
-			img = resizeBilinear(img, pw, ph)
+		if pw < 1 {
+			pw = 1
 		}
+		if ph < 1 {
+			ph = 1
+		}
+		img = resizeBilinear(img, pw, ph)
 	}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
