@@ -440,6 +440,8 @@ func (m model) settingsModalView() string {
 	case settingsModeKeys:
 		conflictCount := min(len(s.conflicts), maxConflictHintLines)
 		tableH := max(4, innerH-4-conflictCount)
+		// modalW-6: the box content (inset 2) minus the table cells' own
+		// Padding(0,1) on both columns — wider would wrap inside the box.
 		t := m.settingsKeysTable(max(4, modalW-6), tableH)
 		var body strings.Builder
 		body.WriteString("\n" + t.View() + "\n")

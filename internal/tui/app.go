@@ -90,7 +90,12 @@ func (t trackItem) Title() string       { return t.item.Name }
 func (t trackItem) FilterValue() string { return t.item.Name }
 func (t trackItem) Description() string { return t.item.Artist }
 
-func newTrackPopupDelegate() list.DefaultDelegate {
+// newTrackPopupDelegate returns the popup's delegate: the themed default
+// delegate wrapped in the render cache, so the track rows can carry the
+// right-aligned duration while keeping the same styling.
+func newTrackPopupDelegate() cachedDelegate {
+	c := &delegateCache{entries: make(map[delegateKey]string, 64)}
+	registerDelegateCache(c)
 	d := list.NewDefaultDelegate()
 	d.ShowDescription = true
 	d.SetHeight(2)
@@ -117,7 +122,7 @@ func newTrackPopupDelegate() list.DefaultDelegate {
 		Foreground(colorMutedBlue).
 		Padding(0, 0, 0, 2)
 
-	return d
+	return cachedDelegate{DefaultDelegate: d, cache: c}
 }
 
 func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- librespot.ContextTracksResult, ldr *loader.BackgroundLoader) model {

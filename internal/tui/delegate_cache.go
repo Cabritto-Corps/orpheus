@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // DefaultDelegate.Render is the most expensive per-frame call on list tabs
@@ -143,9 +144,53 @@ func newCachedPlaylistDelegate() cachedDelegate {
 	return cachedDelegate{DefaultDelegate: newPlaylistDelegate(), cache: c}
 }
 
+// trackRow composes a track row: name left, duration right-aligned at the
+// row edge — the default delegate leaves the right half of full-size lists
+// empty. During filtering the rune-highlight path falls back to the
+// framework renderer (no duration shown while filtering).
+func (d cachedDelegate) trackRow(m list.Model, index int, item trackItem) (string, bool) {
+	if m.FilterState() == list.Filtering || m.Width() <= 0 {
+		return "", false
+	}
+	dur := ""
+	if item.item.DurationMS > 0 {
+		dur = fmtDuration(item.item.DurationMS)
+	}
+	avail := m.Width() - 2
+	nameW := max(4, avail-lipgloss.Width(dur)-2)
+	line := padCell(truncate(item.item.Name, nameW), nameW) + dur
+	key := delegateKey{
+		width:    m.Width(),
+		height:   d.Height(),
+		selected: index == m.Index(),
+		filter:   m.FilterValue(),
+		filtered: m.FilterState() == list.FilterApplied,
+		text:     item.item.Name + "\x00" + item.item.Artist + "\x00" + dur,
+	}
+	if s, hit := d.cache.get(key); hit {
+		return s, true
+	}
+	var out string
+	if index == m.Index() {
+		out = d.Styles.SelectedTitle.Render(line) + "\n" +
+			d.Styles.SelectedDesc.Render(item.item.Artist)
+	} else {
+		out = d.Styles.NormalTitle.Render(line) + "\n" +
+			d.Styles.NormalDesc.Render(item.item.Artist)
+	}
+	d.cache.put(key, out)
+	return out, true
+}
+
 func (d cachedDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	pi, ok := item.(playlistItem)
 	if !ok {
+		if ti, isTrack := item.(trackItem); isTrack {
+			if line, ok := d.trackRow(m, index, ti); ok {
+				fmt.Fprint(w, line)
+				return
+			}
+		}
 		d.DefaultDelegate.Render(w, m, index, item)
 		return
 	}

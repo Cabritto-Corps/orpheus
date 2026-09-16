@@ -100,7 +100,9 @@ func modalRow(label, value string, selected bool, width int) string {
 	} else {
 		labelW := min(modalLabelWidth, max(1, (inner-1)/2))
 		valueW := inner - 1 - labelW
-		row = marker + padCell(fitCell(label, labelW), labelW) + padCell(fitCell(value, valueW), valueW)
+		// Values right-align at the content edge: left-aligned values left a
+		// dead band the width of the row inside full-size modals.
+		row = marker + padCell(fitCell(label, labelW), labelW) + alignRight(fitCell(value, valueW), valueW)
 	}
 	if pad := inner - lipgloss.Width(row); pad > 0 {
 		row += strings.Repeat(" ", pad)
