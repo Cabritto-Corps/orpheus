@@ -8,7 +8,8 @@ The config directory is `~/.config/orpheus` on Linux. Change it with the `ORPHEU
 
 | File | What it is | Who creates it |
 | --- | --- | --- |
-| `.env` | your settings | you |
+| `.env` | bootstrap: your Spotify client id, plus any override you deliberately set. Written by you only, never by orpheus | you |
+| `config.json` | the app settings the UI manages (crossfade, audio cache) | the settings modal |
 | `theme.json` | your theme | the theme picker / you ([theming](theming.md)) |
 | `keys.json` | your keybinds | written when you rebind a key in settings |
 | `token.json` | Spotify Web API login | `orpheus auth login` |
@@ -31,7 +32,26 @@ Only one `.env` is read, in this order:
 
 So for a globally installed `orpheus`, put your `.env` in the config directory and it works from anywhere. If a `.env` exists in the directory you launch from, that one wins — handy for testing.
 
-When the settings write something (crossfade, audio cache), the values go to the same file the next start will read: the `.env` in the current directory when it exists, otherwise the config directory one — created on the first save if it does not exist yet.
+The `.env` is yours: orpheus reads it but never writes it. All you normally need in it is the client id.
+
+## `config.json`
+
+The settings you change inside orpheus (crossfade, audio cache) live here, written by the settings modal:
+
+```json
+{
+  "crossfade": {
+    "enabled": true,
+    "seconds": 4
+  },
+  "audio_cache": {
+    "enabled": true,
+    "size_mb": 2048
+  }
+}
+```
+
+Precedence for these settings: a value in `config.json` wins over the `.env`/environment copy, because the settings UI writes there. Anything the file leaves out keeps falling back to the environment and the defaults, so you can hand-edit just one field. The first time you change one of these settings in the modal, the whole current state is written — that also migrates whatever your `.env` carried.
 
 ## Every `.env` variable
 
@@ -46,11 +66,13 @@ When the settings write something (crossfade, audio cache), the values go to the
 
 ### Player
 
+The crossfade and cache variables are fallbacks: once `config.json` defines them (the first time you change them in settings), the file wins. They apply on restart either way.
+
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `orpheus_crossfade` | `false` | crossfade between tracks (applies on restart) |
+| `orpheus_crossfade` | `false` | crossfade between tracks |
 | `orpheus_crossfade_seconds` | `3` | crossfade length, 0 to 30 |
-| `orpheus_audio_cache_enabled` | `false` | on-disk encrypted audio cache (applies on restart) |
+| `orpheus_audio_cache_enabled` | `false` | on-disk encrypted audio cache |
 | `orpheus_audio_cache_size_mb` | `1024` | cache size cap, 64 to 4096 |
 | `orpheus_audio_cache_dir` | *config dir* | where the cache lives |
 | `orpheus_poll_interval` | `1500ms` | how often the fallback polling checks Spotify |
@@ -72,6 +94,7 @@ When the settings write something (crossfade, audio cache), the values go to the
 
 | Variable | Default | What it does |
 | --- | --- | --- |
+| `orpheus_config_file` | *config dir*`/config.json` | where the app settings live |
 | `orpheus_token_path` | *config dir*`/token.json` | web api token location |
 | `orpheus_theme_file` | *config dir*`/theme.json` | theme file location |
 | `orpheus_keys_file` | *config dir*`/keys.json` | keys file location |
@@ -79,7 +102,7 @@ When the settings write something (crossfade, audio cache), the values go to the
 
 ## When values are wrong
 
-A malformed value (say `orpheus_crossfade_seconds=abc`) falls back to the default and shows up as a `⚠` warning row in the settings modal, so nothing silently misconfigures itself. The log has the details.
+A malformed value (say `orpheus_crossfade_seconds=abc`) falls back to the default and shows up as a `⚠` warning row in the settings modal, so nothing silently misconfigures itself. A malformed `config.json` warns too and falls back to the environment values. The log has the details.
 
 ## See also
 
