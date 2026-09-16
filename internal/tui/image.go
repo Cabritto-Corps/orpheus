@@ -48,6 +48,7 @@ type imgCache struct {
 	failedAt         map[string]time.Time
 	rendering        map[coverKey]chan struct{}
 	protocol         imageProtocol
+	protocolExplicit bool
 	lastKittyOverlay string
 	lastKittyURL     string
 	kittyVisible     bool
@@ -61,17 +62,18 @@ type imgCache struct {
 
 func newImgCache() *imgCache {
 	return &imgCache{
-		imgs:            cache.NewLRU[string, image.Image](maxCachedImages),
-		covers:          cache.NewLRU[coverKey, string](maxCachedCoverRenders),
-		encoded:         make(map[string]string),
-		inflight:        make(map[string]struct{}),
-		failedAt:        make(map[string]time.Time),
-		rendering:       make(map[coverKey]chan struct{}),
-		protocol:        detectImageProtocol(os.Getenv),
-		kittyChunks:     make(map[string][]string),
-		kittyChunkOrder: make([]string, 0, maxKittyChunkCacheEntries),
-		coverKeysByURL:  make(map[string]map[coverKey]struct{}),
-		pinned:          make(map[string]struct{}),
+		imgs:             cache.NewLRU[string, image.Image](maxCachedImages),
+		covers:           cache.NewLRU[coverKey, string](maxCachedCoverRenders),
+		encoded:          make(map[string]string),
+		inflight:         make(map[string]struct{}),
+		failedAt:         make(map[string]time.Time),
+		rendering:        make(map[coverKey]chan struct{}),
+		protocol:         detectImageProtocol(os.Getenv),
+		kittyChunks:      make(map[string][]string),
+		kittyChunkOrder:  make([]string, 0, maxKittyChunkCacheEntries),
+		protocolExplicit: detectProtocolOverride(os.Getenv),
+		coverKeysByURL:   make(map[string]map[coverKey]struct{}),
+		pinned:           make(map[string]struct{}),
 	}
 }
 
@@ -142,6 +144,10 @@ func (c *imgCache) beginKittyOverlayState(key, url string) (changed bool, should
 func (c *imgCache) resetKittyOverlayState() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.resetKittyOverlayStateLocked()
+}
+
+func (c *imgCache) resetKittyOverlayStateLocked() {
 	c.lastKittyOverlay = ""
 	c.lastKittyURL = ""
 	c.kittyVisible = false
@@ -221,6 +227,9 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 	}
 	for evicted {
 		if _, pinned := c.pinned[evictedURL]; pinned {
+			if len(c.pinned) >= c.imgs.Capacity() {
+				break
+			}
 			evictedURL, evictedImg, evicted = c.imgs.Set(evictedURL, evictedImg)
 			continue
 		}
@@ -234,7 +243,23 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 func (c *imgCache) setProtocol(protocol imageProtocol) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.protocolExplicit || c.protocol == protocol {
+		return
+	}
 	c.protocol = protocol
+	c.covers.Clear()
+	for url := range c.coverKeysByURL {
+		delete(c.coverKeysByURL, url)
+	}
+	c.resetKittyOverlayStateLocked()
+}
+
+func detectProtocolOverride(getenv func(string) string) bool {
+	switch strings.ToLower(strings.TrimSpace(getenv("ORPHEUS_IMAGE_PROTOCOL"))) {
+	case "none", "ansi", "kitty":
+		return true
+	}
+	return false
 }
 
 func (c *imgCache) pinURL(url string) {
@@ -268,9 +293,8 @@ func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
 			c.mu.Unlock()
 			continue
 		}
-		if ch, rendering := c.rendering[key]; rendering {
+		if _, rendering := c.rendering[key]; rendering {
 			c.mu.Unlock()
-			<-ch
 			continue
 		}
 		ch := make(chan struct{})
@@ -373,6 +397,12 @@ func (c *imgCache) shouldQueuePriorityLoad(url string) bool {
 	return true
 }
 
+func (c *imgCache) hasKittyEncoding(url string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.hasKittyEncodingLocked(url)
+}
+
 func (c *imgCache) hasKittyEncodingLocked(url string) bool {
 	if c.protocol != imageProtocolKitty {
 		return true
@@ -456,9 +486,8 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 		}
 		encoded := c.encoded[url]
 		protocol := c.protocol
-		if ch, rendering := c.rendering[key]; rendering {
+		if _, rendering := c.rendering[key]; rendering {
 			c.mu.Unlock()
-			<-ch
 			continue
 		}
 		ch := make(chan struct{})

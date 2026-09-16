@@ -70,7 +70,7 @@ func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
 	if plOk && pl.summary.ImageURL != "" {
 		url := pl.summary.ImageURL
 		if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
-			if m.ui.imgs.hasImage(url) {
+			if m.ui.imgs.hasKittyEncoding(url) {
 				coverStr = m.blankArt(coverCols, coverRows)
 			} else {
 				coverStr = m.placeholderArt(coverCols, coverRows)
@@ -153,7 +153,7 @@ func (m model) albumPreviewPanel(w, h, coverCols, coverRows int) string {
 	if alOk && al.summary.ImageURL != "" {
 		url := al.summary.ImageURL
 		if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
-			if m.ui.imgs.hasImage(url) {
+			if m.ui.imgs.hasKittyEncoding(url) {
 				coverStr = m.blankArt(coverCols, coverRows)
 			} else {
 				coverStr = m.placeholderArt(coverCols, coverRows)
@@ -189,7 +189,7 @@ func (m model) albumCoverPanel(w, h, coverCols, coverRows int) string {
 	if m.transport.status != nil && m.transport.status.AlbumImageURL != "" {
 		url := m.transport.status.AlbumImageURL
 		if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
-			if m.ui.imgs.hasImage(url) {
+			if m.ui.imgs.hasKittyEncoding(url) {
 				coverStr = m.blankArt(coverCols, coverRows)
 			} else {
 				coverStr = m.placeholderArt(coverCols, coverRows)

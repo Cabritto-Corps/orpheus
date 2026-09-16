@@ -364,20 +364,12 @@ func (m *model) scheduleNavDebounceCmd() tea.Cmd {
 
 func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 	m.normalizeLibraryPagination()
-	seen := make(map[string]struct{})
-
+	urls := make([]string, 0, 64)
 	add := func(url string) {
 		if url == "" {
 			return
 		}
-		if _, ok := seen[url]; ok {
-			return
-		}
-		if !m.ui.imgs.shouldQueueLoad(url) {
-			return
-		}
-		seen[url] = struct{}{}
-		m.enqueueCoverURL(url)
+		urls = append(urls, url)
 	}
 
 	if sel, ok := m.selectedPlaylist(); ok {
@@ -419,6 +411,20 @@ func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 			}
 			add(pl.summary.ImageURL)
 		}
+	}
+
+	// Selection changed: drop now-off-screen URLs so the visible window is
+	// not queued behind stale entries.
+	keep := make(map[string]struct{}, len(urls))
+	for _, u := range urls {
+		keep[u] = struct{}{}
+	}
+	m.ui.cover.pruneExcept(keep)
+	for _, u := range urls {
+		if !m.ui.imgs.shouldQueueLoad(u) {
+			continue
+		}
+		m.enqueueCoverURL(u)
 	}
 
 	return m.drainCoverQueueCmd(coverQueueDrainBatch)
@@ -672,11 +678,14 @@ func execCmd(template, trackName, artistName, trackID string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	// The hook command is the user's own config, not external input; track
+	// metadata only feeds args/env and never a shell, so parts cannot chain.
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 	var cmd *exec.Cmd
 	if len(parts) > 1 {
-		cmd = exec.CommandContext(ctx, parts[0], parts[1:]...)
+		cmd = exec.CommandContext(ctx, parts[0], parts[1:]...) // nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 	} else {
-		cmd = exec.CommandContext(ctx, parts[0])
+		cmd = exec.CommandContext(ctx, parts[0]) // nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 	}
 	cmd.Env = append(os.Environ(),
 		"ORPHEUS_TRACK="+trackName,

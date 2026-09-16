@@ -148,3 +148,51 @@ func TestKittyEncodeDownscalesToBudget(t *testing.T) {
 		}
 	}
 }
+
+func TestSetProtocolInvalidatesAndRespectsOverride(t *testing.T) {
+	c := newImgCache()
+	c.setProtocol(imageProtocolKitty)
+	c.encoded["u1"] = "enc"
+	c.covers.Set(coverKey{url: "u1", cols: 10, rows: 10}, "rendered")
+	c.kittyVisible = true
+	c.lastKittyURL = "u1"
+
+	c.setProtocol(imageProtocolNone)
+	if c.protocol != imageProtocolNone {
+		t.Fatal("expected protocol switch")
+	}
+	if _, ok := c.covers.Get(coverKey{url: "u1", cols: 10, rows: 10}); ok {
+		t.Fatal("expected rendered covers invalidated on protocol switch")
+	}
+	if c.kittyVisible {
+		t.Fatal("expected overlay state reset on protocol switch")
+	}
+	if !c.kittyForceRedraw {
+		t.Fatal("expected forced redraw on protocol switch")
+	}
+
+	c.protocolExplicit = true
+	c.setProtocol(imageProtocolKitty)
+	if c.protocol != imageProtocolNone {
+		t.Fatal("explicit ORPHEUS_IMAGE_PROTOCOL override must not be auto-switched")
+	}
+}
+
+func TestCoverQueuePruneExcept(t *testing.T) {
+	c := newCoverManager()
+	for _, u := range []string{"a", "b", "c", "d"} {
+		c.enqueueURL(u)
+	}
+	c.pruneExcept(map[string]struct{}{"b": {}, "d": {}})
+	if len(c.queue) != 2 {
+		t.Fatalf("expected 2 queued after prune, got %d", len(c.queue))
+	}
+	for _, u := range c.queue {
+		if u != "b" && u != "d" {
+			t.Fatalf("unexpected queued url %q", u)
+		}
+	}
+	if len(c.queued) != 2 {
+		t.Fatalf("expected queued map pruned too, got %d", len(c.queued))
+	}
+}
