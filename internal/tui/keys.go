@@ -74,48 +74,75 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	}
 }
 
-type helpGroup struct {
-	title string
-	items []struct{ action, label string }
+// actionRegistry is the single ordered source for every bindable action:
+// keys.json validity, the settings keys menu, the key-conflict scan and the
+// help modal groups all derive from it, so the four copies that could drift
+// are gone. Order defines the help modal's group order and the settings
+// menu row order.
+type actionMeta struct {
+	action string
+	group  string
+	label  string
+	desc   string
+	bind   func(keyMap) key.Binding
 }
 
-var helpGroupsLayout = []struct {
+var actionRegistry = []actionMeta{
+	{"play_pause", "Playback", "play/pause", "play/pause", func(k keyMap) key.Binding { return k.PlayPause }},
+	{"next", "Playback", "next track", "next track", func(k keyMap) key.Binding { return k.Next }},
+	{"prev", "Playback", "previous track", "previous track", func(k keyMap) key.Binding { return k.Prev }},
+	{"shuffle", "Playback", "shuffle", "shuffle", func(k keyMap) key.Binding { return k.Shuffle }},
+	{"loop", "Playback", "repeat", "repeat", func(k keyMap) key.Binding { return k.Loop }},
+	{"vol_up", "Playback", "volume up", "volume up", func(k keyMap) key.Binding { return k.VolUp }},
+	{"vol_down", "Playback", "volume down", "volume down", func(k keyMap) key.Binding { return k.VolDown }},
+	{"seek_back", "Playback", "seek back", "seek back", func(k keyMap) key.Binding { return k.SeekBack }},
+	{"seek_fwd", "Playback", "seek forward", "seek forward", func(k keyMap) key.Binding { return k.SeekFwd }},
+	{"tab", "Navigation", "switch tab", "switch tab", func(k keyMap) key.Binding { return k.Tab }},
+	{"refresh", "Navigation", "refresh library", "refresh library", func(k keyMap) key.Binding { return k.Refresh }},
+	{"filter", "Navigation", "search filter", "search filter", func(k keyMap) key.Binding { return k.Filter }},
+	{"select", "Navigation", "select / play", "select / play", func(k keyMap) key.Binding { return k.Select }},
+	{"toggle_help", "Navigation", "toggle help", "toggle help", func(k keyMap) key.Binding { return k.ToggleHelp }},
+	{"settings", "Navigation", "open settings", "open settings", func(k keyMap) key.Binding { return k.Settings }},
+	{"close_modal", "Navigation", "close modal", "close modal", func(k keyMap) key.Binding { return k.CloseModal }},
+	{"quit", "Navigation", "quit (ctrl+c always quits)", "quit", func(k keyMap) key.Binding { return k.Quit }},
+	{"queue_up", "Queue", "queue cursor up", "cursor up", func(k keyMap) key.Binding { return k.QueueUp }},
+	{"queue_down", "Queue", "queue cursor down", "cursor down", func(k keyMap) key.Binding { return k.QueueDown }},
+	{"queue_jump", "Queue", "play from queue row", "play from row", func(k keyMap) key.Binding { return k.QueueJump }},
+	{"queue_remove", "Queue", "remove queue row", "remove row", func(k keyMap) key.Binding { return k.QueueRemove }},
+	{"queue_move_up", "Queue", "move queue row up", "move row up", func(k keyMap) key.Binding { return k.QueueMoveUp }},
+	{"queue_move_down", "Queue", "move queue row down", "move row down", func(k keyMap) key.Binding { return k.QueueMoveDown }},
+}
+
+// helpGroupsLayout derives the help modal's titled rows from the registry.
+var helpGroupsLayout = func() []struct {
 	title  string
 	action string
 	label  string
-}{
-	// Playback
-	{"Playback", "play_pause", "play/pause"},
-	{"Playback", "next", "next track"},
-	{"Playback", "prev", "previous track"},
-	{"Playback", "shuffle", "shuffle"},
-	{"Playback", "loop", "repeat"},
-	{"Playback", "vol_up", "volume up"},
-	{"Playback", "vol_down", "volume down"},
-	{"Playback", "seek_back", "seek back"},
-	{"Playback", "seek_fwd", "seek forward"},
-	// Navigation
-	{"Navigation", "tab", "switch tab"},
-	{"Navigation", "filter", "search filter"},
-	{"Navigation", "select", "select / play"},
-	{"Navigation", "refresh", "refresh library"},
-	{"Navigation", "toggle_help", "toggle help"},
-	{"Navigation", "settings", "open settings"},
-	{"Navigation", "close_modal", "close modal"},
-	{"Navigation", "quit", "quit"},
-	// Queue
-	{"Queue", "queue_up", "cursor up"},
-	{"Queue", "queue_down", "cursor down"},
-	{"Queue", "queue_jump", "play from row"},
-	{"Queue", "queue_remove", "remove row"},
-	{"Queue", "queue_move_up", "move row up"},
-	{"Queue", "queue_move_down", "move row down"},
-}
+} {
+	out := make([]struct {
+		title  string
+		action string
+		label  string
+	}, 0, len(actionRegistry))
+	for _, m := range actionRegistry {
+		out = append(out, struct {
+			title  string
+			action string
+			label  string
+		}{m.group, m.action, m.desc})
+	}
+	return out
+}()
 
 // helpGroupLines renders one group as label……key lines. Labels are padded
 // in display cells; keys come from the live keyMap so rebinds reflect.
+// helpGroupLines renders one group: title, then label/key rows with the key
+// right-aligned to the group's own edge instead of trailing the label column
+// (the left-packed layout read as one undifferentiated wall of text).
 func (m model) helpGroupLines(title string, labelWidth int) []string {
-	lines := []string{styleSectionLabel.Render(title)}
+	type row struct{ label, key string }
+	var rows []row
+	keyW := 0
 	for _, g := range helpGroupsLayout {
 		if g.title != title {
 			continue
@@ -124,9 +151,16 @@ func (m model) helpGroupLines(title string, labelWidth int) []string {
 		if !ok {
 			continue
 		}
-		label := g.label
-		lines = append(lines, styleQueueTrack.Render(padCell(label, labelWidth))+
-			styleTrackPopupTitle.Render(shortKeyLabel(keys)))
+		k := shortKeyLabel(keys)
+		rows = append(rows, row{g.label, k})
+		if w := lipgloss.Width(k); w > keyW {
+			keyW = w
+		}
+	}
+	lines := []string{styleSectionLabel.Render(title)}
+	for _, r := range rows {
+		lines = append(lines, styleQueueTrack.Render(padCell(r.label, labelWidth))+
+			styleTrackPopupTitle.Render(alignRight(r.key, keyW)))
 	}
 	return lines
 }
@@ -146,17 +180,15 @@ func (m model) helpGroupedBody(contentW, availH int) string {
 	for _, title := range groups {
 		cols = append(cols, m.helpGroupLines(title, labelWidth))
 	}
-	colW := labelWidth + 10
 
-	// Fill the modal: two columns at medium widths, three at wide ones,
-	// instead of leaving half the frame empty.
+	// Fill the modal with three columns only when the joined block actually
+	// fits; the old threshold math rendered the three-column join while
+	// gated on a two-column budget, overflowing the modal at 70-89 cols.
+	three := joinTopAligned(cols[0], cols[1], cols[2])
 	var body string
-	switch {
-	case len(cols) == 3 && contentW >= colW*3+16:
-		body = joinTopAligned(cols[0], cols[1], cols[2])
-	case len(cols) > 1 && contentW >= colW*2:
-		body = joinTopAligned(cols[0], cols[1], cols[2])
-	default:
+	if lipgloss.Width(three) <= contentW {
+		body = three
+	} else {
 		parts := make([]string, 0, len(cols))
 		for _, col := range cols {
 			parts = append(parts, strings.Join(col, "\n"))

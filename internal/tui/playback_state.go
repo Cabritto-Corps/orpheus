@@ -84,7 +84,7 @@ func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.
 	shouldAdvance := subjectChanged || trackChanged || queueHeadChanged || progressRewind
 	if shouldAdvance {
 		m.transport.playerCoverEpoch++
-		if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
+		if m.ui.imgs != nil && m.ui.imgs.protocolForRender() == imageProtocolKitty {
 			m.ui.imgs.forceKittyRedraw()
 		}
 	}
@@ -117,7 +117,7 @@ func (m *model) beginTransportTransition() {
 		fromTrack = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
 	}
 	m.transport.transition.Begin(time.Now(), fromTrack)
-	if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
+	if m.ui.imgs != nil && m.ui.imgs.protocolForRender() == imageProtocolKitty {
 		m.ui.imgs.forceKittyRedraw()
 	}
 	m.syncExecutorState()
@@ -128,7 +128,7 @@ func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
 	if event == transportEventNone {
 		return
 	}
-	if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
+	if m.ui.imgs != nil && m.ui.imgs.protocolForRender() == imageProtocolKitty {
 		m.ui.imgs.forceKittyRedraw()
 	}
 	if event == transportEventStuck && m.tuiCmdCh == nil {

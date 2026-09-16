@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	golibrespot "github.com/elxgy/go-librespot"
@@ -100,11 +101,7 @@ func layoutThreeZone(w int, left, center, right string) string {
 }
 
 func (m model) headerVolumeBar(vol int) string {
-	const w = 6
-	volChar := iconVolume
-	filled := min(int(float64(vol)/100.0*float64(w)), w)
-	return styleVolumeBarFilled.Render(strings.Repeat(volChar, filled)) +
-		styleVolumeBarEmpty.Render(strings.Repeat(volChar, w-filled))
+	return gradientBar(float64(vol)/100.0, volumeBarW)
 }
 
 func (m model) tabBarView() string {
@@ -175,12 +172,12 @@ func (m model) playerBarView() string {
 	elapsedW := lipgloss.Width(elapsed)
 	totalW := lipgloss.Width(total)
 	iconW := lipgloss.Width(stateIcon)
-	progressW := barW - elapsedW - totalW - iconW - 8
+	progressW := barW - elapsedW - totalW - iconW - playerBarGaps*playerBarGap
 	var progressStr string
 	if m.transport.status.DurationMS <= 0 {
 		progressStr = styleProgressBarEmpty.Render(strings.Repeat("░", progressW))
 	} else {
-		progressStr = m.renderProgressBar(pct, progressW)
+		progressStr = gradientBar(pct, progressW)
 	}
 
 	bar := "  " + stateIcon + "  " + elapsed + "  " + progressStr + "  " + total
@@ -188,14 +185,14 @@ func (m model) playerBarView() string {
 }
 
 func (m model) trackPopupView() string {
-	modalW := m.ui.width - 4
-	innerH := max(8, m.ui.height-headerH-2)
+	modalW, _, listH := popupModalSize(m.ui.width, m.ui.height)
+	innerH := listH + 2
 
 	title := styleTrackPopupTitle.Render("  " + m.ui.trackPopupName)
 
 	var body string
 	if m.ui.trackPopupItems == nil {
-		body = styleTrackPopupLoading.Render("\n  Loading...")
+		body = styleTrackPopupLoading.Render("\n  " + m.ui.spinner.View() + " Loading...")
 	} else if len(m.ui.trackPopupItems) == 0 {
 		body = styleTrackPopupLoading.Render("\n  No tracks found")
 	} else {
@@ -203,9 +200,7 @@ func (m model) trackPopupView() string {
 	}
 	var hint string
 	if m.ui.trackPopupItems != nil {
-		k := m.ui.keys
-		hint = styleTrackPopupHint.Render(k.Select.Help().Key + ": play · " +
-			k.Filter.Help().Key + ": search · " + k.CloseModal.Help().Key + ": close")
+		hint = styleTrackPopupHint.Render(hintLine([]key.Binding{m.ui.keys.Select, m.ui.keys.Filter, m.ui.keys.CloseModal}, modalW-modalContentInset))
 	}
 
 	return modalFrame(m.ui.width, m.ui.height, title, hint, body, modalW, innerH)
@@ -214,9 +209,10 @@ func (m model) trackPopupView() string {
 // helpModalSize is the single source for the help modal's dimensions so the
 // Update-side viewport rebuild and the View-side render can never drift.
 func helpModalSize(termW, termH int) (modalW, innerH, contentW int) {
-	modalW = termW - 4
 	innerH = max(6, termH-headerH-2)
+	modalW, boxH := modalGeometry(termW, termH, termW-4, innerH)
 	contentW = max(12, modalW-4)
+	innerH = boxH
 	return modalW, innerH, contentW
 }
 
@@ -243,9 +239,9 @@ func (m model) scrollHelp(dy int) model {
 	}
 	vp := *m.ui.helpViewport
 	if dy < 0 {
-		vp.LineUp(-dy)
+		vp.ScrollUp(-dy)
 	} else {
-		vp.LineDown(dy)
+		vp.ScrollDown(dy)
 	}
 	m.ui.helpViewport = &vp
 	return m
@@ -272,7 +268,7 @@ func (m model) overlayBlocked() bool {
 }
 
 func (m model) kittyOverlay() string {
-	if m.ui.imgs == nil || m.ui.imgs.protocol != imageProtocolKitty {
+	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() != imageProtocolKitty {
 		return ""
 	}
 	// Kitty graphics sit on a terminal layer above text and persist until
@@ -283,7 +279,7 @@ func (m model) kittyOverlay() string {
 		m.ui.imgs.forceKittyRedraw()
 		return kittyDeleteAll
 	}
-	layout := m.getBodyLayout()
+	layout := m.bodyLayout()
 	if layout.coverCols <= 0 || layout.coverRows <= 0 {
 		_, shouldDelete, _, _ := m.ui.imgs.beginKittyOverlayState("", "")
 		if shouldDelete {

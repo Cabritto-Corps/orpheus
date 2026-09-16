@@ -12,15 +12,15 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 )
 
-// validKeyActions lists the action names accepted in keys.json. They are
-// stable snake_case identifiers over the keyMap fields.
-var validKeyActions = map[string]struct{}{
-	"tab": {}, "play_pause": {}, "next": {}, "prev": {}, "shuffle": {},
-	"loop": {}, "vol_up": {}, "vol_down": {}, "seek_back": {}, "seek_fwd": {},
-	"refresh": {}, "filter": {}, "toggle_help": {}, "select": {}, "close_modal": {},
-	"quit": {}, "queue_up": {}, "queue_down": {}, "queue_jump": {},
-	"queue_remove": {}, "queue_move_up": {}, "queue_move_down": {}, "settings": {},
-}
+// validKeyActions lists the action names accepted in keys.json, derived from
+// the shared registry.
+var validKeyActions = func() map[string]struct{} {
+	out := make(map[string]struct{}, len(actionRegistry))
+	for _, meta := range actionRegistry {
+		out[meta.action] = struct{}{}
+	}
+	return out
+}()
 
 // LoadKeyOverrides reads a keys.json file mapping action names to one or more
 // key strings. A missing file is not an error: bindings stay at defaults.
@@ -202,58 +202,15 @@ func newKeysFromConfig(overrides map[string][]string) keyMap {
 	return applyKeyOverrides(newKeys(), overrides)
 }
 
-// actionForBinding maps a keyMap field back to its keys.json action name.
+// defaultKeysForAction resolves an action name to its live key strings via
+// the shared registry.
 func defaultKeysForAction(k keyMap, action string) ([]string, bool) {
-	switch action {
-	case "tab":
-		return k.Tab.Keys(), true
-	case "play_pause":
-		return k.PlayPause.Keys(), true
-	case "next":
-		return k.Next.Keys(), true
-	case "prev":
-		return k.Prev.Keys(), true
-	case "shuffle":
-		return k.Shuffle.Keys(), true
-	case "loop":
-		return k.Loop.Keys(), true
-	case "vol_up":
-		return k.VolUp.Keys(), true
-	case "vol_down":
-		return k.VolDown.Keys(), true
-	case "seek_back":
-		return k.SeekBack.Keys(), true
-	case "seek_fwd":
-		return k.SeekFwd.Keys(), true
-	case "refresh":
-		return k.Refresh.Keys(), true
-	case "filter":
-		return k.Filter.Keys(), true
-	case "toggle_help":
-		return k.ToggleHelp.Keys(), true
-	case "select":
-		return k.Select.Keys(), true
-	case "close_modal":
-		return k.CloseModal.Keys(), true
-	case "quit":
-		return k.Quit.Keys(), true
-	case "settings":
-		return k.Settings.Keys(), true
-	case "queue_up":
-		return k.QueueUp.Keys(), true
-	case "queue_down":
-		return k.QueueDown.Keys(), true
-	case "queue_jump":
-		return k.QueueJump.Keys(), true
-	case "queue_remove":
-		return k.QueueRemove.Keys(), true
-	case "queue_move_up":
-		return k.QueueMoveUp.Keys(), true
-	case "queue_move_down":
-		return k.QueueMoveDown.Keys(), true
-	default:
-		return nil, false
+	for _, meta := range actionRegistry {
+		if meta.action == action {
+			return meta.bind(k).Keys(), true
+		}
 	}
+	return nil, false
 }
 
 // SaveKeys writes the full override map back to keys.json. Values that equal

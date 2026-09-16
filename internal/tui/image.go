@@ -397,6 +397,14 @@ func (c *imgCache) shouldQueuePriorityLoad(url string) bool {
 	return true
 }
 
+// protocolForRender reads the negotiated protocol under the lock so render
+// paths cannot race the writer (the bare field read was a latent race).
+func (c *imgCache) protocolForRender() imageProtocol {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.protocol
+}
+
 func (c *imgCache) hasKittyEncoding(url string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

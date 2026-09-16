@@ -68,15 +68,15 @@ func TestModalRowSelectedAndFallback(t *testing.T) {
 }
 
 func TestMiniGaugeBounds(t *testing.T) {
-	full := miniGauge(1, 6)
+	full := gradientBar(1, 6)
 	if !strings.Contains(full, "█") || strings.Contains(full, "░") {
 		t.Fatalf("full gauge should have no empty blocks: %q", full)
 	}
-	empty := miniGauge(0, 6)
+	empty := gradientBar(0, 6)
 	if !strings.Contains(empty, "░") || strings.Contains(empty, "█") {
 		t.Fatalf("empty gauge should have no filled blocks: %q", empty)
 	}
-	half := miniGauge(0.5, 6)
+	half := gradientBar(0.5, 6)
 	if strings.Count(half, "█") != 3 {
 		t.Fatalf("half gauge fill count = %d, want 3", strings.Count(half, "█"))
 	}
@@ -91,7 +91,8 @@ func TestSwatchBarRendersSpacedSwatches(t *testing.T) {
 		t.Fatalf("swatch colors = %d, want 7", len(swatches))
 	}
 	bar := swatchBar(swatches)
-	// 7 swatches x 2 cells + 6 single-space gaps
+	// 7 swatches x 2 cells + 6 single-space gaps: squares stay close within
+	// a row; the line spacing between theme entries does the separating.
 	if lipgloss.Width(bar) != 7*2+6 {
 		t.Fatalf("swatch bar width = %d, want %d", lipgloss.Width(bar), 7*2+6)
 	}

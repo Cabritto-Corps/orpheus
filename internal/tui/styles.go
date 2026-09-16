@@ -226,6 +226,20 @@ func verticalDivider(h int) string {
 	return strings.Repeat(line+"\n", h-1) + line
 }
 
+// newBrowseList builds one of the two library browsers with the shared
+// chrome configuration (chrome flags off, search prompt, themed styles).
+func newBrowseList() list.Model {
+	l := list.New(nil, newCachedPlaylistDelegate(), 40, 20)
+	l.SetShowTitle(false)
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(true)
+	l.SetShowFilter(true)
+	l.SetShowHelp(false)
+	l.FilterInput.Prompt = "Search: "
+	applyListStyles(&l)
+	return l
+}
+
 func newPlaylistDelegate() list.DefaultDelegate {
 	d := list.NewDefaultDelegate()
 	d.ShowDescription = true

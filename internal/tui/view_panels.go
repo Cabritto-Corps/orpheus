@@ -11,7 +11,7 @@ import (
 )
 
 func (m model) playlistsTabView() string {
-	layout := m.getBodyLayout()
+	layout := m.bodyLayout()
 	left := m.coverPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
 	divider := verticalDivider(layout.bodyH)
 	right := m.playlistBrowserPanel(layout.rightW, layout.bodyH)
@@ -34,7 +34,7 @@ func (m model) playlistBrowserPanel(w, h int) string {
 		}
 		inner = styleError.Render(truncate(errStr, w-2)) + rateHint + "\n" + styleDimmed.Render("r to retry")
 	} else if m.browse.playlistsLoading && len(m.browse.playlistList.Items()) == 0 {
-		inner = styleDimmed.Render("loading library...")
+		inner = styleDimmed.Render(m.ui.spinner.View() + " loading library...")
 	} else if len(m.browse.playlistList.Items()) == 0 {
 		inner = styleDimmed.Render("No playlists yet — press r to refresh")
 	} else {
@@ -68,18 +68,7 @@ func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
 	var coverStr string
 	pl, plOk := m.selectedPlaylist()
 	if plOk && pl.summary.ImageURL != "" {
-		url := pl.summary.ImageURL
-		if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
-			if m.ui.imgs.hasKittyEncoding(url) {
-				coverStr = m.blankArt(coverCols, coverRows)
-			} else {
-				coverStr = m.placeholderArt(coverCols, coverRows)
-			}
-		} else if s, cached := m.ui.imgs.cover(url, coverCols, coverRows); cached {
-			coverStr = s
-		} else {
-			coverStr = m.placeholderArt(coverCols, coverRows)
-		}
+		coverStr = m.coverOrPlaceholder(pl.summary.ImageURL, coverCols, coverRows)
 	} else {
 		coverStr = m.placeholderArt(coverCols, coverRows)
 	}
@@ -102,7 +91,7 @@ func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
 }
 
 func (m model) playbackScreenView() string {
-	layout := m.getBodyLayout()
+	layout := m.bodyLayout()
 	left := m.albumCoverPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
 	divider := verticalDivider(layout.bodyH)
 	right := m.queuePanel(layout.rightW, layout.bodyH)
@@ -111,7 +100,7 @@ func (m model) playbackScreenView() string {
 }
 
 func (m model) albumsTabView() string {
-	layout := m.getBodyLayout()
+	layout := m.bodyLayout()
 	left := m.albumPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
 	divider := verticalDivider(layout.bodyH)
 	right := m.albumBrowserPanel(layout.rightW, layout.bodyH)
@@ -130,7 +119,7 @@ func (m model) albumBrowserPanel(w, h int) string {
 		errStr := "failed to load: " + m.browse.playlistsErr.Error()
 		inner = styleError.Render(truncate(errStr, w-2)) + "\n" + styleDimmed.Render("r to retry")
 	} else if m.browse.playlistsLoading && len(m.browse.albumList.Items()) == 0 {
-		inner = styleDimmed.Render("loading albums...")
+		inner = styleDimmed.Render(m.ui.spinner.View() + " loading albums...")
 	} else if m.browse.albumsForbidden && len(m.browse.albumList.Items()) == 0 {
 		inner = styleDimmed.Render("saved albums unavailable — re-run 'orpheus auth login' (needs user-library-read)")
 	} else if len(m.browse.albumList.Items()) == 0 {
@@ -151,18 +140,7 @@ func (m model) albumPreviewPanel(w, h, coverCols, coverRows int) string {
 	var coverStr string
 	al, alOk := m.selectedAlbum()
 	if alOk && al.summary.ImageURL != "" {
-		url := al.summary.ImageURL
-		if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
-			if m.ui.imgs.hasKittyEncoding(url) {
-				coverStr = m.blankArt(coverCols, coverRows)
-			} else {
-				coverStr = m.placeholderArt(coverCols, coverRows)
-			}
-		} else if s, cached := m.ui.imgs.cover(url, coverCols, coverRows); cached {
-			coverStr = s
-		} else {
-			coverStr = m.placeholderArt(coverCols, coverRows)
-		}
+		coverStr = m.coverOrPlaceholder(al.summary.ImageURL, coverCols, coverRows)
 	} else {
 		coverStr = m.placeholderArt(coverCols, coverRows)
 	}
@@ -187,18 +165,7 @@ func (m model) albumCoverPanel(w, h, coverCols, coverRows int) string {
 
 	var coverStr string
 	if m.transport.status != nil && m.transport.status.AlbumImageURL != "" {
-		url := m.transport.status.AlbumImageURL
-		if m.ui.imgs != nil && m.ui.imgs.protocol == imageProtocolKitty {
-			if m.ui.imgs.hasKittyEncoding(url) {
-				coverStr = m.blankArt(coverCols, coverRows)
-			} else {
-				coverStr = m.placeholderArt(coverCols, coverRows)
-			}
-		} else if s, cached := m.ui.imgs.cover(url, coverCols, coverRows); cached {
-			coverStr = s
-		} else {
-			coverStr = m.placeholderArt(coverCols, coverRows)
-		}
+		coverStr = m.coverOrPlaceholder(m.transport.status.AlbumImageURL, coverCols, coverRows)
 	} else {
 		coverStr = m.placeholderArt(coverCols, coverRows)
 	}
@@ -300,8 +267,28 @@ func (m model) queuePanel(w, h int) string {
 		lines = append(lines, "", styleError.Render(truncate(errLine, max(12, w-2))))
 	}
 
-	content := strings.Join(lines, "\n")
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
+}
+
+// coverOrPlaceholder resolves a panel's cover cell: kitty overlays blank
+// the cell once the image is placed, ANSI panels show cached art or the
+// placeholder box. The single accessor reads the protocol under the cache
+// lock instead of every render site racing on the field.
+func (m model) coverOrPlaceholder(url string, cols, rows int) string {
+	if m.ui.imgs == nil {
+		return m.placeholderArt(cols, rows)
+	}
+	if m.ui.imgs.protocolForRender() == imageProtocolKitty {
+		if m.ui.imgs.hasKittyEncoding(url) {
+			return m.blankArt(cols, rows)
+		}
+		return m.placeholderArt(cols, rows)
+	}
+	if s, ok := m.ui.imgs.cover(url, cols, rows); ok {
+		return s
+	}
+	return m.placeholderArt(cols, rows)
 }
 
 func (m model) blankArt(cols, rows int) string {
@@ -326,21 +313,13 @@ func (m model) placeholderArt(cols, rows int) string {
 	if cached, ok := placeholderCache.get(key); ok {
 		return cached
 	}
-	style := stylePlaceholderBorder
-	top := style.Render("\u256d" + strings.Repeat("\u2500", cols-2) + "\u256e")
-	mid := style.Render("\u2502" + strings.Repeat(" ", cols-2) + "\u2502")
-	bot := style.Render("\u2570" + strings.Repeat("\u2500", cols-2) + "\u256f")
-
-	midRows := rows - 2
-	var sb strings.Builder
-	sb.WriteString(top)
-	for range midRows {
-		sb.WriteByte('\n')
-		sb.WriteString(mid)
-	}
-	sb.WriteByte('\n')
-	sb.WriteString(bot)
-	out := sb.String()
+	// Border accounts for its own 2 cells: Width/Height size the content.
+	out := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorDivider).
+		Width(cols - 2).
+		Height(rows - 2).
+		Render("")
 	placeholderCache.put(key, out)
 	return out
 }

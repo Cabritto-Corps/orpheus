@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"orpheus/internal/librespot"
@@ -19,9 +20,8 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.ui.height = msg.Height
 
 	m.ui.imgs.invalidateCovers()
-	m.ui.cachedBodyLayoutValid = false
 
-	layout := m.getBodyLayout()
+	layout := m.bodyLayout()
 	listInnerW := layout.rightW - 1
 	listInnerH := layout.bodyH - 4
 
@@ -34,11 +34,9 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.ui.trackPopupOpen {
-		modalW := m.ui.width - 4
-		popupBodyH := m.ui.height - headerH - tabBarH - 2
-		popupInnerH := max(popupBodyH-4, 10)
-		m.ui.trackPopupList.SetSize(modalW-2, popupInnerH-4)
-		m.ui.trackPopupWidth = modalW - 4
+		_, listW, listH := popupModalSize(m.ui.width, m.ui.height)
+		m.ui.trackPopupList.SetSize(listW, listH)
+		m.ui.trackPopupWidth = listW - 4
 		m.retruncateTrackPopupTitles()
 	}
 
@@ -50,6 +48,10 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	m.interpolatePlaybackProgress(uiTickInterval)
+	// Advance the loading spinner from the app tick (the list package's own
+	// pattern for tick-driven spinners); the next-tick cmd is dropped
+	// because the app tick is the clock.
+	m.ui.spinner, _ = m.ui.spinner.Update(spinner.TickMsg{Time: time.Now(), ID: m.ui.spinner.ID()})
 	popupTimeoutCmd := m.tickTrackPopupWait()
 	inputCmd := m.pumpInputExecutor()
 	var startupCoverCmd tea.Cmd
@@ -621,6 +623,12 @@ func (m *model) retruncateTrackPopupTitles() {
 		items = append(items, trackItem{item: qi})
 	}
 	m.ui.trackPopupList.SetItems(items)
+	// The first SetItems derives PerPage while TotalPages is still 0, so the
+	// pagination row counts as one line instead of two (dots + margin) and
+	// the modal's exact-fit clamp cuts the dots. Re-running SetSize re-derives
+	// PerPage against the real pagination height; this is why the dots only
+	// appeared after a resize event.
+	m.ui.trackPopupList.SetSize(m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height())
 }
 
 // tickTrackPopupWait closes the popup with an error when a pending

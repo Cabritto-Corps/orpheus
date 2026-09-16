@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
@@ -27,6 +29,29 @@ func modalGeometry(termW, termH, wantedW, wantedH int) (width, height int) {
 	return width, height
 }
 
+// modalHeader composes the title row: title left, hint truncated into the
+// remaining width and pushed right. The fits guarantee the joined header
+// never exceeds innerW — Style.Width wraps, and a wrapped header pushed the
+// body off the height budget (the old max() gap floors could overflow).
+func modalHeader(title, hint string, innerW int) string {
+	title = fitCell(title, innerW)
+	if hint != "" {
+		hint = fitCell(hint, max(0, innerW-lipgloss.Width(title)-2))
+	}
+	gap := max(0, innerW-lipgloss.Width(title)-lipgloss.Width(hint))
+	return title + strings.Repeat(" ", gap) + hint
+}
+
+// popupModalSize is the single source for the track popup's box and list
+// dimensions: open, resize and view must derive them here or any
+// WindowSizeMsg permanently reshapes the popup (open and resize used to
+// size the list differently, shrinking it 2 cols / 4 rows per resize).
+func popupModalSize(termW, termH int) (modalW, listW, listH int) {
+	bodyH := max(8, termH-headerH-2)
+	modalW, boxH := modalGeometry(termW, termH, termW-4, bodyH)
+	return modalW, max(12, modalW-modalContentInset), max(2, boxH-2)
+}
+
 // modalFrame renders a modal covering the full terminal frame: title row
 // with a right-aligned (truncated) hint, a separator, the body clipped to
 // the remaining height, all inside the shared box on the themed scrim.
@@ -35,13 +60,7 @@ func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int
 	width, height := modalGeometry(termW, termH, wantedW, wantedH)
 	innerW := max(8, width-modalContentInset)
 
-	if hint != "" {
-		hint = fitCell(hint, max(8, innerW-lipgloss.Width(fitCell(title, innerW))-2))
-	}
-	title = fitCell(title, max(8, innerW-lipgloss.Width(hint)))
-
-	gap := max(2, innerW-lipgloss.Width(title)-lipgloss.Width(hint))
-	header := title + strings.Repeat(" ", gap) + hint
+	header := modalHeader(title, hint, innerW)
 	sep := styleModalHint.Render(strings.Repeat("─", innerW))
 	body = lipgloss.NewStyle().MaxHeight(max(2, height-2)).Render(body)
 
@@ -101,13 +120,23 @@ func alignRight(s string, width int) string {
 	return strings.Repeat(" ", pad) + s
 }
 
-// miniGauge renders a bar of filled/empty blocks proportional to frac, in
-// the same visual language as the header volume bar.
-func miniGauge(frac float64, width int) string {
-	frac = max(0, min(1, frac))
-	filled := min(int(float64(width)*frac), width)
-	return styleVolumeBarFilled.Render(strings.Repeat("█", filled)) +
-		styleVolumeBarEmpty.Render(strings.Repeat("░", width-filled))
+// hintLine renders "key desc" pairs through bubbles/help so separators,
+// ellipsis truncation at narrow widths and style handling follow the
+// framework instead of being re-invented per surface.
+func hintLine(bindings []key.Binding, width int) string {
+	h := help.New()
+	h.Width = width
+	h.Styles.ShortKey = styleTrackPopupTitle
+	h.Styles.ShortDesc = styleModalHint
+	h.Styles.ShortSeparator = styleModalHint
+	return h.ShortHelpView(bindings)
+}
+
+// withDesc copies a binding keeping its live key strings but speaking a
+// context-specific description ("enter play" means "enter save" on the
+// theme picker).
+func withDesc(b key.Binding, desc string) key.Binding {
+	return key.NewBinding(key.WithKeys(b.Keys()...), key.WithHelp(b.Help().Key, desc))
 }
 
 // themeSwatch is one preview cell: either a background-filled pair of spaces

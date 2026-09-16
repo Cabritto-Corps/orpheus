@@ -239,7 +239,7 @@ func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
 }
 
 func (m *model) maybeRecoverKittyProtocol() {
-	if m.ui.imgs == nil || m.ui.imgs.protocol == imageProtocolKitty {
+	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() == imageProtocolKitty {
 		return
 	}
 	// Recovery: after a healthy streak of successful loads while kitty is
@@ -254,7 +254,7 @@ func (m *model) maybeRecoverKittyProtocol() {
 }
 
 func (m *model) maybeFallbackFromKittyOnPlayerFailures(url string) {
-	if m.ui.imgs == nil || m.ui.imgs.protocol != imageProtocolKitty {
+	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() != imageProtocolKitty {
 		return
 	}
 	if m.transport.status == nil || strings.TrimSpace(m.transport.status.AlbumImageURL) == "" {

@@ -70,7 +70,6 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.normalizeLibraryPagination()
 			m.ui.coverRefreshTick = 0
-			m.ui.cachedBodyLayoutValid = false
 			return m, m.loadVisiblePlaylistCoversCmd()
 		}
 	}
@@ -295,6 +294,27 @@ type trackPopupItemsMsg struct {
 	items []spotify.QueueItem
 }
 
+// newTrackPopupList builds the track popup's list with the shared chrome:
+// themed filter prompt, a readable status bar (the item count stays visible
+// even on a single page) and pagination dots the framework's default greys
+// bury on dark themes.
+func newTrackPopupList(termW, termH int) list.Model {
+	_, listW, listH := popupModalSize(termW, termH)
+	popup := list.New(nil, newTrackPopupDelegate(), listW, listH)
+	popup.SetShowTitle(false)
+	popup.SetShowStatusBar(true)
+	popup.SetFilteringEnabled(true)
+	popup.SetShowFilter(true)
+	popup.SetShowHelp(false)
+	popup.FilterInput.Prompt = "/ "
+	popup.SetStatusBarItemName("track", "tracks")
+	popup.Styles.FilterPrompt = lipgloss.NewStyle().Foreground(colorMutedBlue)
+	popup.Styles.StatusBar = lipgloss.NewStyle().Foreground(colorOffWhite).PaddingLeft(1)
+	popup.Styles.ActivePaginationDot = lipgloss.NewStyle().Foreground(colorBlue).SetString(" •")
+	popup.Styles.InactivePaginationDot = lipgloss.NewStyle().Foreground(colorDimBlue).SetString(" •")
+	return popup
+}
+
 func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.ui.trackPopupOpen = true
 	m.ui.trackPopupReqToken++
@@ -305,22 +325,9 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.ui.trackPopupName = sel.summary.Name
 	m.ui.trackPopupItems = nil
 
-	modalW := m.ui.width - 4
-	bodyH := m.ui.height - headerH - tabBarH - 2
-	innerH := max(bodyH-4, 10)
-
-	delegate := newTrackPopupDelegate()
-	popup := list.New(nil, delegate, modalW, innerH)
-	popup.SetShowTitle(false)
-	popup.SetShowStatusBar(true)
-	popup.SetFilteringEnabled(true)
-	popup.SetShowFilter(true)
-	popup.SetShowHelp(false)
-	popup.FilterInput.Prompt = "/ "
-	popup.Styles.FilterPrompt = lipgloss.NewStyle().Foreground(colorMutedBlue)
-	popup.Styles.StatusBar = lipgloss.NewStyle().Foreground(colorMutedBlue).PaddingLeft(1)
+	popup := newTrackPopupList(m.ui.width, m.ui.height)
 	m.ui.trackPopupList = popup
-	m.ui.trackPopupWidth = modalW - 4
+	m.ui.trackPopupWidth = m.ui.trackPopupList.Width() - 4
 
 	if m.tuiCmdCh != nil && m.contextTracksCh != nil {
 		select {

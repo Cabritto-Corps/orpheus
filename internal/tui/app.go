@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -121,25 +122,8 @@ func newTrackPopupDelegate() list.DefaultDelegate {
 
 func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- librespot.ContextTracksResult, ldr *loader.BackgroundLoader) model {
 	applyTheme(LoadTheme(cfg.Theme, cfg.ThemePath))
-	delegate := newCachedPlaylistDelegate()
-
-	browser := list.New(nil, delegate, 40, 20)
-	browser.SetShowTitle(false)
-	browser.SetShowStatusBar(false)
-	browser.SetFilteringEnabled(true)
-	browser.SetShowFilter(true)
-	browser.SetShowHelp(false)
-	browser.FilterInput.Prompt = "Search: "
-	applyListStyles(&browser)
-
-	albums := list.New(nil, delegate, 40, 20)
-	albums.SetShowTitle(false)
-	albums.SetShowStatusBar(false)
-	albums.SetFilteringEnabled(true)
-	albums.SetShowFilter(true)
-	albums.SetShowHelp(false)
-	albums.FilterInput.Prompt = "Search: "
-	applyListStyles(&albums)
+	browser := newBrowseList()
+	albums := newBrowseList()
 
 	m := model{
 		ctx:             ctx,
@@ -168,6 +152,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 			pollInterval:           cfg.PollInterval,
 			activeTab:              tabPlaylists,
 			imgs:                   newImgCache(),
+			spinner:                spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 			statusQueueCache:       newStatusQueueSnapshotCache(),
 			startupCoverBoostTicks: 40,
 			cover:                  newCoverManager(),

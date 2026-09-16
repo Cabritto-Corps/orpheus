@@ -154,8 +154,13 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 	if next.ui.settings.mode != settingsModeKeys {
 		t.Fatalf("enter on keybinds row should open the keys list, mode=%v", next.ui.settings.mode)
 	}
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown}) // to play_pause
-	next = sendEnter(next)                           // start capture
+	for _, entry := range settingsKeyActions {
+		if entry.action == "play_pause" {
+			break
+		}
+		next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	next = sendEnter(next) // start capture
 	if next.ui.settings.mode != settingsModeCapture || next.ui.settings.captureKey != "play_pause" {
 		t.Fatalf("capture mode not entered: mode=%v capture=%q", next.ui.settings.mode, next.ui.settings.captureKey)
 	}

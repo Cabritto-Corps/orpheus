@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/viewport"
 
@@ -70,6 +71,7 @@ type browseModel struct {
 type uiModel struct {
 	activeTab               tab
 	helpOpen                bool
+	spinner                 spinner.Model
 	navToken                int
 	trackPopupOpen          bool
 	trackPopupList          list.Model
@@ -84,8 +86,6 @@ type uiModel struct {
 	width                   int
 	height                  int
 	nerdFonts               bool
-	cachedBodyLayout        bodyLayout
-	cachedBodyLayoutValid   bool
 	helpViewport            *viewport.Model
 	keys                    keyMap
 	pollInterval            time.Duration
@@ -155,33 +155,23 @@ type settingsModel struct {
 	keysTableDirty           bool
 }
 
-var settingsKeyActions = []struct {
+// settingsKeyActions derives the settings keys-menu rows (order + labels)
+// from the shared action registry.
+var settingsKeyActions = func() []struct {
 	action string
 	label  string
-}{
-	{"tab", "switch tab"},
-	{"play_pause", "play/pause"},
-	{"next", "next track"},
-	{"prev", "previous track"},
-	{"shuffle", "shuffle"},
-	{"loop", "repeat"},
-	{"vol_up", "volume up"},
-	{"vol_down", "volume down"},
-	{"seek_back", "seek back"},
-	{"seek_fwd", "seek forward"},
-	{"refresh", "refresh library"},
-	{"filter", "search filter"},
-	{"toggle_help", "toggle help"},
-	{"select", "select / play"},
-	{"close_modal", "close modal"},
-	{"quit", "quit (ctrl+c always quits)"},
-	{"settings", "open settings"},
-	{"queue_up", "queue cursor up"},
-	{"queue_down", "queue cursor down"},
-	{"queue_jump", "play from queue row"},
-	{"queue_remove", "remove queue row"},
-	{"queue_move_up", "move queue row up"},
-	{"queue_move_down", "move queue row down"},
-}
+} {
+	out := make([]struct {
+		action string
+		label  string
+	}, 0, len(actionRegistry))
+	for _, m := range actionRegistry {
+		out = append(out, struct {
+			action string
+			label  string
+		}{m.action, m.label})
+	}
+	return out
+}()
 
 var settingsThemeOrder = themeRegistryNames()

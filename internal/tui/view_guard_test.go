@@ -119,16 +119,15 @@ func guardModel(tb testing.TB, v frameVariant) model {
 			})
 		}
 		m.ui.trackPopupItems = items
-		modalW := v.width - 4
-		bodyH := v.height - headerH - tabBarH - 2
-		popup := list.New(nil, newTrackPopupDelegate(), modalW, max(bodyH-4, 10))
+		_, listW, listH := popupModalSize(v.width, v.height)
+		popup := list.New(nil, newTrackPopupDelegate(), listW, listH)
 		popup.SetShowTitle(false)
 		popup.SetShowStatusBar(true)
 		popup.SetFilteringEnabled(true)
 		popup.SetShowFilter(true)
 		popup.SetShowHelp(false)
 		m.ui.trackPopupList = popup
-		m.ui.trackPopupWidth = modalW - 4
+		m.ui.trackPopupWidth = listW - 4
 		m.retruncateTrackPopupTitles()
 	}
 	return m
@@ -168,7 +167,6 @@ func TestViewFrameContract(t *testing.T) {
 	}
 }
 
-
 func TestViewFrameContractAllThemes(t *testing.T) {
 	t.Cleanup(func() { applyTheme(themePreset("default")) })
 	sizes := [][2]int{{40, 12}, {120, 40}}
@@ -192,6 +190,45 @@ func TestViewFrameContractModals(t *testing.T) {
 			variant := frameVariant{name: modal, width: size[0], height: size[1], tab: tabPlayer, playing: true, hasQueue: true, modal: modal}
 			m := guardModel(t, variant)
 			assertFrameContract(t, fmt.Sprintf("modal-%s-%dx%d", modal, size[0], size[1]), m.View(), variant.width, variant.height)
+		}
+	}
+}
+
+func TestPopupListSizeInvariantUnderResize(t *testing.T) {
+	for _, size := range [][2]int{{60, 20}, {80, 24}, {120, 40}} {
+		v := frameVariant{name: "popup", width: size[0], height: size[1], tab: tabPlayer, playing: true, hasQueue: true, modal: "popup"}
+		m := guardModel(t, v)
+		_, wantW, wantH := popupModalSize(size[0], size[1])
+		gotW, gotH := m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height()
+		if gotW != wantW || gotH != wantH {
+			t.Fatalf("open at %dx%d: list %dx%d, want %dx%d", size[0], size[1], gotW, gotH, wantW, wantH)
+		}
+		m2, _ := m.handleWindowSizeMsg(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m = m2.(model)
+		gotW, gotH = m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height()
+		if gotW != wantW || gotH != wantH {
+			t.Fatalf("resize at %dx%d: list %dx%d, want open-time %dx%d", size[0], size[1], gotW, gotH, wantW, wantH)
+		}
+	}
+}
+
+func TestModalHeaderNeverOverflows(t *testing.T) {
+	// title+hint spanning exactly the inner width used to overflow via the
+	// max(2,...) gap floor and wrap inside the box.
+	cases := []struct{ title, hint string }{
+		{strings.Repeat("T", 30), strings.Repeat("H", 30)},
+		{strings.Repeat("T", 60), strings.Repeat("H", 60)},
+		{"Settings", "enter: change   +/-: adjust"},
+		{"Theme", "↑/↓: preview   enter: save   esc: revert"},
+		{"", "only-hint"},
+		{"only-title", ""},
+	}
+	for _, size := range []int{34, 40, 60, 100} {
+		for _, c := range cases {
+			header := modalHeader(c.title, c.hint, size)
+			if w := lipgloss.Width(header); w > size {
+				t.Fatalf("innerW %d: header %d wide for %q/%q", size, w, c.title, c.hint)
+			}
 		}
 	}
 }

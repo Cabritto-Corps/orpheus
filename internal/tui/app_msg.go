@@ -57,7 +57,7 @@ func (m model) needsImageURL(url string) bool {
 }
 
 func (m model) shouldForceKittyRedrawForLoadedURL(url string) bool {
-	if m.ui.imgs == nil || m.ui.imgs.protocol != imageProtocolKitty {
+	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() != imageProtocolKitty {
 		return false
 	}
 	target := strings.TrimSpace(url)

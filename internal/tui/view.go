@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -12,6 +13,13 @@ const (
 	headerH    = 3
 	tabBarH    = 2
 	playerBarH = 2
+	// playerBarGap is the spacing between the bar's four segments (state
+	// icon, elapsed, progress, total); playerBarGaps is how many gaps that
+	// spacing fills. The bar's width budget was an unexplained magic 8.
+	playerBarGap  = 2
+	playerBarGaps = 4
+	volumeBarW    = 6
+	gaugeW        = 6
 	// spareLineH is the deliberately empty last row: kitty overlays place
 	// images absolutely, and a frame that fills the terminal's last row
 	// makes the terminal scroll under the renderer, shifting every
@@ -30,7 +38,6 @@ const (
 	iconPlay            = "▶"
 	iconPause           = "⏸"
 	iconDevice          = "●"
-	iconVolume          = "▪"
 	iconShuffle         = "⇄"
 	iconRepeatContext   = "↻"
 	iconRepeatTrack     = "↻¹"
@@ -73,7 +80,7 @@ func (m model) View() string {
 
 	bar := m.playerBarView()
 	parts := []string{header, tabBar, body, bar}
-	return strings.Join(parts, "\n") + m.kittyOverlay()
+	return lipgloss.JoinVertical(lipgloss.Left, parts...) + m.kittyOverlay()
 }
 
 type bodyLayout struct {
@@ -150,14 +157,19 @@ func (m model) selectedAlbum() (playlistItem, bool) {
 	return sel, ok
 }
 
-func (m model) renderProgressBar(pct float64, width int) string {
+// gradientBar renders a filled/empty bar through bubbles/progress so the
+// color ramp and width handling follow the framework; colors resolve to the
+// live theme on every render.
+func gradientBar(frac float64, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	filled := min(int(pct*float64(width)), width)
-	empty := width - filled
-	return styleProgressBarFilled.Render(strings.Repeat("█", filled)) +
-		styleProgressBarEmpty.Render(strings.Repeat("░", empty))
+	frac = max(0, min(1, frac))
+	return progress.New(
+		progress.WithWidth(width),
+		progress.WithoutPercentage(),
+		progress.WithGradient(string(colorBlue), string(colorBlueLight)),
+	).ViewAs(frac)
 }
 
 func fmtDuration(ms int) string {
@@ -179,17 +191,6 @@ func truncate(s string, max int) string {
 		return "…"
 	}
 	return ansi.Truncate(s, max-1, "") + "…"
-}
-
-
-func (m *model) getBodyLayout() bodyLayout {
-	if m.ui.cachedBodyLayoutValid {
-		return m.ui.cachedBodyLayout
-	}
-	layout := m.bodyLayout()
-	m.ui.cachedBodyLayout = layout
-	m.ui.cachedBodyLayoutValid = true
-	return layout
 }
 
 // padCell pads s with spaces to width display cells (not bytes).

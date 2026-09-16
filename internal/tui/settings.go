@@ -1,13 +1,12 @@
 package tui
 
 import (
-	"fmt"
 	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -382,13 +381,15 @@ func (m model) themePickerView(modalW, innerH int) string {
 	overrides := loadThemeOverrides(s.themePath)
 	listH := max(3, innerH-6)
 
-	// Scrolling window over the registry rows.
+	// Scrolling window over the registry rows; a blank row between entries
+	// keeps the swatch rows from reading as one joined block.
+	entries := (listH + 1) / 2
 	offset := 0
-	if s.themeCursor >= listH {
-		offset = s.themeCursor - listH + 1
+	if s.themeCursor >= entries {
+		offset = s.themeCursor - entries + 1
 	}
 	var rows []string
-	for i := offset; i < min(len(settingsThemeOrder), offset+listH); i++ {
+	for i := offset; i < min(len(settingsThemeOrder), offset+entries); i++ {
 		name := settingsThemeOrder[i]
 		colors := resolveThemeColors(name, overrides)
 		marker := "  "
@@ -396,15 +397,22 @@ func (m model) themePickerView(modalW, innerH int) string {
 			marker = "✓"
 		}
 		bar := swatchBar(themeSwatches(colors))
-		row := fmt.Sprintf(" %s %-14s %s", marker, name, bar)
+		row := " " + marker + " " + padCell(name, 14) + " " + bar
 		rows = append(rows, modalRow(row, "", s.themeCursor == i, modalW))
+		if i < len(settingsThemeOrder)-1 {
+			rows = append(rows, modalRow("", "", false, modalW))
+		}
 	}
 
 	var body strings.Builder
-	body.WriteString("\n" + strings.Join(rows, "\n") + "\n")
+	body.WriteString("\n" + lipgloss.JoinVertical(lipgloss.Left, rows...) + "\n")
 	k := m.ui.keys
-	return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Theme"),
-		styleModalHint.Render(k.QueueUp.Help().Key+"/"+k.QueueDown.Help().Key+": preview   "+k.Select.Help().Key+": save   "+k.CloseModal.Help().Key+": revert"), body.String(), modalW, innerH)
+	hint := hintLine([]key.Binding{
+		key.NewBinding(key.WithKeys(k.QueueUp.Keys()...), key.WithHelp(k.QueueUp.Help().Key+"/"+k.QueueDown.Help().Key, "preview")),
+		withDesc(k.Select, "save"),
+		withDesc(k.CloseModal, "revert"),
+	}, modalW-modalContentInset)
+	return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Theme"), hint, body.String(), modalW, innerH)
 }
 
 func (m model) settingsModalView() string {
@@ -423,7 +431,8 @@ func (m model) settingsModalView() string {
 			body = "\n  bind \"" + settingsActionLabel(s.captureKey) + "\" to " + pending + "\n"
 		}
 		// Capture is a 3-line prompt: a full-height box reads as empty.
-		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"), styleModalHint.Render(m.ui.keys.Select.Help().Key+": confirm   "+m.ui.keys.CloseModal.Help().Key+": cancel"), body, modalW, 7)
+		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"),
+			styleModalHint.Render(hintLine([]key.Binding{withDesc(m.ui.keys.Select, "confirm"), withDesc(m.ui.keys.CloseModal, "cancel")}, modalW-modalContentInset)), body, modalW, 7)
 
 	case settingsModeTheme:
 		return m.themePickerView(modalW, innerH)
@@ -443,16 +452,17 @@ func (m model) settingsModalView() string {
 			body.WriteString(styleError.Render("  ⚠ conflict: "+settingsActionLabel(action)) + "\n")
 			shown++
 		}
-		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Keybinds"), styleModalHint.Render(m.ui.keys.Select.Help().Key+": rebind   "+m.ui.keys.CloseModal.Help().Key+": back"), body.String(), modalW, innerH)
+		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Keybinds"),
+			styleModalHint.Render(hintLine([]key.Binding{withDesc(m.ui.keys.Select, "rebind"), withDesc(m.ui.keys.CloseModal, "back")}, modalW-modalContentInset)), body.String(), modalW, innerH)
 
 	default:
 		crossfadeGauge := ""
 		cacheGauge := ""
 		if s.crossfadeEnabled {
-			crossfadeGauge = " " + miniGauge(s.crossfadeSeconds/30, 6)
+			crossfadeGauge = " " + gradientBar(s.crossfadeSeconds/30, gaugeW)
 		}
 		if s.cacheEnabled {
-			cacheGauge = " " + miniGauge(float64(s.cacheSizeMB-64)/float64(4096-64), 6)
+			cacheGauge = " " + gradientBar(float64(s.cacheSizeMB-64)/float64(4096-64), gaugeW)
 		}
 		rows := []string{
 			modalRow("Theme", m.themeValue(s.themePreset), s.cursor == 0, modalW),
@@ -460,15 +470,16 @@ func (m model) settingsModalView() string {
 			modalRow("Crossfade", settingsCrossfadeLabel(&s)+crossfadeGauge, s.cursor == 2, modalW),
 			modalRow("Audio cache", settingsCacheLabel(&s)+cacheGauge, s.cursor == 3, modalW),
 		}
-		body := "\n" + strings.Join(rows, "\n") + "\n"
-		body += "\n" + styleModalHint.Render(m.ui.keys.Select.Help().Key+": change   "+m.ui.keys.VolUp.Help().Key+"/"+m.ui.keys.VolDown.Help().Key+": adjust") + "\n"
+		body := "\n" + lipgloss.JoinVertical(lipgloss.Left, rows...) + "\n"
+		body += "\n" + styleModalHint.Render(hintLine([]key.Binding{withDesc(m.ui.keys.Select, "change"), m.ui.keys.VolUp, m.ui.keys.VolDown}, modalW-modalContentInset)) + "\n"
 		if s.restartRequiredCrossfade {
 			body += styleError.Render("  crossfade applies on restart") + "\n"
 		}
 		if s.restartRequiredCache {
 			body += styleError.Render("  cache applies on restart") + "\n"
 		}
-		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"), styleModalHint.Render(m.ui.keys.CloseModal.Help().Key+": close"), body, modalW, innerH)
+		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"),
+			styleModalHint.Render(hintLine([]key.Binding{m.ui.keys.CloseModal}, modalW-modalContentInset)), body, modalW, innerH)
 	}
 }
 
@@ -518,35 +529,13 @@ func (m model) primaryKeyLabel(action string) string {
 
 const maxConflictHintLines = 3
 
-// rethemeBrowseLists rebuilds both browser lists with a fresh delegate so
-// selection styles follow the new palette: the delegate is embedded by value
-// inside list.Model, so the only way to re-style it is a rebuild. Items,
-// size, flags and the global cursor position are preserved.
+// rethemeBrowseLists re-styles both browser lists for a new palette.
 func (m *model) rethemeBrowseLists() {
-	m.browse.playlistList = rebuildThemedList(m.browse.playlistList)
-	m.browse.albumList = rebuildThemedList(m.browse.albumList)
-}
-
-func rebuildThemedList(old list.Model) list.Model {
-	globalIdx := old.GlobalIndex()
-	items := old.Items()
-	w, h := old.Width(), old.Height()
-
-	l := list.New(items, newCachedPlaylistDelegate(), w, h)
-	l.SetShowTitle(false)
-	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(true)
-	l.SetShowFilter(true)
-	l.SetShowHelp(false)
-	l.FilterInput.Prompt = "Search: "
-	applyListStyles(&l)
-
-	if len(items) > 0 {
-		gi := clampInt(globalIdx, 0, len(items)-1)
-		if pg := l.Paginator; pg.PerPage > 0 {
-			l.Paginator.Page = gi / pg.PerPage
-		}
-		l.Select(gi % max(l.Paginator.PerPage, 1))
-	}
-	return l
+	// Swap the delegates in place: SetDelegate keeps items, cursor and
+	// pagination, so a theme change no longer tears down and rebuilds the
+	// list models (the fresh delegate brings a fresh render cache).
+	m.browse.playlistList.SetDelegate(newCachedPlaylistDelegate())
+	m.browse.albumList.SetDelegate(newCachedPlaylistDelegate())
+	applyListStyles(&m.browse.playlistList)
+	applyListStyles(&m.browse.albumList)
 }
