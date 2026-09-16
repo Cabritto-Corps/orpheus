@@ -21,7 +21,7 @@ import (
 func TestLoadLibraryCoversDrainsBatchSized(t *testing.T) {
 	m := NewLoaderModel()
 	playlistItems := make([]list.Item, 0, 30)
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		playlistItems = append(playlistItems, playlistItem{summary: spotify.PlaylistSummary{
 			ID:       fmt.Sprintf("p%d", i),
 			Name:     fmt.Sprintf("pl%d", i),

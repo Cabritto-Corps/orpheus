@@ -361,10 +361,7 @@ func queueGridFor(w int) queueGrid {
 	g := queueGrid{lead: 1, idxW: 4, durW: 8}
 	g.durW = min(g.durW, max(4, (w-9)/6))
 	budget := w - g.lead - g.idxW - 1 - 2 - 1 - g.durW // title+artist
-	g.artistW = min(20, max(6, budget*2/5))
-	if g.artistW > max(0, budget-4) {
-		g.artistW = max(0, budget-4)
-	}
+	g.artistW = min(min(20, max(6, budget*2/5)), max(0, budget-4))
 	g.titleW = max(4, budget-g.artistW)
 	if budget < 8 {
 		g.titleW = max(4, budget)

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -49,7 +50,7 @@ func LoadKeyOverrides(path string) (map[string][]string, error) {
 		switch v := rawKeys.(type) {
 		case string:
 			keys = []string{v}
-		case []interface{}:
+		case []any:
 			for _, k := range v {
 				s, ok := k.(string)
 				if !ok {
@@ -194,12 +195,7 @@ func shortKeyLabel(keys []string) string {
 }
 
 func keysContainList(keys []string, want string) bool {
-	for _, k := range keys {
-		if k == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(keys, want)
 }
 
 func newKeysFromConfig(overrides map[string][]string) keyMap {

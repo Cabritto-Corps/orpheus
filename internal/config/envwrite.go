@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 )
@@ -22,9 +23,7 @@ func UpsertEnvFile(path string, values map[string]string) error {
 	}
 
 	remaining := make(map[string]string, len(values))
-	for k, v := range values {
-		remaining[k] = v
-	}
+	maps.Copy(remaining, values)
 
 	for i, line := range out {
 		trimmed := strings.TrimSpace(line)
@@ -32,8 +31,8 @@ func UpsertEnvFile(path string, values map[string]string) error {
 			continue
 		}
 		key := trimmed
-		if eq := strings.IndexByte(trimmed, '='); eq >= 0 {
-			key = strings.TrimSpace(trimmed[:eq])
+		if before, _, ok := strings.Cut(trimmed, "="); ok {
+			key = strings.TrimSpace(before)
 		}
 		if v, ok := remaining[key]; ok {
 			out[i] = key + "=" + v

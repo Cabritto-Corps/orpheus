@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -92,10 +93,7 @@ func alignRight(s string, width int) string {
 // the same visual language as the header volume bar.
 func miniGauge(frac float64, width int) string {
 	frac = max(0, min(1, frac))
-	filled := int(float64(width) * frac)
-	if filled > width {
-		filled = width
-	}
+	filled := min(int(float64(width)*frac), width)
 	return styleVolumeBarFilled.Render(strings.Repeat("█", filled)) +
 		styleVolumeBarEmpty.Render(strings.Repeat("░", width-filled))
 }
@@ -160,10 +158,8 @@ func keyConflictActions(k keyMap) map[string]bool {
 
 func keyListOverlap(a, b []string) bool {
 	for _, x := range a {
-		for _, y := range b {
-			if x == y {
-				return true
-			}
+		if slices.Contains(b, x) {
+			return true
 		}
 	}
 	return false

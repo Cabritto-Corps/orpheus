@@ -200,8 +200,7 @@ func DiagnoseError(err error) ErrorDiagnosis {
 		return ErrorDiagnosis{Category: "canceled"}
 	}
 
-	var apiErr spotifyapi.Error
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[spotifyapi.Error](err); ok {
 		diag := ErrorDiagnosis{
 			Category:   "api-error",
 			APIStatus:  apiErr.Status,

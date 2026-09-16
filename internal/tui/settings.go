@@ -2,6 +2,7 @@ package tui
 
 import (
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -294,12 +295,7 @@ func captureKeyName(msg tea.KeyMsg) string {
 }
 
 func keyContains(keys []string, want string) bool {
-	for _, k := range keys {
-		if k == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(keys, want)
 }
 
 func (m model) settingsOpen() bool {
@@ -367,17 +363,18 @@ func (m model) settingsModalView() string {
 		conflictCount := min(len(s.conflicts), maxConflictHintLines)
 		tableH := max(4, innerH-4-conflictCount)
 		t := m.settingsKeysTable(max(4, modalW-6), tableH)
-		body := "\n" + t.View() + "\n"
+		var body strings.Builder
+		body.WriteString("\n" + t.View() + "\n")
 		shown := 0
 		for action := range s.conflicts {
 			if shown == maxConflictHintLines {
-				body += styleError.Render("  ⚠ more conflicts…") + "\n"
+				body.WriteString(styleError.Render("  ⚠ more conflicts…") + "\n")
 				break
 			}
-			body += styleError.Render("  ⚠ conflict: "+settingsActionLabel(action)) + "\n"
+			body.WriteString(styleError.Render("  ⚠ conflict: "+settingsActionLabel(action)) + "\n")
 			shown++
 		}
-		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Keybinds"), styleModalHint.Render("enter: rebind   esc: back"), body, modalW, innerH)
+		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Keybinds"), styleModalHint.Render("enter: rebind   esc: back"), body.String(), modalW, innerH)
 
 	default:
 		crossfadeGauge := ""

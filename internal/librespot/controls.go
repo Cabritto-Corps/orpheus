@@ -18,7 +18,6 @@ import (
 	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
 	playerpb "github.com/elxgy/go-librespot/proto/spotify/player"
 	"github.com/elxgy/go-librespot/tracks"
-	"google.golang.org/protobuf/proto"
 
 	"orpheus/internal/playbackdomain"
 )
@@ -989,7 +988,7 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 			return false, nil
 		}
 		spotCtx, err := p.sess.Spclient().ContextResolveAutoplay(ctx, &playerpb.AutoplayContextRequest{
-			ContextUri:     proto.String(p.state.player.ContextUri),
+			ContextUri:     new(p.state.player.ContextUri),
 			RecentTrackUri: prevTrackUris,
 		})
 		if err != nil {

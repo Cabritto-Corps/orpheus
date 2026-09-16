@@ -92,8 +92,7 @@ func (s *Service) withDeviceCommand(ctx context.Context, target string, command 
 }
 
 func shouldRetryDeviceCommandAfterTransfer(err error) bool {
-	var apiErr spotifyapi.Error
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[spotifyapi.Error](err); ok {
 		if apiErr.Status == 404 {
 			return true
 		}
