@@ -153,7 +153,7 @@ type settingsModel struct {
 	themeOverrides map[string]any
 	keysPath       string
 	themePath      string
-	envPath        string
+	configPath     string
 
 	keysTable *table.Model
 	conflicts map[string]bool

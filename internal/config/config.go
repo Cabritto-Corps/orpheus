@@ -22,6 +22,7 @@ type Config struct {
 	DeviceResolutionMode string
 	AllowActiveFallback  bool
 	TokenPath            string
+	SettingsPath         string
 	KeysPath             string
 	Theme                string
 	ThemePath            string
@@ -49,6 +50,7 @@ func LoadFromEnv() (Config, error) {
 		DeviceResolutionMode: envDefault("orpheus_device_resolution_mode", "strict"),
 		AllowActiveFallback:  envBool("orpheus_allow_active_fallback", false),
 		TokenPath:            envDefault("orpheus_token_path", defaultTokenPath()),
+		SettingsPath:         envDefault("orpheus_config_file", defaultSettingsPath()),
 		KeysPath:             envDefault("orpheus_keys_file", defaultKeysPath()),
 		Theme:                envDefault("orpheus_theme", "default"),
 		ThemePath:            envDefault("orpheus_theme_file", defaultThemePath()),
@@ -63,6 +65,8 @@ func LoadFromEnv() (Config, error) {
 		Crossfade:            envBool("orpheus_crossfade", false),
 		CrossfadeSeconds:     envFloat64("orpheus_crossfade_seconds", 3),
 	}
+
+	ApplyAppSettings(&cfg, LoadAppSettings(cfg.SettingsPath))
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -253,24 +257,6 @@ func resolveEnvFilePath() string {
 		return path
 	}
 	return ""
-}
-
-// EnsureEnvFilePath resolves the write target for persisted settings,
-// matching the load precedence: the cwd .env when it exists, otherwise the
-// config-dir .env — which is created on demand (the config dir included) so
-// a first save never disappears into a missing path.
-func EnsureEnvFilePath() string {
-	if _, err := os.Stat(".env"); err == nil {
-		return ".env"
-	}
-	dir, err := DefaultConfigDir()
-	if err != nil || strings.TrimSpace(dir) == "" {
-		return ""
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return ""
-	}
-	return filepath.Join(dir, ".env")
 }
 
 // configWarnings collects human-readable load problems (malformed values

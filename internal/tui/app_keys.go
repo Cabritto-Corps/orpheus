@@ -179,6 +179,9 @@ func (m model) handleAlbumKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) isFiltering() bool {
+	if m.ui.trackPopupOpen && m.ui.trackPopupList.FilterState() == list.Filtering {
+		return true
+	}
 	return (m.ui.activeTab == tabPlaylists && m.browse.playlistList.FilterState() == list.Filtering) ||
 		(m.ui.activeTab == tabAlbums && m.browse.albumList.FilterState() == list.Filtering)
 }
@@ -351,14 +354,20 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 
 func (m model) handleTrackPopupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
+	if m.ui.trackPopupList.FilterState() == list.Filtering {
+		// While searching inside the popup everything goes to the filter:
+		// bubbles exits the filter on the first esc and accepts on enter,
+		// so the close and play actions below only see keys typed outside
+		// of search mode.
+		var cmd tea.Cmd
+		m.ui.trackPopupList, cmd = m.ui.trackPopupList.Update(msg)
+		return m, cmd
+	}
 	switch {
 	case keyMatches(msg, k.CloseModal):
 		m.ui.trackPopupOpen = false
 		return m, nil
 	case keyMatches(msg, k.Select):
-		if m.ui.trackPopupList.FilterState() == list.Filtering {
-			break
-		}
 		sel, ok := m.ui.trackPopupList.SelectedItem().(trackItem)
 		if !ok {
 			return m, nil

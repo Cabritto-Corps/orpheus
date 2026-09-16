@@ -1,51 +1,61 @@
 package tui
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"orpheus/internal/config"
 )
 
-func TestPersistEnvFallsBackToConfigDir(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("ORPHEUS_CONFIG_DIR", dir)
+func TestSaveAppSettingsWritesConfigJSON(t *testing.T) {
+	m, _, _, configPath := newSettingsTestModel(t)
+	m.ui.settings.crossfadeEnabled = true
+	m.ui.settings.crossfadeSeconds = 5
 
-	m, _, _, _ := newSettingsTestModel(t)
-	m.ui.settings.envPath = ""
-
-	m.persistEnv(map[string]string{"orpheus_crossfade": "true"})
+	m.saveAppSettings()
 	if m.ui.settings.saveErr != "" {
-		t.Fatalf("save must succeed via the config-dir fallback, got %q", m.ui.settings.saveErr)
+		t.Fatalf("save must succeed, got %q", m.ui.settings.saveErr)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, ".env"))
+	data, err := os.ReadFile(configPath)
 	if err != nil {
-		t.Fatalf("config-dir .env not created: %v", err)
+		t.Fatalf("config.json not written: %v", err)
 	}
-	if !strings.Contains(string(data), "orpheus_crossfade=true") {
-		t.Fatalf("value not persisted:\n%s", data)
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("malformed config.json: %v", err)
 	}
-	if m.ui.settings.envPath != filepath.Join(dir, ".env") {
-		t.Fatalf("resolved path not remembered, envPath = %q", m.ui.settings.envPath)
+	cf, ok := raw["crossfade"].(map[string]any)
+	if !ok || cf["enabled"] != true || cf["seconds"] != float64(5) {
+		t.Fatalf("crossfade section wrong: %v", raw)
 	}
 }
 
-func TestPersistEnvSurfacesFailure(t *testing.T) {
-	m, _, _, envPath := newSettingsTestModel(t)
-	m.ui.settings.envPath = filepath.Join(envPath, "missing-dir", ".env")
+func TestSaveAppSettingsSurfacesFailure(t *testing.T) {
+	m, _, _, configPath := newSettingsTestModel(t)
+	// A file in place of the target directory makes MkdirAll fail for real.
+	if err := os.WriteFile(filepath.Join(filepath.Dir(configPath), "notadir"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.ui.settings.configPath = filepath.Join(filepath.Dir(configPath), "notadir", "config.json")
 
-	m.persistEnv(map[string]string{"orpheus_crossfade": "true"})
+	m.saveAppSettings()
 	if m.ui.settings.saveErr == "" {
 		t.Fatal("save failure must be surfaced in the settings modal")
 	}
 }
 
 func TestSettingsRootShowsSaveError(t *testing.T) {
-	m, _, _, envPath := newSettingsTestModel(t)
+	m, _, _, configPath := newSettingsTestModel(t)
 	m.ui.width = 100
 	m.ui.height = 40
-	m.ui.settings.envPath = filepath.Join(envPath, "missing-dir", ".env")
-	m.persistEnv(map[string]string{"orpheus_crossfade": "true"})
+	if err := os.WriteFile(filepath.Join(filepath.Dir(configPath), "notadir"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.ui.settings.configPath = filepath.Join(filepath.Dir(configPath), "notadir", "config.json")
+	m.saveAppSettings()
 
 	out := m.settingsModalView()
 	if !strings.Contains(out, "save failed") {
@@ -56,13 +66,14 @@ func TestSettingsRootShowsSaveError(t *testing.T) {
 func TestCrossfadeSaveAndReloadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("ORPHEUS_CONFIG_DIR", dir)
-	envPath := filepath.Join(dir, ".env")
-	if err := os.WriteFile(envPath, []byte("SPOTIFY_CLIENT_ID=keepme\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("SPOTIFY_CLIENT_ID", "test-client")
+	t.Setenv("ORPHEUS_KEYS_FILE", filepath.Join(dir, "keys.json"))
+	t.Setenv("ORPHEUS_TOKEN_PATH", filepath.Join(dir, "token.json"))
+	t.Setenv("ORPHEUS_THEME_FILE", filepath.Join(dir, "theme.json"))
+	t.Setenv("ORPHEUS_LOG_FILE", filepath.Join(dir, "orpheus.log"))
 
 	m, _, _, _ := newSettingsTestModel(t)
-	m.ui.settings.envPath = envPath
+	m.ui.settings.configPath = filepath.Join(dir, "config.json")
 
 	next := openSettingsForTest(m)
 	// crossfade row is index 3 in the five-row root
@@ -77,12 +88,12 @@ func TestCrossfadeSaveAndReloadRoundTrip(t *testing.T) {
 		t.Fatalf("save failed: %q", next.ui.settings.saveErr)
 	}
 
-	data, err := os.ReadFile(envPath)
+	// reload: the loader overlays config.json onto the env-derived values
+	cfg, err := config.LoadFromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "orpheus_crossfade=true") ||
-		!strings.Contains(string(data), "SPOTIFY_CLIENT_ID=keepme") {
-		t.Fatalf("round-trip lost data:\n%s", data)
+	if !cfg.Crossfade || cfg.CrossfadeSeconds != 3 {
+		t.Fatalf("reload lost the settings: crossfade=%v seconds=%v", cfg.Crossfade, cfg.CrossfadeSeconds)
 	}
 }

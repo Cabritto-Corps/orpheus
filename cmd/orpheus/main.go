@@ -344,6 +344,7 @@ func runLibrespotTUI() error {
 
 	tuiCfg := config.Config{
 		Theme:                cfg.Theme,
+		SettingsPath:         cfg.SettingsPath,
 		SpotifyClientID:      cfg.SpotifyClientID,
 		RedirectURI:          cfg.RedirectURI,
 		Scopes:               cfg.Scopes,

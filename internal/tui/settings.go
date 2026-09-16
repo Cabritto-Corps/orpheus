@@ -23,7 +23,7 @@ func newSettingsModel(cfg config.Config, resolvedPreset string) settingsModel {
 		themePreset:      resolvedPreset,
 		keysPath:         cfg.KeysPath,
 		themePath:        cfg.ThemePath,
-		envPath:          cfg.EnvPath,
+		configPath:       cfg.SettingsPath,
 		crossfadeEnabled: cfg.Crossfade,
 		crossfadeSeconds: cfg.CrossfadeSeconds,
 		cacheEnabled:     cfg.AudioCacheEnabled,
@@ -134,11 +134,11 @@ func (m model) settingsActivate() (tea.Model, tea.Cmd) {
 	case 3: // crossfade: toggle; +/- edits seconds
 		s.crossfadeEnabled = !s.crossfadeEnabled
 		s.restartRequiredCrossfade = true
-		m.saveCrossfadeEnv()
+		m.saveAppSettings()
 	case 4: // audio cache: toggle; +/- edits size
 		s.cacheEnabled = !s.cacheEnabled
 		s.restartRequiredCache = true
-		m.saveCacheEnv()
+		m.saveAppSettings()
 	}
 	return m, nil
 }
@@ -149,11 +149,11 @@ func (m model) settingsAdjust(step int) (tea.Model, tea.Cmd) {
 	case 3:
 		s.crossfadeSeconds = clampCrossfadeSeconds(s.crossfadeSeconds + float64(step))
 		s.restartRequiredCrossfade = true
-		m.saveCrossfadeEnv()
+		m.saveAppSettings()
 	case 4:
 		s.cacheSizeMB = clampCacheSizeMB(s.cacheSizeMB + int64(step)*256)
 		s.restartRequiredCache = true
-		m.saveCacheEnv()
+		m.saveAppSettings()
 	}
 	return m, nil
 }
@@ -231,54 +231,24 @@ func formatSecondsFloat(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
-func (m *model) saveCrossfadeEnv() {
-	m.persistEnv(map[string]string{
-		"orpheus_crossfade":         formatEnvBool(m.ui.settings.crossfadeEnabled),
-		"orpheus_crossfade_seconds": formatEnvFloat(m.ui.settings.crossfadeSeconds),
-	})
-}
-
-func (m *model) saveCacheEnv() {
-	m.persistEnv(map[string]string{
-		"orpheus_audio_cache_enabled": formatEnvBool(m.ui.settings.cacheEnabled),
-		"orpheus_audio_cache_size_mb": itoa64(m.ui.settings.cacheSizeMB),
-	})
-}
-
-func formatEnvBool(v bool) string {
-	if v {
-		return "true"
-	}
-	return "false"
-}
-
-func formatEnvFloat(v float64) string {
-	return formatSecondsFloat(v)
-}
-
-// persistEnv writes settings to the .env the next start will read: the
-// configured path when set, else the resolved write target (created on
-// demand — a first save must never vanish into a missing path). Failures
-// surface in the settings modal instead of the log alone.
-func (m *model) persistEnv(values map[string]string) {
+func (m *model) saveAppSettings() {
 	s := &m.ui.settings
-	target := s.envPath
-	if target == "" {
-		target = config.EnsureEnvFilePath()
-	}
-	if target == "" {
-		s.saveErr = "no config directory; settings not saved"
-		slog.Warn("no .env target; crossfade/cache changes not persisted")
-		return
-	}
-	if err := config.UpsertEnvFile(target, values); err != nil {
+	enabled := s.crossfadeEnabled
+	seconds := s.crossfadeSeconds
+	cacheEnabled := s.cacheEnabled
+	sizeMB := s.cacheSizeMB
+	if err := config.SaveAppSettings(s.configPath, config.AppSettings{
+		Crossfade:  &config.CrossfadeSettings{Enabled: &enabled, Seconds: &seconds},
+		AudioCache: &config.AudioCacheSettings{Enabled: &cacheEnabled, SizeMB: &sizeMB},
+	}); err != nil {
 		s.saveErr = "save failed: " + err.Error()
-		slog.Warn("failed writing .env", "path", target, "error", err)
+		slog.Warn("failed writing config.json", "path", s.configPath, "error", err)
 		return
 	}
 	s.saveErr = ""
-	s.envPath = target
 }
+
+
 
 func (m model) handleSettingsKeysMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys

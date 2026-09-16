@@ -19,23 +19,20 @@ func newSettingsTestModel(t *testing.T) (model, string, string, string) {
 	dir := t.TempDir()
 	keysPath := filepath.Join(dir, "keys.json")
 	themePath := filepath.Join(dir, "theme.json")
-	envPath := filepath.Join(dir, ".env")
-	if err := os.WriteFile(envPath, []byte("SPOTIFY_CLIENT_ID=keepme\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	configPath := filepath.Join(dir, "config.json")
 	cfg := config.Config{
 		DeviceName:        "orpheus",
 		PollInterval:      time.Second,
 		KeysPath:          keysPath,
 		Theme:             "default",
 		ThemePath:         themePath,
-		EnvPath:           envPath,
+		SettingsPath:      configPath,
 		Crossfade:         false,
 		CrossfadeSeconds:  3,
 		AudioCacheEnabled: false,
 		AudioCacheSizeMB:  1024,
 	}
-	return newModel(nil, nil, nil, cfg, nil, make(chan librespot.ContextTracksResult, 1), nil), keysPath, themePath, envPath
+	return newModel(nil, nil, nil, cfg, nil, make(chan librespot.ContextTracksResult, 1), nil), keysPath, themePath, configPath
 }
 
 func send(m model, msg tea.KeyMsg) model {
@@ -200,8 +197,8 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSettingsCrossfadePersistsToEnvWithRestartHint(t *testing.T) {
-	m, _, _, envPath := newSettingsTestModel(t)
+func TestSettingsCrossfadePersistsToConfigFileWithRestartHint(t *testing.T) {
+	m, _, _, configPath := newSettingsTestModel(t)
 
 	next := openViaKey(m)
 	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
@@ -219,33 +216,27 @@ func TestSettingsCrossfadePersistsToEnvWithRestartHint(t *testing.T) {
 		t.Fatal("restart hint flag should be set")
 	}
 
-	data, err := os.ReadFile(envPath)
+	data, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := string(data)
-	if !strings.Contains(got, "orpheus_crossfade=true") {
+	if !strings.Contains(got, `"enabled": true`) || !strings.Contains(got, `"seconds": 3`) {
 		t.Fatalf("crossfade not persisted:\n%s", got)
-	}
-	if !strings.Contains(got, "orpheus_crossfade_seconds=3") {
-		t.Fatalf("default seconds not persisted:\n%s", got)
-	}
-	if !strings.Contains(got, "SPOTIFY_CLIENT_ID=keepme") {
-		t.Fatalf("client id line was touched:\n%s", got)
 	}
 
 	next = sendKey(next, "+") // + steps seconds
 	if next.ui.settings.crossfadeSeconds != 4 {
 		t.Fatalf("crossfadeSeconds = %v, want 4", next.ui.settings.crossfadeSeconds)
 	}
-	data, _ = os.ReadFile(envPath)
-	if !strings.Contains(string(data), "orpheus_crossfade_seconds=4") {
+	data, _ = os.ReadFile(configPath)
+	if !strings.Contains(string(data), `"seconds": 4`) {
 		t.Fatalf("seconds not persisted after step:\n%s", string(data))
 	}
 }
 
-func TestSettingsCacheTogglePersistsToEnv(t *testing.T) {
-	m, _, _, envPath := newSettingsTestModel(t)
+func TestSettingsCacheTogglePersistsToConfigFile(t *testing.T) {
+	m, _, _, configPath := newSettingsTestModel(t)
 
 	next := openViaKey(m)
 	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
@@ -266,13 +257,13 @@ func TestSettingsCacheTogglePersistsToEnv(t *testing.T) {
 		t.Fatalf("cacheSizeMB = %d, want 768", next.ui.settings.cacheSizeMB)
 	}
 
-	data, _ := os.ReadFile(envPath)
-	got := string(data)
-	if !strings.Contains(got, "orpheus_audio_cache_enabled=true") || !strings.Contains(got, "orpheus_audio_cache_size_mb=768") {
-		t.Fatalf("cache not persisted:\n%s", got)
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(got, "SPOTIFY_CLIENT_ID=keepme") {
-		t.Fatalf("client id line was touched:\n%s", got)
+	got := string(data)
+	if !strings.Contains(got, `"enabled": true`) || !strings.Contains(got, `"size_mb": 768`) {
+		t.Fatalf("cache not persisted:\n%s", got)
 	}
 }
 
