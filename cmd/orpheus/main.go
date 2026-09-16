@@ -354,6 +354,9 @@ func runLibrespotTUI() error {
 		NerdFonts:            cfg.NerdFonts,
 		OnSongChange:         cfg.OnSongChange,
 		LogFile:              cfg.LogFile,
+		ThemePath:            cfg.ThemePath,
+		KeysPath:             cfg.KeysPath,
+		EnvPath:              cfg.EnvPath,
 	}
 
 	var catalog spotify.PlaylistCatalog
