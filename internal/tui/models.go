@@ -151,9 +151,9 @@ type settingsModel struct {
 	// themeOverrides caches the parsed theme.json so per-frame view paths
 	// (picker rows, root value) do not re-read the file at the 200ms tick.
 	themeOverrides map[string]any
-	keysPath           string
-	themePath          string
-	envPath            string
+	keysPath       string
+	themePath      string
+	envPath        string
 
 	keysTable *table.Model
 	conflicts map[string]bool

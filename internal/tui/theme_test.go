@@ -134,10 +134,10 @@ func TestApplyThemeAppliesAndIsIdempotent(t *testing.T) {
 func TestSaveThemeOptionsRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "theme.json")
 	state := themeState{
-		colors:     themeColors{Blue: "#7AA2F7", Page: "#101216"},
-		glyphs:     defaultGlyphs,
-		typography: defaultTypography,
-		cover:      themeCover{Frame: "rounded"},
+		colors:      themeColors{Blue: "#7AA2F7", Page: "#101216"},
+		glyphs:      defaultGlyphs,
+		typography:  defaultTypography,
+		cover:       themeCover{Frame: "rounded"},
 		backgrounds: themeBackgrounds{Style: "solid"},
 	}
 	if err := SaveThemeOptions(path, "default", state); err != nil {

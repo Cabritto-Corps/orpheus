@@ -88,9 +88,13 @@ func layoutThreeZone(w int, left, center, right string) string {
 	center = fitCell(center, centerBudget)
 	centerW := lipgloss.Width(center)
 
-	gap := max(0, w-leftW-centerW-rightW)
-	leftGap := min(max(gap/2, 1), gap)
-	rightGap := gap - leftGap
+	// The title is centered on the terminal, not between the side zones:
+	// growing a side zone (repeat/shuffle icons, volume) eats its own gap
+	// instead of pushing the title aside. The truncation above guarantees
+	// the zones never collide with the centered title, so the gaps clamp
+	// to zero without ever exceeding the width.
+	leftGap := max(0, (w-centerW)/2-leftW)
+	rightGap := max(0, w-leftW-leftGap-centerW-rightW)
 
 	return left +
 		strings.Repeat(" ", leftGap) +
