@@ -92,6 +92,20 @@ func guardModel(tb testing.TB, v frameVariant) model {
 	case "settings":
 		m2, _ := m.openSettings()
 		m = m2.(model)
+	case "settings-theme":
+		m2, _ := m.openSettings()
+		m = m2.(model)
+		m.ui.settings.mode = settingsModeTheme
+	case "settings-keys":
+		m2, _ := m.openSettings()
+		m = m2.(model)
+		m.ui.settings.mode = settingsModeKeys
+		m.ui.settings.keysTableDirty = true
+	case "settings-capture":
+		m2, _ := m.openSettings()
+		m = m2.(model)
+		m.ui.settings.mode = settingsModeCapture
+		m.ui.settings.captureKey = "play_pause"
 	case "help":
 		m.ui.helpOpen = true
 		m.ensureHelpViewport()
@@ -105,7 +119,7 @@ func guardModel(tb testing.TB, v frameVariant) model {
 			})
 		}
 		m.ui.trackPopupItems = items
-		modalW := min(v.width-8, 60)
+		modalW := v.width - 4
 		bodyH := v.height - headerH - tabBarH - 2
 		popup := list.New(nil, newTrackPopupDelegate(), modalW, max(bodyH-4, 10))
 		popup.SetShowTitle(false)
@@ -174,7 +188,7 @@ func TestViewFrameContractAllThemes(t *testing.T) {
 func TestViewFrameContractModals(t *testing.T) {
 	sizes := [][2]int{{40, 12}, {50, 16}, {80, 24}, {120, 40}}
 	for _, size := range sizes {
-		for _, modal := range []string{"settings", "help", "popup"} {
+		for _, modal := range []string{"settings", "settings-theme", "settings-keys", "settings-capture", "help", "popup"} {
 			variant := frameVariant{name: modal, width: size[0], height: size[1], tab: tabPlayer, playing: true, hasQueue: true, modal: modal}
 			m := guardModel(t, variant)
 			assertFrameContract(t, fmt.Sprintf("modal-%s-%dx%d", modal, size[0], size[1]), m.View(), variant.width, variant.height)
