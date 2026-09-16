@@ -137,12 +137,11 @@ var helpGroupsLayout = func() []struct {
 // helpGroupLines renders one group as label……key lines. Labels are padded
 // in display cells; keys come from the live keyMap so rebinds reflect.
 // helpGroupLines renders one group: title, then label/key rows with the key
-// right-aligned to the group's own edge instead of trailing the label column
-// (the left-packed layout read as one undifferentiated wall of text).
-func (m model) helpGroupLines(title string, labelWidth int) []string {
-	type row struct{ label, key string }
-	var rows []row
-	keyW := 0
+// right-aligned at the column's own edge instead of trailing the label
+// column. colW is the column's allotted share of the modal width, so the
+// three columns spread across the full body instead of hugging the left.
+func (m model) helpGroupLines(title string, labelWidth, colW int) []string {
+	lines := []string{styleSectionLabel.Render(title)}
 	for _, g := range helpGroupsLayout {
 		if g.title != title {
 			continue
@@ -151,16 +150,8 @@ func (m model) helpGroupLines(title string, labelWidth int) []string {
 		if !ok {
 			continue
 		}
-		k := shortKeyLabel(keys)
-		rows = append(rows, row{g.label, k})
-		if w := lipgloss.Width(k); w > keyW {
-			keyW = w
-		}
-	}
-	lines := []string{styleSectionLabel.Render(title)}
-	for _, r := range rows {
-		lines = append(lines, styleQueueTrack.Render(padCell(r.label, labelWidth))+
-			styleTrackPopupTitle.Render(alignRight(r.key, keyW)))
+		lines = append(lines, styleQueueTrack.Render(padCell(g.label, labelWidth))+
+			styleTrackPopupTitle.Render(alignRight(shortKeyLabel(keys), max(0, colW-labelWidth))))
 	}
 	return lines
 }
@@ -176,28 +167,30 @@ func (m model) helpGroupedBody(contentW, availH int) string {
 	}
 	labelWidth += 4
 
-	cols := make([][]string, 0, len(groups))
-	for _, title := range groups {
-		cols = append(cols, m.helpGroupLines(title, labelWidth))
+	const gutter = 4
+	// Three columns, each an equal share of the full content width with the
+	// keys right-aligned at their column's edge - natural-width columns
+	// hugged the left and left a dead band on the right of the modal.
+	colW := (contentW - 2*gutter) / 3
+	if colW >= labelWidth+6 {
+		var cols [][]string
+		for _, title := range groups {
+			cols = append(cols, m.helpGroupLines(title, labelWidth, colW))
+		}
+		three := joinTopAligned(cols[0], cols[1], cols[2])
+		if lipgloss.Width(three) <= contentW {
+			return three + "\n\n" + styleTrackPopupHint.Render("ctrl+c always quits")
+		}
 	}
 
-	// Fill the modal with three columns only when the joined block actually
-	// fits; the old threshold math rendered the three-column join while
-	// gated on a two-column budget, overflowing the modal at 70-89 cols.
-	three := joinTopAligned(cols[0], cols[1], cols[2])
-	var body string
-	if lipgloss.Width(three) <= contentW {
-		body = three
-	} else {
-		parts := make([]string, 0, len(cols))
-		for _, col := range cols {
-			parts = append(parts, strings.Join(col, "\n"))
-		}
-		body = strings.Join(parts, "\n\n")
+	// Stacked fallback: keys right-align at the full content width so the
+	// narrow-terminal layout fills the row too.
+	parts := make([]string, 0, len(groups))
+	for _, title := range groups {
+		parts = append(parts, strings.Join(m.helpGroupLines(title, labelWidth, contentW), "\n"))
 	}
-	body += "\n\n" + styleTrackPopupHint.Render("ctrl+c always quits")
 	// No clipping here: the caller (help viewport) decides overflow.
-	return body
+	return strings.Join(parts, "\n\n") + "\n\n" + styleTrackPopupHint.Render("ctrl+c always quits")
 }
 
 // joinTopAligned pads each column to the tallest height and places them
