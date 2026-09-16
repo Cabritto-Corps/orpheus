@@ -48,6 +48,7 @@ type PlaybackStateQueueEntry struct {
 	Name       string
 	Artist     string
 	DurationMS int
+	ImageURL   string
 }
 
 type PlaybackStateUpdate struct {

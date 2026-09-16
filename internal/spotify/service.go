@@ -117,6 +117,7 @@ type QueueItem struct {
 	Name       string
 	Artist     string
 	DurationMS int
+	ImageURL   string
 }
 
 type PlaylistSummary struct {

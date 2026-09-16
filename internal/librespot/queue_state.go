@@ -9,6 +9,16 @@ import (
 	"orpheus/internal/cache"
 )
 
+func queueMetaImageURL(p *AppPlayer, coverFileId []byte) string {
+	if p.prodInfo == nil || len(coverFileId) == 0 {
+		return ""
+	}
+	if u := p.prodInfo.ImageUrl(coverFileId); u != nil {
+		return *u
+	}
+	return ""
+}
+
 func (p *AppPlayer) getCachedQueueMeta(id string) *PlaybackStateQueueEntry {
 	p.queueMetaMu.RLock()
 	defer p.queueMetaMu.RUnlock()
@@ -94,6 +104,7 @@ func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*conn
 		if e.Artist == "" {
 			e.Artist = "-"
 		}
+		e.ImageURL = queueMetaImageURL(p, entry.AlbumCoverFileId)
 		p.setCachedQueueMeta(id, e)
 	}
 }

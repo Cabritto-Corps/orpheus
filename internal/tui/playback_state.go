@@ -446,6 +446,18 @@ func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.Queue
 	if out.AlbumImageURL == "" && prev != nil && prev.AlbumImageURL != "" && sameTrack(prev.TrackID) {
 		out.AlbumImageURL = prev.AlbumImageURL
 	}
+	// The queue carries the resolved album art for the upcoming track, so a
+	// track change whose push omits the cover URL does not blank the panel
+	// until a later push arrives. Runs before the metadata early-return:
+	// complete metadata with a missing URL is exactly the skip case.
+	if out.AlbumImageURL == "" {
+		for _, q := range queue {
+			if sameTrack(q.ID) && q.ImageURL != "" {
+				out.AlbumImageURL = q.ImageURL
+				break
+			}
+		}
+	}
 	if out.TrackName != "" && out.ArtistName != "" && out.DurationMS > 0 {
 		return &out
 	}
