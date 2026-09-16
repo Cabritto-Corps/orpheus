@@ -467,6 +467,11 @@ func (m *model) loadLibraryCoversCmd(limit int) tea.Cmd {
 		add(al.summary.ImageURL)
 	}
 
+	// Drain at most one batch so the first cover renders while the chained
+	// drain in handleImagesBatchLoadedMsg walks the rest of the queue.
+	if added > coverQueueDrainBatch {
+		added = coverQueueDrainBatch
+	}
 	return m.drainCoverQueueCmd(added)
 }
 

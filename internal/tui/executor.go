@@ -16,7 +16,7 @@ func NewTUIExecutor(ctx context.Context, catalog spotify.PlaylistCatalog) loader
 	return func(ctx context.Context, req loader.LoadRequest) []loader.LoadResult {
 		switch req.Type {
 		case loader.LoadTypeImage:
-			return loadImages(ctx, req.Items, req.Timeout)
+			return loadImages(ctx, req.Items, req.Timeout, httpImageProvider{}.Fetch)
 		case loader.LoadTypeContextImageURL:
 			return resolveContextImageURLs(ctx, catalog, req.Items, req.Timeout)
 		}
@@ -24,33 +24,26 @@ func NewTUIExecutor(ctx context.Context, catalog spotify.PlaylistCatalog) loader
 	}
 }
 
-func loadImages(ctx context.Context, items []loader.LoadItem, timeout time.Duration) []loader.LoadResult {
+func loadImages(ctx context.Context, items []loader.LoadItem, timeout time.Duration, fetch func(context.Context, string) ([]byte, error)) []loader.LoadResult {
 	results := make([]loader.LoadResult, len(items))
 	for i := range results {
 		results[i].Index = i
 	}
-	fctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
 	for i, item := range items {
-		select {
-		case <-fctx.Done():
-			results[i] = loader.LoadResult{Index: i, Error: fctx.Err()}
-			continue
-		default:
-		}
 		wg.Add(1)
 		go func(idx int, url string) {
 			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-fctx.Done():
-				results[idx] = loader.LoadResult{Index: idx, Error: fctx.Err()}
-				return
-			}
-			data, err := httpImageProvider{}.Fetch(fctx, url)
+			// Blocking slot wait: holders release within one per-item
+			// timeout, so the queue can only drain, never starve.
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			// Per-item deadline starts at slot acquisition: a slow queue
+			// head must not cancel its siblings.
+			ictx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			data, err := fetch(ictx, url)
 			if err != nil {
 				results[idx] = loader.LoadResult{Index: idx, Error: err}
 			} else {

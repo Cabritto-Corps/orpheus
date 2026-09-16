@@ -412,39 +412,53 @@ func (m *model) loadImagesBatchCmd(urls []string) tea.Cmd {
 			Items:   loadItems,
 			Timeout: imageFetchTimeout,
 		})
-		msgs := make([]imageLoadedMsg, 0, len(results))
+		coverSizes := m.currentCoverSizes()
+		decodeCols, decodeRows := 0, 0
+		if len(coverSizes) > 0 {
+			decodeCols, decodeRows = coverSizes[0][0], coverSizes[0][1]
+		}
+		msgs := make([]imageLoadedMsg, len(results))
 		answered := make(map[int]struct{}, len(results))
-		for _, r := range results {
+		done := make(chan indexedImageMsg, len(results))
+		psem := make(chan struct{}, 8)
+		var pwg sync.WaitGroup
+		for ri, r := range results {
 			if r.Index >= 0 && r.Index < len(validURLs) {
 				answered[r.Index] = struct{}{}
 			}
 			url := validURLs[r.Index]
 			if r.Error != nil {
-				msgs = append(msgs, imageLoadedMsg{url: url, err: r.Error})
+				msgs[ri] = imageLoadedMsg{url: url, err: r.Error}
 				continue
 			}
 			imgData, ok := r.Data.(loader.ImageData)
 			if !ok {
-				msgs = append(msgs, imageLoadedMsg{url: url, err: fmt.Errorf("unexpected result type")})
+				msgs[ri] = imageLoadedMsg{url: url, err: fmt.Errorf("unexpected result type")}
 				continue
 			}
-			img, _, err := image.Decode(bytes.NewReader(imgData.Data))
-			if err != nil {
-				msgs = append(msgs, imageLoadedMsg{url: url, err: fmt.Errorf("decode image: %w", err)})
-				continue
-			}
-			coverSizes := m.currentCoverSizes()
-			displayCols, displayRows := 0, 0
-			if len(coverSizes) > 0 {
-				displayCols, displayRows = coverSizes[0][0], coverSizes[0][1]
-			}
-			m.ui.imgs.setImage(url, img, displayCols, displayRows)
-			if err := m.ui.imgs.ensureKittyEncoding(url, img, displayCols, displayRows); err != nil {
-				msgs = append(msgs, imageLoadedMsg{url: url, err: err})
-				continue
-			}
-			m.ui.imgs.preRenderCovers(url, coverSizes)
-			msgs = append(msgs, imageLoadedMsg{url: url})
+			pwg.Add(1)
+			go func(idx int, data []byte, target string) {
+				defer pwg.Done()
+				psem <- struct{}{}
+				defer func() { <-psem }()
+				img, _, err := image.Decode(bytes.NewReader(data))
+				if err != nil {
+					done <- indexedImageMsg{idx, imageLoadedMsg{url: target, err: fmt.Errorf("decode image: %w", err)}}
+					return
+				}
+				m.ui.imgs.setImage(target, img, decodeCols, decodeRows)
+				if err := m.ui.imgs.ensureKittyEncoding(target, img, decodeCols, decodeRows); err != nil {
+					done <- indexedImageMsg{idx, imageLoadedMsg{url: target, err: err}}
+					return
+				}
+				m.ui.imgs.preRenderCovers(target, coverSizes)
+				done <- indexedImageMsg{idx, imageLoadedMsg{url: target}}
+			}(ri, imgData.Data, url)
+		}
+		pwg.Wait()
+		close(done)
+		for im := range done {
+			msgs[im.idx] = im.msg
 		}
 		// The loader can return fewer results than requested (e.g. pool
 		// context done); synthesize failures so inflight flags don't leak.

@@ -55,7 +55,7 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	var startupCoverCmd tea.Cmd
 	if m.ui.startupCoverBoostTicks > 0 {
 		m.ui.startupCoverBoostTicks--
-		startupCoverCmd = m.drainCoverQueueCmd(coverQueueDrainBatch * 8)
+		startupCoverCmd = m.drainCoverQueueCmd(coverQueueDrainBatch * 2)
 	}
 
 	m.ui.coverRefreshTick++
@@ -414,19 +414,26 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 		m.ui.cover.playerCoverFailStreak++
 		m.maybeFallbackFromKittyOnPlayerFailures(msg.url)
 	}
+	return m, m.handleImageLoadFailure(msg.url, msg.err)
+}
 
-	attempt := m.ui.cover.imageRetryCount[msg.url] + 1
+// handleImageLoadFailure applies the shared retry ladder for one failed image
+// load: backoff retries, then a failed stamp and a re-resolve for library URLs
+// whose CDN entry went dead. Used by both the single-load and batch paths so
+// queue-loaded covers get the same recovery as priority loads.
+func (m model) handleImageLoadFailure(url string, err error) tea.Cmd {
+	attempt := m.ui.cover.imageRetryCount[url] + 1
 	if attempt > imageLoadRetryMax {
-		m.ui.cover.clearRetry(msg.url)
-		m.ui.imgs.markFailed(msg.url)
-		slog.Warn("image load retries exhausted", "url", msg.url, "error", msg.err)
-		if m.libraryHasImageURL(msg.url) {
-			return m, m.queueResolvesForImageURLCmd(msg.url, libraryCoverRefreshBatch)
+		m.ui.cover.clearRetry(url)
+		m.ui.imgs.markFailed(url)
+		slog.Warn("image load retries exhausted", "url", url, "error", err)
+		if m.libraryHasImageURL(url) {
+			return m.queueResolvesForImageURLCmd(url, libraryCoverRefreshBatch)
 		}
-		return m, nil
+		return nil
 	}
-	_, token := m.ui.cover.nextRetry(msg.url)
-	return m, m.imageRetryCmd(msg.url, attempt, token)
+	_, token := m.ui.cover.nextRetry(url)
+	return m.imageRetryCmd(url, attempt, token)
 }
 
 func (m model) handleImageRetryMsg(msg imageRetryMsg) (tea.Model, tea.Cmd) {
@@ -655,7 +662,9 @@ func (m model) handleImagesBatchLoadedMsg(msg imagesBatchLoadedMsg) (tea.Model, 
 	for _, r := range msg.results {
 		m.ui.imgs.finishLoad(r.url)
 		if r.err != nil {
-			m.ui.imgs.markFailed(r.url)
+			if retryCmd := m.handleImageLoadFailure(r.url, r.err); retryCmd != nil {
+				cmds = append(cmds, retryCmd)
+			}
 			continue
 		}
 		m.ui.imgs.clearFailed(r.url)

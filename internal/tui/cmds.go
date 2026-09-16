@@ -98,6 +98,11 @@ type coverImageURLsBatchResolvedMsg struct {
 	results []coverImageResolvedMsg
 }
 
+type indexedImageMsg struct {
+	idx int
+	msg imageLoadedMsg
+}
+
 type imagesBatchLoadedMsg struct {
 	results []imageLoadedMsg
 }
