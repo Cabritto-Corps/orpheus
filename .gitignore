@@ -31,7 +31,6 @@ go.work.sum
 # .idea/
 # .vscode/
 crashes/
-docs
 orpheus
 *.bin
 improvements-fixes/
