@@ -402,7 +402,6 @@ func (m model) themePickerView(modalW, innerH int) string {
 
 	var body strings.Builder
 	body.WriteString("\n" + strings.Join(rows, "\n") + "\n")
-	body.WriteString("\n" + styleModalHint.Render("swatches: scrim sel text dim accent 2nd error") + "\n")
 	k := m.ui.keys
 	return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Theme"),
 		styleModalHint.Render(k.QueueUp.Help().Key+"/"+k.QueueDown.Help().Key+": preview   "+k.Select.Help().Key+": save   "+k.CloseModal.Help().Key+": revert"), body.String(), modalW, innerH)
@@ -468,9 +467,6 @@ func (m model) settingsModalView() string {
 		}
 		if s.restartRequiredCache {
 			body += styleError.Render("  cache applies on restart") + "\n"
-		}
-		if s.cursor == 0 {
-			body += styleTrackPopupHint.Render("  edit theme.json for per-color overrides") + "\n"
 		}
 		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"), styleModalHint.Render(m.ui.keys.CloseModal.Help().Key+": close"), body, modalW, innerH)
 	}
