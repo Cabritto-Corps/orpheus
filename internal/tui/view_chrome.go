@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	golibrespot "github.com/elxgy/go-librespot"
@@ -357,25 +356,4 @@ func (m model) kittyOverlay() string {
 		return kittyDeleteAll + out
 	}
 	return out
-}
-
-// tabHints picks the contextual key bindings for the active tab, formatted
-// from the live binding labels.
-func (m model) tabHints() string {
-	k := m.ui.keys
-	var bindings []key.Binding
-	switch m.ui.activeTab {
-	case tabPlaylists, tabAlbums:
-		bindings = []key.Binding{k.Tab, k.Select, k.Filter, k.Refresh, k.ToggleHelp, k.Settings, k.Quit}
-	default:
-		bindings = []key.Binding{k.PlayPause, k.Next, k.SeekFwd, k.Loop, k.ToggleHelp, k.Settings, k.Quit}
-	}
-	var parts []string
-	for _, b := range bindings {
-		if b.Help().Key == "" || b.Help().Desc == "" {
-			continue
-		}
-		parts = append(parts, b.Help().Key+" "+b.Help().Desc)
-	}
-	return strings.Join(parts, "  ·  ")
 }

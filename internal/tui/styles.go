@@ -8,18 +8,19 @@ import (
 )
 
 var (
-	colorBlue      = lipgloss.Color(themePresets["default"].Blue)
-	colorBlueLight = lipgloss.Color(themePresets["default"].BlueLight)
-	colorOffWhite  = lipgloss.Color(themePresets["default"].OffWhite)
-	colorGray      = lipgloss.Color(themePresets["default"].Gray)
-	colorMutedBlue = lipgloss.Color(themePresets["default"].MutedBlue)
-	colorDimBlue   = lipgloss.Color(themePresets["default"].DimBlue)
-	colorDivider   = lipgloss.Color(themePresets["default"].Divider)
-	colorError     = lipgloss.Color(themePresets["default"].Error)
-	colorScrim     = lipgloss.Color("#1a1a2a")
+	defaultColors  = themePreset("default")
+	colorBlue      = lipgloss.Color(defaultColors.Blue)
+	colorBlueLight = lipgloss.Color(defaultColors.BlueLight)
+	colorOffWhite  = lipgloss.Color(defaultColors.OffWhite)
+	colorGray      = lipgloss.Color(defaultColors.Gray)
+	colorMutedBlue = lipgloss.Color(defaultColors.MutedBlue)
+	colorDimBlue   = lipgloss.Color(defaultColors.DimBlue)
+	colorDivider   = lipgloss.Color(defaultColors.Divider)
+	colorError     = lipgloss.Color(defaultColors.Error)
+	colorScrim     = lipgloss.Color(defaultColors.Scrim)
 
-	colorSelectionFg = lipgloss.Color(themePresets["default"].OffWhite)
-	colorSelectionBg = lipgloss.Color(themePresets["default"].DimBlue)
+	colorSelectionFg = lipgloss.Color(defaultColors.SelectionFg)
+	colorSelectionBg = lipgloss.Color(defaultColors.SelectionBg)
 )
 
 // applyTheme rebuilds every package-level style from the resolved theme
@@ -165,8 +166,6 @@ func applyTheme(c themeColors) {
 		Background(colorSelectionBg).
 		Foreground(colorSelectionFg)
 
-	styleFooter = lipgloss.NewStyle().
-		Foreground(colorBlue)
 }
 
 var (
@@ -207,11 +206,10 @@ var (
 	styleModalTitle        lipgloss.Style
 	styleModalHint         lipgloss.Style
 	styleModalSelectedRow  lipgloss.Style
-	styleFooter            lipgloss.Style
 )
 
 func init() {
-	applyTheme(themePresets["default"])
+	applyTheme(themePreset("default"))
 }
 
 func sectionDivider(w int) string {

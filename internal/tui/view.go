@@ -181,14 +181,6 @@ func truncate(s string, max int) string {
 	return ansi.Truncate(s, max-1, "") + "…"
 }
 
-func centerText(s string, w int) string {
-	sw := lipgloss.Width(s)
-	if sw >= w {
-		return s
-	}
-	pad := (w - sw) / 2
-	return strings.Repeat(" ", pad) + s + strings.Repeat(" ", w-sw-pad)
-}
 
 func (m *model) getBodyLayout() bodyLayout {
 	if m.ui.cachedBodyLayoutValid {

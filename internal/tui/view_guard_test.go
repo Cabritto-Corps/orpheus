@@ -143,6 +143,23 @@ func TestViewFrameContract(t *testing.T) {
 	}
 }
 
+
+func TestViewFrameContractAllThemes(t *testing.T) {
+	t.Cleanup(func() { applyTheme(themePreset("default")) })
+	sizes := [][2]int{{40, 12}, {120, 40}}
+	for _, themeName := range themeRegistryNames() {
+		applyTheme(themePreset(themeName))
+		for _, size := range sizes {
+			for _, tb := range []tab{tabPlaylists, tabAlbums, tabPlayer} {
+				variant := frameVariant{name: themeName, width: size[0], height: size[1], tab: tb, hasQueue: true}
+				m := guardModel(t, variant)
+				name := fmt.Sprintf("%dx%d/%s/%s", size[0], size[1], themeName, tabName(variant.tab))
+				assertFrameContract(t, name, m.View(), variant.width, variant.height)
+			}
+		}
+	}
+}
+
 func TestViewFrameContractModals(t *testing.T) {
 	sizes := [][2]int{{40, 12}, {50, 16}, {80, 24}, {120, 40}}
 	for _, size := range sizes {

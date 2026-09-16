@@ -115,7 +115,7 @@ func TestApplyThemeAppliesAndIsIdempotent(t *testing.T) {
 		t.Fatal("applyTheme is not idempotent")
 	}
 
-	applyTheme(themePresets["default"])
+	applyTheme(themePreset("default"))
 	if c := lipgloss.Color("#4A90D9"); colorBlue != c {
 		t.Fatalf("default restore drifted, colorBlue = %v", colorBlue)
 	}

@@ -81,6 +81,7 @@ func (m model) settingsActivate() (tea.Model, tea.Cmd) {
 		s.themePreset = next
 		applyTheme(themePreset(next))
 		m.rethemeBrowseLists()
+		s.keysTableDirty = true
 		if err := SaveThemePreset(s.themePath, next); err != nil {
 			slog.Warn("failed saving theme preset", "path", s.themePath, "error", err)
 		}

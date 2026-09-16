@@ -181,4 +181,4 @@ var settingsKeyActions = []struct {
 	{"queue_move_down", "move queue row down"},
 }
 
-var settingsThemeOrder = []string{"default", "minimal", "high_contrast"}
+var settingsThemeOrder = themeRegistryNames()

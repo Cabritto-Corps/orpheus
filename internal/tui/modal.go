@@ -9,7 +9,6 @@ import (
 
 const (
 	modalLabelWidth = 16
-	modalValueWidth = 22
 )
 
 // modalGeometry clamps a modal's inner dimensions to the placement budget:

@@ -51,16 +51,17 @@ func (c *delegateCache) reset() {
 	c.mu.Unlock()
 }
 
+// delegateCaches is bounded: a theme rebuild creates fresh caches and the
+// replaced objects are garbage, so the oldest registry slot is recycled.
 var delegateCaches []*delegateCache
 
-func registerDelegateCache(c *delegateCache) {
-	delegateCaches = append(delegateCaches, c)
-}
+const maxDelegateCaches = 16
 
-func resetDelegateCaches() {
-	for _, c := range delegateCaches {
-		c.reset()
+func registerDelegateCache(c *delegateCache) {
+	if len(delegateCaches) >= maxDelegateCaches {
+		delegateCaches = delegateCaches[1:]
 	}
+	delegateCaches = append(delegateCaches, c)
 }
 
 type placeholderCacheKey struct {
@@ -82,7 +83,7 @@ var (
 )
 
 // stringCache is a tiny memo for constant-per-key view fragments. Entries
-// are only valid until the theme changes (resetDelegateCaches clears the
+// are only valid until the theme changes (resetStringCaches clears the
 // whole registry).
 type stringCache[K comparable] struct {
 	mu      sync.Mutex
