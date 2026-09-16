@@ -226,10 +226,7 @@ func applyTheme(st themeState) {
 	styleTabInactive = lipgloss.NewStyle().
 		Foreground(colorMutedBlue)
 
-	modalBg := colorPanel
-	if activeBackgrounds.Style == "solid" {
-		modalBg = colorPage
-	}
+	modalBg := modalBoxBackground()
 	styleModalBox = lipgloss.NewStyle().
 		Border(themeBorder()).
 		BorderForeground(colorBlue).
@@ -282,6 +279,16 @@ var (
 	styleModalHint         lipgloss.Style
 	styleModalSelectedRow  lipgloss.Style
 )
+
+// modalBoxBackground is the background the modal boxes (and their
+// background re-assertion) use: the panel tone, flattened to the page in
+// solid mode so the whole frame is one surface.
+func modalBoxBackground() lipgloss.Color {
+	if activeBackgrounds.Style == "solid" {
+		return colorPage
+	}
+	return colorPanel
+}
 
 // themeBorder returns the theme's box border family for modal boxes and
 // placeholder art (cover frames have their own border setting).

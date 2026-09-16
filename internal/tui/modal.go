@@ -69,10 +69,10 @@ func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int
 		Height(height).
 		Render(lipgloss.JoinVertical(lipgloss.Left, header, sep, body))
 	// The box style paints its interior per line, but inner styled runs
-	// (rows, hints, headers) end with a full reset and the border ring is
-	// drawn foreground-only — both would punch holes in the panel tone.
+	// (rows, hints, headers) end with a reset and the border ring is
+	// drawn foreground-only — both would punch holes in the box tone.
 	// Re-assert at line starts and after every reset.
-	if seq := bgSequence(colorPanel); seq != "" {
+	if seq := bgSequence(modalBoxBackground()); seq != "" {
 		box = reassertBgLines(box, seq)
 	}
 
@@ -116,7 +116,12 @@ func modalRow(label, value string, selected bool, width int) string {
 		row += strings.Repeat(" ", pad)
 	}
 	if selected && width >= 40 {
-		return styleModalSelectedRow.Render(row)
+		rendered := styleModalSelectedRow.Render(row)
+		// Fragments inside the row (gauges, swatches) end with a reset that
+		// would let the box's panel re-assertion split the highlight;
+		// re-assert the selection bg here so it lands after the panel
+		// injection and wins inside the row.
+		return reassertBg(rendered, bgSequence(colorSelectionBg))
 	}
 	return row
 }
@@ -171,15 +176,24 @@ func themeSwatches(c themeColors) []themeSwatch {
 	}
 }
 
-func swatchBar(swatches []themeSwatch) string {
+// swatchBar renders the palette preview. On a selected row the
+// background-role cells are left out: they would sit as dark notches in
+// the highlight, and their colors are already on display as the row's own
+// background.
+func swatchBar(swatches []themeSwatch, selected bool) string {
 	if lipgloss.DefaultRenderer().ColorProfile() == termenv.Ascii {
 		return ""
 	}
 	var b strings.Builder
-	for i, sw := range swatches {
-		if i > 0 {
+	first := true
+	for _, sw := range swatches {
+		if sw.asBackground && selected {
+			continue
+		}
+		if !first {
 			b.WriteString(" ")
 		}
+		first = false
 		if sw.asBackground {
 			b.WriteString(lipgloss.NewStyle().Background(sw.color).Render("  "))
 		} else {

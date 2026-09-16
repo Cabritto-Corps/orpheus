@@ -217,6 +217,8 @@ func TestAudioCacheEnvParsing(t *testing.T) {
 	t.Setenv("orpheus_audio_cache_size_mb", "2048")
 	t.Setenv("orpheus_audio_cache_dir", "/tmp/orpheus-cache-test")
 
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
+
 	cfg, err := LoadFromEnv()
 	if err != nil {
 		t.Fatalf("LoadFromEnv: %v", err)
@@ -236,6 +238,8 @@ func TestAudioCacheEnvDefaults(t *testing.T) {
 	os.Unsetenv("orpheus_audio_cache_enabled")
 	os.Unsetenv("orpheus_audio_cache_size_mb")
 
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
+
 	cfg, err := LoadFromEnv()
 	if err != nil {
 		t.Fatalf("LoadFromEnv: %v", err)
@@ -252,6 +256,8 @@ func TestAudioCacheEnvMalformedFallsBack(t *testing.T) {
 	t.Setenv("orpheus_audio_cache_enabled", "true")
 	t.Setenv("orpheus_audio_cache_size_mb", "lots")
 
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
+
 	cfg, err := LoadFromEnv()
 	if err != nil {
 		t.Fatalf("LoadFromEnv: %v", err)
@@ -264,6 +270,8 @@ func TestAudioCacheEnvMalformedFallsBack(t *testing.T) {
 func TestCrossfadeEnvParsing(t *testing.T) {
 	t.Setenv("orpheus_crossfade", "true")
 	t.Setenv("orpheus_crossfade_seconds", "6.5")
+
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -281,6 +289,8 @@ func TestCrossfadeEnvDefaults(t *testing.T) {
 	os.Unsetenv("orpheus_crossfade")
 	os.Unsetenv("orpheus_crossfade_seconds")
 
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
+
 	cfg, err := LoadFromEnv()
 	if err != nil {
 		t.Fatalf("LoadFromEnv: %v", err)
@@ -297,6 +307,8 @@ func TestCrossfadeEnvMalformedFallsBack(t *testing.T) {
 	t.Setenv("orpheus_crossfade", "true")
 	t.Setenv("orpheus_crossfade_seconds", "lots")
 
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
+
 	cfg, err := LoadFromEnv()
 	if err != nil {
 		t.Fatalf("LoadFromEnv: %v", err)
@@ -309,6 +321,8 @@ func TestCrossfadeEnvMalformedFallsBack(t *testing.T) {
 func TestCrossfadeNegativeSecondsRejected(t *testing.T) {
 	t.Setenv("orpheus_crossfade", "true")
 	t.Setenv("orpheus_crossfade_seconds", "-2")
+
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
 
 	cfg, err := LoadFromEnv()
 	if err != nil {

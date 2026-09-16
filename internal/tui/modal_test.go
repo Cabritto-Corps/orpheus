@@ -90,7 +90,7 @@ func TestSwatchBarRendersSpacedSwatches(t *testing.T) {
 	if len(swatches) != 7 {
 		t.Fatalf("swatch colors = %d, want 7", len(swatches))
 	}
-	bar := swatchBar(swatches)
+	bar := swatchBar(swatches, false)
 	// 7 swatches x 2 cells + 6 single-space gaps: squares stay close within
 	// a row; the line spacing between theme entries does the separating.
 	if lipgloss.Width(bar) != 7*2+6 {
@@ -100,7 +100,7 @@ func TestSwatchBarRendersSpacedSwatches(t *testing.T) {
 	// Ascii profile: color-only output degrades to nothing rather than
 	// blank cells; the picker rows fall back to name + accent hex.
 	lipgloss.DefaultRenderer().SetColorProfile(termenv.Ascii)
-	if got := swatchBar(swatches); got != "" {
+	if got := swatchBar(swatches, false); got != "" {
 		t.Fatalf("swatch bar should be empty under Ascii profile, got %q", got)
 	}
 }

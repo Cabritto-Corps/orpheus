@@ -248,8 +248,6 @@ func (m *model) saveAppSettings() {
 	s.saveErr = ""
 }
 
-
-
 func (m model) handleSettingsKeysMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	switch {
@@ -427,7 +425,7 @@ func (m model) themePickerView(modalW, innerH int) string {
 		if themePresetName(s.themePreset) == themePresetName(name) {
 			marker = "✓"
 		}
-		bar := swatchBar(themeSwatches(colors))
+		bar := swatchBar(themeSwatches(colors), s.themeCursor == i)
 		row := " " + marker + " " + padCell(name, 14) + " " + bar
 		rows = append(rows, modalRow(row, "", s.themeCursor == i, modalW))
 		if i < len(settingsThemeOrder)-1 {
@@ -501,7 +499,7 @@ func (m model) settingsModalView() string {
 			cacheGauge = " " + gradientBar(float64(s.cacheSizeMB-64)/float64(4096-64), gaugeW)
 		}
 		rows := []string{
-			modalRow("Theme", m.themeValue(s.themePreset), s.cursor == 0, modalW),
+			modalRow("Theme", m.themeValue(s.themePreset, s.cursor == 0), s.cursor == 0, modalW),
 			modalRow("Theme options", "edit...", s.cursor == 1, modalW),
 			modalRow("Keybinds", "edit...", s.cursor == 2, modalW),
 			modalRow("Crossfade", settingsCrossfadeLabel(&s)+crossfadeGauge, s.cursor == 3, modalW),
@@ -530,9 +528,9 @@ func (m model) settingsModalView() string {
 	}
 }
 
-func (m model) themeValue(preset string) string {
+func (m model) themeValue(preset string, selected bool) string {
 	colors := resolveThemeColors(preset, m.cachedThemeOverrides())
-	return preset + "  " + swatchBar(themeSwatches(colors))
+	return preset + "  " + swatchBar(themeSwatches(colors), selected)
 }
 
 func settingsActionLabel(action string) string {
