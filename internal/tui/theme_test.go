@@ -1,12 +1,18 @@
 package tui
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
 )
+
+func loadThemeColors(preset, path string) themeColors {
+	st, _ := LoadTheme(preset, path)
+	return st.colors
+}
 
 func TestDefaultPresetMatchesOriginalColors(t *testing.T) {
 	want := map[string]string{
@@ -24,7 +30,7 @@ func TestDefaultPresetMatchesOriginalColors(t *testing.T) {
 }
 
 func TestLoadThemeDefaultIsPristine(t *testing.T) {
-	colors := LoadTheme("default", filepath.Join(t.TempDir(), "missing.json")).colors
+	colors := loadThemeColors("default", filepath.Join(t.TempDir(), "missing.json"))
 	if colors.Blue != "#4A90D9" || colors.Error != "#FF5757" {
 		t.Fatalf("missing theme file must yield pristine default, got %+v", colors)
 	}
@@ -36,7 +42,7 @@ func TestThemeJSONOverride(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	colors := LoadTheme("default", path).colors
+	colors := loadThemeColors("default", path)
 	if colors.Blue != "#FF0000" {
 		t.Fatalf("blue override not applied: %q", colors.Blue)
 	}
@@ -53,7 +59,7 @@ func TestThemeJSONInvalidValueKeepsPreset(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"blue": "#XYZ", "gray": 5}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	colors := LoadTheme("default", path).colors
+	colors := loadThemeColors("default", path)
 	if colors.Blue != "#4A90D9" {
 		t.Fatalf("invalid hex must keep preset blue, got %q", colors.Blue)
 	}
@@ -67,7 +73,7 @@ func TestThemeJSONUnknownColorIgnored(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"purple": "#F0F", "blue": "#00FF00"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	colors := LoadTheme("default", path).colors
+	colors := loadThemeColors("default", path)
 	if colors.Blue != "#00FF00" {
 		t.Fatalf("valid override must apply, blue = %q", colors.Blue)
 	}
@@ -78,21 +84,21 @@ func TestThemeJSONMalformedFallsBackToPreset(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	colors := LoadTheme("high_contrast", path).colors
+	colors := loadThemeColors("high_contrast", path)
 	if colors.Blue != "#00FF87" {
 		t.Fatalf("malformed file must fall back to preset, blue = %q", colors.Blue)
 	}
 }
 
 func TestUnknownPresetFallsBackToDefault(t *testing.T) {
-	colors := LoadTheme("neon_dreams", "").colors
+	colors := loadThemeColors("neon_dreams", "")
 	if colors.Blue != "#4A90D9" {
 		t.Fatalf("unknown preset must fall back to default, blue = %q", colors.Blue)
 	}
 }
 
 func TestMinimalPresetUsesANSIAndNoColor(t *testing.T) {
-	colors := LoadTheme("minimal", "").colors
+	colors := loadThemeColors("minimal", "")
 	// D5: minimal must keep roles distinguishable — accent (bold 7), bright
 	// (15), dim (8) and selection inverted (black on 7) — not one flat "".
 	if colors.Blue == colors.OffWhite && colors.Blue == colors.Gray {
@@ -104,13 +110,14 @@ func TestMinimalPresetUsesANSIAndNoColor(t *testing.T) {
 }
 
 func TestApplyThemeAppliesAndIsIdempotent(t *testing.T) {
-	theme := LoadTheme("minimal", "")
-	applyTheme(theme)
+	colors := loadThemeColors("minimal", "")
+	state := themeState{colors: colors}
+	applyTheme(state)
 	if colorBlue != lipgloss.Color("7") {
 		t.Fatalf("minimal blue not applied, got %v", colorBlue)
 	}
 	first := colorGray
-	applyTheme(theme)
+	applyTheme(state)
 	if colorGray != first {
 		t.Fatal("applyTheme is not idempotent")
 	}
@@ -121,6 +128,66 @@ func TestApplyThemeAppliesAndIsIdempotent(t *testing.T) {
 	}
 	if colorGray == first {
 		t.Fatal("restoring default theme produced no color change")
+	}
+}
+
+func TestSaveThemeOptionsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "theme.json")
+	state := themeState{
+		colors:     themeColors{Blue: "#7AA2F7", Page: "#101216"},
+		glyphs:     defaultGlyphs,
+		typography: defaultTypography,
+		cover:      themeCover{Frame: "rounded"},
+		backgrounds: themeBackgrounds{Style: "solid"},
+	}
+	if err := SaveThemeOptions(path, "default", state); err != nil {
+		t.Fatal(err)
+	}
+	loaded, name := LoadTheme("default", path)
+	if name != "default" {
+		t.Fatalf("preset name = %q, want default", name)
+	}
+	if loaded.colors.Blue != "#7AA2F7" {
+		t.Fatalf("blue delta not reloaded: %q", loaded.colors.Blue)
+	}
+	if loaded.colors.Gray != "#808897" {
+		t.Fatalf("untouched color must follow the preset: %q", loaded.colors.Gray)
+	}
+	if loaded.colors.Page != "#101216" {
+		t.Fatalf("page override not reloaded: %q", loaded.colors.Page)
+	}
+	if loaded.cover.Frame != "rounded" {
+		t.Fatalf("cover frame not reloaded: %q", loaded.cover.Frame)
+	}
+	if loaded.backgrounds.Style != "solid" {
+		t.Fatalf("backgrounds style not reloaded: %q", loaded.backgrounds.Style)
+	}
+	if loaded.glyphs != defaultGlyphs {
+		t.Fatalf("default glyphs must not be written to the file: %+v", loaded.glyphs)
+	}
+}
+
+func TestSaveThemeOptionsDeltasOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "theme.json")
+	state := themePresetState("default")
+	if err := SaveThemeOptions(path, "default", state); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"glyphs", "typography", "cover", "backgrounds", "blue", "gray", "page"} {
+		if _, ok := raw[key]; ok {
+			t.Fatalf("untouched field %q must not be persisted", key)
+		}
+	}
+	if raw["preset"] != "default" {
+		t.Fatalf("preset marker missing: %v", raw)
 	}
 }
 

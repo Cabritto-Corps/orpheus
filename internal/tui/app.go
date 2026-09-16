@@ -129,7 +129,8 @@ func newTrackPopupDelegate() cachedDelegate {
 }
 
 func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- librespot.ContextTracksResult, ldr *loader.BackgroundLoader) model {
-	applyTheme(LoadTheme(cfg.Theme, cfg.ThemePath))
+	state, resolvedPreset := LoadTheme(cfg.Theme, cfg.ThemePath)
+	applyTheme(state)
 	browser := newBrowseList()
 	albums := newBrowseList()
 
@@ -166,7 +167,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 			cover:                  newCoverManager(),
 			nerdFonts:              cfg.NerdFonts,
 			keys:                   newKeysFromConfig(LoadKeys(cfg.KeysPath)),
-			settings:               newSettingsModel(cfg),
+			settings:               newSettingsModel(cfg, resolvedPreset),
 		},
 	}
 

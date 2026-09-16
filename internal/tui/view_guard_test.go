@@ -96,6 +96,10 @@ func guardModel(tb testing.TB, v frameVariant) model {
 		m2, _ := m.openSettings()
 		m = m2.(model)
 		m.ui.settings.mode = settingsModeTheme
+	case "settings-theme-options":
+		m2, _ := m.openSettings()
+		m = m2.(model)
+		m.openThemeOptions()
 	case "settings-keys":
 		m2, _ := m.openSettings()
 		m = m2.(model)

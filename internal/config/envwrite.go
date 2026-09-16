@@ -52,7 +52,7 @@ func UpsertEnvFile(path string, values map[string]string) error {
 	}
 
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("failed writing env file: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {

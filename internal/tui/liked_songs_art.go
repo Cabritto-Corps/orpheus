@@ -13,7 +13,7 @@ const likedSongsImageURL = "orpheus://liked-songs"
 // theme: the gradient blends the accent into the page tone, corners get
 // progressively closer to full accent. Non-hex palettes (ANSI names) keep
 // the original blue gradient.
-func generateLikedSongsImage(size int) image.Image {
+func generateLikedSongsImage(size int, corners [4]color.NRGBA) image.Image {
 	if size < 2 {
 		size = 2
 	}
@@ -22,7 +22,6 @@ func generateLikedSongsImage(size int) image.Image {
 	ssSize := size * ssFactor
 	ssImg := image.NewRGBA(image.Rect(0, 0, ssSize, ssSize))
 
-	corners := likedArtCorners()
 	tl, tr, bl, br := corners[0], corners[1], corners[2], corners[3]
 
 	heartScale := float64(ssSize) * 0.07
@@ -56,12 +55,20 @@ var (
 	likedArtColors [4]color.NRGBA
 )
 
+// likedArtPaletteKey identifies the theme palette the gradient follows.
+func likedArtPaletteKey() string {
+	return string(colorBlue) + "|" + string(colorPage)
+}
+
 // likedArtCorners derives the gradient corners from the live theme (accent
 // blending into the page tone), caching the last generated palette so
-// re-theming only regenerates when the palette actually moved.
+// re-theming only regenerates when the palette actually moved. Call it
+// only from the event loop: Init and theme changes both run there, so the
+// palette state needs no locking — the preload cmd receives the corners
+// by value.
 func likedArtCorners() [4]color.NRGBA {
-	key := string(colorBlue) + "|" + string(colorPage)
-	if key != "" && key == likedArtKey {
+	key := likedArtPaletteKey()
+	if key == likedArtKey {
 		return likedArtColors
 	}
 	likedArtKey = key
@@ -92,17 +99,6 @@ func deriveLikedArtColors() [4]color.NRGBA {
 		}
 	}
 	return [4]color.NRGBA{mix(0.30), mix(0.45), mix(0.55), mix(0.0)}
-}
-
-func mixChannel(a, b uint8, t float64) uint8 {
-	v := float64(a) + (float64(b)-float64(a))*t
-	if v < 0 {
-		v = 0
-	}
-	if v > 255 {
-		v = 255
-	}
-	return uint8(v + 0.5)
 }
 
 func isInHeart(x, y float64) bool {
@@ -153,11 +149,11 @@ func lerp4(tl, tr, bl, br uint8, tx, ty float64) uint8 {
 
 const likedSongsArtSize = 600
 
-func (m *model) preloadLikedSongsArt() {
+func (m *model) preloadLikedSongsArt(corners [4]color.NRGBA) {
 	if m.ui.imgs == nil {
 		return
 	}
-	img := generateLikedSongsImage(likedSongsArtSize)
+	img := generateLikedSongsImage(likedSongsArtSize, corners)
 	m.ui.imgs.setImage(likedSongsImageURL, img, likedSongsArtSize, likedSongsArtSize)
 	m.ui.imgs.pinURL(likedSongsImageURL)
 }
@@ -168,16 +164,17 @@ func (m *model) refreshLikedSongsArt() {
 	if m.ui.imgs == nil {
 		return
 	}
-	if key := string(colorBlue) + "|" + string(colorPage); key != "" && key == likedArtKey {
+	if key := likedArtPaletteKey(); key == likedArtKey {
 		return
 	}
-	img := generateLikedSongsImage(likedSongsArtSize)
+	img := generateLikedSongsImage(likedSongsArtSize, likedArtCorners())
 	m.ui.imgs.refreshURL(likedSongsImageURL, img, likedSongsArtSize, likedSongsArtSize)
 }
 
 func preloadLikedSongsArtCmd(m model) tea.Cmd {
+	corners := likedArtCorners()
 	return func() tea.Msg {
-		m.preloadLikedSongsArt()
+		m.preloadLikedSongsArt(corners)
 		return nil
 	}
 }

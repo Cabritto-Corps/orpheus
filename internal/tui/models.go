@@ -147,7 +147,10 @@ type settingsModel struct {
 	themeStatePending  themeState
 	themeStateBackup   themeState
 	optionsCursor      int
-	optionsOffset      int
+
+	// themeOverrides caches the parsed theme.json so per-frame view paths
+	// (picker rows, root value) do not re-read the file at the 200ms tick.
+	themeOverrides map[string]any
 	keysPath           string
 	themePath          string
 	envPath            string

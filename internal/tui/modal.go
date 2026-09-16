@@ -227,6 +227,18 @@ func keyConflictActions(k keyMap) map[string]bool {
 	return conflicts
 }
 
+// sortedConflictActions returns the conflicting actions in registry order
+// so the rendered hints stop reshuffling on every frame.
+func sortedConflictActions(conflicts map[string]bool) []string {
+	out := make([]string, 0, len(conflicts))
+	for _, entry := range settingsKeyActions {
+		if conflicts[entry.action] {
+			out = append(out, entry.action)
+		}
+	}
+	return out
+}
+
 func keyListOverlap(a, b []string) bool {
 	for _, x := range a {
 		if slices.Contains(b, x) {

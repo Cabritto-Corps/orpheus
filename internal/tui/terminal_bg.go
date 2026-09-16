@@ -16,9 +16,20 @@ var (
 
 // CaptureTerminalBG remembers the terminal's current background (OSC 11
 // query, best effort) so the themed background set during the session can
-// be restored on exit.
+// be restored on exit. Unknown captures (terminals that answer neither
+// OSC 11 nor the cursor report) disable the whole feature: without the
+// original color a restore would guess, and guessing wrong is worse than
+// leaving the padding transparent.
 func CaptureTerminalBG() {
-	col := termenv.ConvertToRGB(termenv.BackgroundColor())
+	c := termenv.BackgroundColor()
+	if _, ok := c.(termenv.RGBColor); !ok {
+		// Fallback values (COLORFGBG, hardcoded black) do not describe the
+		// real background; restoring them would repaint it wrongly.
+		terminalBGOriginal = ""
+		terminalBGLast = ""
+		return
+	}
+	col := termenv.ConvertToRGB(c)
 	terminalBGOriginal = rgbSpec(col.R, col.G, col.B)
 	terminalBGLast = ""
 }
@@ -28,6 +39,9 @@ func CaptureTerminalBG() {
 // background, so matching it makes the page fill read as whole-window.
 // ANSI-name pages (no hex) and ASCII profiles keep the transparent look.
 func ApplyTerminalBG(page lipgloss.Color) {
+	if terminalBGOriginal == "" {
+		return
+	}
 	if lipgloss.DefaultRenderer().ColorProfile() == termenv.Ascii {
 		return
 	}
@@ -51,11 +65,12 @@ func RestoreTerminalBG() {
 	terminalBGOriginal = ""
 }
 
-// TerminalBGSync re-syncs the terminal background with the current theme
-// page; theme changes return it as a tea.Cmd so the padding follows the
-// live preview.
-func TerminalBGSync() tea.Msg {
-	ApplyTerminalBG(colorPage)
+// TerminalBGSync re-syncs the terminal background with the page color
+// captured at theme-apply time; theme changes return it as a tea.Cmd so
+// the padding follows the live preview without reading theme globals off
+// the event loop.
+func TerminalBGSync(page lipgloss.Color) tea.Msg {
+	ApplyTerminalBG(page)
 	return nil
 }
 

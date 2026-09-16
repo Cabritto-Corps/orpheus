@@ -247,9 +247,9 @@ var themeRegistry = []themeEntry{
 	}},
 }
 
-// themeGlyphSets are the curated value sets for every glyph option; the
-// registry entries below are the display names used by both the JSON
-// schema and the settings cycles.
+// The curated value sets for every glyph/background/cover option; the
+// entries below are the display names used by both the JSON schema and
+// the settings cycles.
 var (
 	glyphBorderChoices     = []string{"rounded", "thick", "double", "ascii"}
 	glyphNowPlayingChoices = []string{"note", "dot", "play", "arrow", "plain"}
@@ -268,8 +268,10 @@ var validGlyphNowPlaying = stringSet(glyphNowPlayingChoices)
 var validGlyphPlayPause = stringSet(glyphPlayPauseChoices)
 var validGlyphSpinner = stringSet(glyphSpinnerChoices)
 var validGlyphBar = stringSet(glyphBarChoices)
-var validCoverFrame = stringSet([]string{"none", "rounded", "thick"})
-var validBackgroundStyle = stringSet([]string{"divided", "solid"})
+var coverFrameChoices = []string{"none", "rounded", "thick"}
+var backgroundStyleChoices = []string{"divided", "solid"}
+var validCoverFrame = stringSet(coverFrameChoices)
+var validBackgroundStyle = stringSet(backgroundStyleChoices)
 
 var validThemeColors = map[string]bool{
 	"blue": true, "blue_light": true, "off_white": true, "gray": true,
@@ -288,32 +290,36 @@ func stringSet(values []string) map[string]bool {
 
 // LoadTheme resolves the configured preset plus optional per-color and
 // section overrides from a theme.json file. Unknown or invalid input warns
-// and falls back, so the result is always renderable.
-func LoadTheme(preset, path string) themeState {
+// and falls back, so the result is always renderable. The returned name is
+// the preset that actually won — the file's marker wins over the env one —
+// so the UI can show and save the theme that is really active.
+func LoadTheme(preset, path string) (themeState, string) {
 	st := themePresetState(preset)
+	name := themePresetName(preset)
 
 	if path == "" {
-		return st
+		return st, name
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			slog.Warn("failed reading theme file, using preset", "path", path, "error", err)
 		}
-		return st
+		return st, name
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
 		slog.Warn("malformed theme file, using preset", "path", path, "error", err)
-		return st
+		return st, name
 	}
 	if p, ok := raw["preset"].(string); ok {
 		st = themePresetState(p)
+		name = themePresetName(p)
 		delete(raw, "preset")
 	}
 	applyThemeStateOverrides(&st.glyphs, &st.typography, &st.cover, &st.backgrounds, raw)
 	applyThemeOverrides(&st.colors, colorOverridesOnly(raw))
-	return st
+	return st, name
 }
 
 // colorOverridesOnly strips the structured sections (and the preset marker)
@@ -322,7 +328,7 @@ func colorOverridesOnly(raw map[string]any) map[string]any {
 	out := make(map[string]any, len(raw))
 	for k, v := range raw {
 		switch k {
-		case "glyphs", "typography", "cover":
+		case "glyphs", "typography", "cover", "backgrounds":
 		default:
 			out[k] = v
 		}

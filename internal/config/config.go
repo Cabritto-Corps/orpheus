@@ -267,7 +267,7 @@ func EnsureEnvFilePath() string {
 	if err != nil || strings.TrimSpace(dir) == "" {
 		return ""
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return ""
 	}
 	return filepath.Join(dir, ".env")

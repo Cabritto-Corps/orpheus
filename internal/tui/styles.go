@@ -49,6 +49,18 @@ func panelFromPage(page string) string {
 	return lifted
 }
 
+// mixChannel blends two 8-bit channels (t=0 → a, t=1 → b), clamped.
+func mixChannel(a, b uint8, t float64) uint8 {
+	v := float64(a) + (float64(b)-float64(a))*t
+	if v < 0 {
+		v = 0
+	}
+	if v > 255 {
+		v = 255
+	}
+	return uint8(v + 0.5)
+}
+
 // mixHex blends two hex colors (t=0 → a, t=1 → b); non-hex inputs (ANSI
 // names, 0-15 indices) return "" so callers can fall back gracefully.
 func mixHex(a, b string, t float64) string {
@@ -60,17 +72,7 @@ func mixHex(a, b string, t float64) string {
 	if !ok {
 		return ""
 	}
-	mix := func(x, y uint8) uint8 {
-		v := float64(x) + (float64(y)-float64(x))*t
-		if v < 0 {
-			v = 0
-		}
-		if v > 255 {
-			v = 255
-		}
-		return uint8(v + 0.5)
-	}
-	return fmt.Sprintf("#%02X%02X%02X", mix(ra, rb), mix(ga, gb), mix(ba, bb))
+	return fmt.Sprintf("#%02X%02X%02X", mixChannel(ra, rb, t), mixChannel(ga, gb, t), mixChannel(ba, bb, t))
 }
 
 func hexToRGB(s string) (r, g, b uint8, ok bool) {
@@ -186,15 +188,8 @@ func applyTheme(st themeState) {
 	styleQueueHeader = lipgloss.NewStyle().
 		Foreground(colorMutedBlue)
 
-	styleQueueIndex = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
-
 	styleQueueTrack = lipgloss.NewStyle().
 		Foreground(colorGray)
-
-	styleQueueArtist = lipgloss.NewStyle().
-		Italic(themeItalicDescs).
-		Foreground(colorMutedBlue)
 
 	styleQueueCursor = lipgloss.NewStyle().
 		Foreground(colorBlueLight)
@@ -210,22 +205,8 @@ func applyTheme(st themeState) {
 	stylePlayerTime = lipgloss.NewStyle().
 		Foreground(colorMutedBlue)
 
-	styleProgressBarFilled = lipgloss.NewStyle().
-		Foreground(colorBlue)
-
 	styleProgressBarEmpty = lipgloss.NewStyle().
 		Foreground(colorGray)
-
-	styleVolumeBarFilled = lipgloss.NewStyle().
-		Foreground(colorBlue)
-
-	styleVolumeBarEmpty = lipgloss.NewStyle().
-		// The empty track must stay visible on dark terminals; the divider
-		// color reads as a gap there (~1.3:1).
-		Foreground(colorGray)
-
-	stylePlaceholderBorder = lipgloss.NewStyle().
-		Foreground(colorDivider)
 
 	styleTrackPopupTitle = lipgloss.NewStyle().
 		Bold(themeBoldTitles).
@@ -245,10 +226,14 @@ func applyTheme(st themeState) {
 	styleTabInactive = lipgloss.NewStyle().
 		Foreground(colorMutedBlue)
 
+	modalBg := colorPanel
+	if activeBackgrounds.Style == "solid" {
+		modalBg = colorPage
+	}
 	styleModalBox = lipgloss.NewStyle().
 		Border(themeBorder()).
 		BorderForeground(colorBlue).
-		Background(colorPanel).
+		Background(modalBg).
 		Padding(0, 1)
 
 	styleModalTitle = lipgloss.NewStyle().
@@ -281,18 +266,12 @@ var (
 	styleArtistName        lipgloss.Style
 	styleAlbumName         lipgloss.Style
 	styleQueueHeader       lipgloss.Style
-	styleQueueIndex        lipgloss.Style
 	styleQueueTrack        lipgloss.Style
-	styleQueueArtist       lipgloss.Style
 	styleQueueCursor       lipgloss.Style
 	styleQueueSelected     lipgloss.Style
 	styleQueuePlaying      lipgloss.Style
 	stylePlayerTime        lipgloss.Style
-	styleProgressBarFilled lipgloss.Style
 	styleProgressBarEmpty  lipgloss.Style
-	styleVolumeBarFilled   lipgloss.Style
-	styleVolumeBarEmpty    lipgloss.Style
-	stylePlaceholderBorder lipgloss.Style
 	styleTrackPopupTitle   lipgloss.Style
 	styleTrackPopupLoading lipgloss.Style
 	styleTrackPopupHint    lipgloss.Style
@@ -304,8 +283,8 @@ var (
 	styleModalSelectedRow  lipgloss.Style
 )
 
-// themeBorder returns the theme's box border family for modal boxes,
-// placeholder art and cover frames.
+// themeBorder returns the theme's box border family for modal boxes and
+// placeholder art (cover frames have their own border setting).
 func themeBorder() lipgloss.Border {
 	switch activeGlyphs.Border {
 	case "thick":

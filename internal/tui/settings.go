@@ -14,9 +14,13 @@ import (
 	"orpheus/internal/config"
 )
 
-func newSettingsModel(cfg config.Config) settingsModel {
+// newSettingsModel seeds the settings state from the config; the preset
+// name is the one the theme loader actually resolved (the theme.json
+// marker wins over orpheus_theme), so the picker and editor always
+// operate on the theme that is really running.
+func newSettingsModel(cfg config.Config, resolvedPreset string) settingsModel {
 	return settingsModel{
-		themePreset:      themePresetName(cfg.Theme),
+		themePreset:      resolvedPreset,
 		keysPath:         cfg.KeysPath,
 		themePath:        cfg.ThemePath,
 		envPath:          cfg.EnvPath,
@@ -27,7 +31,18 @@ func newSettingsModel(cfg config.Config) settingsModel {
 	}
 }
 
+// cachedThemeOverrides returns the parsed theme.json overrides: the cache
+// populated on the update paths (settings open, saves) so per-frame view
+// paths do not re-read the file at the 200ms tick.
+func (m model) cachedThemeOverrides() map[string]any {
+	if o := m.ui.settings.themeOverrides; o != nil {
+		return o
+	}
+	return loadThemeOverrides(m.ui.settings.themePath)
+}
+
 func (m model) openSettings() (tea.Model, tea.Cmd) {
+	m.ui.settings.themeOverrides = loadThemeOverrides(m.ui.settings.themePath)
 	m.ui.settings.open = true
 	m.ui.settings.mode = settingsModeRoot
 	m.ui.settings.cursor = 0
@@ -172,15 +187,7 @@ func (m *model) openThemePicker() {
 }
 
 func (m model) themePreviewApply(name string) (tea.Model, tea.Cmd) {
-	state := resolveThemeState(name, loadThemeOverrides(m.ui.settings.themePath))
-	applyTheme(state)
-	m.rethemeBrowseLists()
-	// The spinner preset is a theme choice: swap in the themed one; the
-	// app tick keeps advancing whatever model is current.
-	m.ui.spinner = themedSpinner()
-	m.refreshLikedSongsArt()
-	m.ui.settings.keysTableDirty = true
-	return m, TerminalBGSync
+	return m.themeOptionsApply(resolveThemeState(name, m.cachedThemeOverrides()))
 }
 
 func (m model) handleSettingsTheme(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -197,8 +204,12 @@ func (m model) handleSettingsTheme(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		picked := settingsThemeOrder[s.themeCursor]
 		s.themePreset = themePresetName(picked)
 		if err := SaveThemePreset(s.themePath, picked); err != nil {
+			s.saveErr = "theme save failed: " + err.Error()
 			slog.Warn("failed saving theme preset", "path", s.themePath, "error", err)
+			return m, nil
 		}
+		s.saveErr = ""
+		m.ui.settings.themeOverrides = nil
 		s.mode = settingsModeRoot
 		return m, nil
 	case keyMatches(msg, k.CloseModal):
@@ -428,7 +439,7 @@ func tableStyles() table.Styles {
 
 func (m model) themePickerView(modalW, innerH int) string {
 	s := m.ui.settings
-	overrides := loadThemeOverrides(s.themePath)
+	overrides := m.cachedThemeOverrides()
 	listH := max(3, innerH-6)
 
 	// Scrolling window over the registry rows; a blank row between entries
@@ -499,7 +510,7 @@ func (m model) settingsModalView() string {
 		var body strings.Builder
 		body.WriteString("\n" + t.View() + "\n")
 		shown := 0
-		for action := range s.conflicts {
+		for _, action := range sortedConflictActions(s.conflicts) {
 			if shown == maxConflictHintLines {
 				body.WriteString(styleError.Render("  ⚠ more conflicts…") + "\n")
 				break
@@ -550,7 +561,7 @@ func (m model) settingsModalView() string {
 }
 
 func (m model) themeValue(preset string) string {
-	colors := resolveThemeColors(preset, loadThemeOverrides(m.ui.settings.themePath))
+	colors := resolveThemeColors(preset, m.cachedThemeOverrides())
 	return preset + "  " + swatchBar(themeSwatches(colors))
 }
 

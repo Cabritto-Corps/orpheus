@@ -157,8 +157,9 @@ func paintPage(frame string, width int) string {
 	return paintBand(frame, width, colorPage)
 }
 
-// paintPanel fills a chrome band (header, tab bar, player bar) with the
-// panel tone over the page: the lifted layer that gives the frame depth.
+// paintPanel fills a chrome band (header and tab bar) with the panel
+// tone over the page: the lifted layer that gives the frame depth. The
+// player bar stays on the page color so middle and footer read as one.
 func paintPanel(band string, width int, bg lipgloss.Color) string {
 	return paintBand(band, width, bg)
 }

@@ -86,10 +86,9 @@ func (m *model) openThemeOptions() {
 	s := &m.ui.settings
 	s.mode = settingsModeThemeOptions
 	s.themeOptionsPreset = themePresetName(s.themePreset)
-	s.themeStatePending = resolveThemeState(s.themeOptionsPreset, loadThemeOverrides(s.themePath))
+	s.themeStatePending = resolveThemeState(s.themeOptionsPreset, m.cachedThemeOverrides())
 	s.themeStateBackup = s.themeStatePending
 	s.optionsCursor = 0
-	s.optionsOffset = 0
 }
 
 // themeOptionsApply renders a draft state live: styles, list delegates,
@@ -100,7 +99,8 @@ func (m model) themeOptionsApply(state themeState) (tea.Model, tea.Cmd) {
 	m.ui.spinner = themedSpinner()
 	m.refreshLikedSongsArt()
 	m.ui.settings.keysTableDirty = true
-	return m, TerminalBGSync
+	page := lipgloss.Color(state.colors.Page)
+	return m, func() tea.Msg { return TerminalBGSync(page) }
 }
 
 func (m model) themeOptionsCycle(step int) (tea.Model, tea.Cmd) {
@@ -114,11 +114,12 @@ func (m model) themeOptionsCycle(step int) (tea.Model, tea.Cmd) {
 		next := cycleValue(names, s.themeOptionsPreset, step)
 		s.themeOptionsPreset = next
 		// Base change restarts the palette from the new preset but keeps
-		// the glyph/typography/cover edits made so far.
+		// the glyph/typography/cover/backgrounds edits made so far.
 		base := themePresetState(next)
 		base.glyphs = pending.glyphs
 		base.typography = pending.typography
 		base.cover = pending.cover
+		base.backgrounds = pending.backgrounds
 		pending = base
 	case 1:
 		presetPage := preset.Page
@@ -133,7 +134,7 @@ func (m model) themeOptionsCycle(step int) (tea.Model, tea.Cmd) {
 			pending.colors.BlueLight = light
 		}
 	case 3:
-		pending.backgrounds.Style = cycleValue([]string{"divided", "solid"}, pending.backgrounds.Style, step)
+		pending.backgrounds.Style = cycleValue(backgroundStyleChoices, pending.backgrounds.Style, step)
 	case 4:
 		pending.glyphs.Border = cycleValue(glyphBorderChoices, pending.glyphs.Border, step)
 	case 5:
@@ -149,7 +150,7 @@ func (m model) themeOptionsCycle(step int) (tea.Model, tea.Cmd) {
 	case 10:
 		pending.typography.ItalicDescs = !pending.typography.ItalicDescs
 	case 11:
-		pending.cover.Frame = cycleValue([]string{"none", "rounded", "thick"}, pending.cover.Frame, step)
+		pending.cover.Frame = cycleValue(coverFrameChoices, pending.cover.Frame, step)
 	default:
 		return m, nil
 	}
@@ -160,7 +161,7 @@ func (m model) themeOptionsCycle(step int) (tea.Model, tea.Cmd) {
 
 func (m model) themeOptionsReset() (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
-	base := resolveThemeState(s.themeOptionsPreset, loadThemeOverrides(s.themePath))
+	base := themePresetState(s.themeOptionsPreset)
 	s.themeStatePending = base
 	return m.themeOptionsApply(base)
 }
@@ -177,8 +178,12 @@ func (m model) themeOptionsRevert() (tea.Model, tea.Cmd) {
 func (m model) themeOptionsSave() (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
 	if err := SaveThemeOptions(s.themePath, s.themeOptionsPreset, s.themeStatePending); err != nil {
+		s.saveErr = "theme save failed: " + err.Error()
 		slog.Warn("failed saving theme options", "path", s.themePath, "error", err)
+		return m, nil
 	}
+	s.saveErr = ""
+	s.themeOverrides = nil
 	s.themePreset = themePresetName(s.themeOptionsPreset)
 	s.mode = settingsModeRoot
 	return m, nil
@@ -230,8 +235,6 @@ func onOff(v bool) string {
 	}
 	return "off"
 }
-
-const themeOptionsAccentPresetSentinel = "preset"
 
 // themeOptionsView renders the theming editor: rows with right-aligned
 // values, save/reset actions, and a scrolling window on short terminals.
