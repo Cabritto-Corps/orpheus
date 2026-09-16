@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 const (
@@ -97,24 +98,44 @@ func miniGauge(frac float64, width int) string {
 		styleVolumeBarEmpty.Render(strings.Repeat("░", width-filled))
 }
 
-// swatchBar renders adjacent color squares representing a palette.
-func swatchBar(colors []lipgloss.Color) string {
-	var b strings.Builder
-	for _, c := range colors {
-		b.WriteString(lipgloss.NewStyle().Background(c).Render("  "))
-	}
-	return b.String()
+// themeSwatch is one preview cell: either a background-filled pair of spaces
+// or a foreground-colored full block.
+type themeSwatch struct {
+	color        lipgloss.Color
+	asBackground bool
 }
 
-// themeSwatches picks the four representative colors of a palette: accent,
-// foreground, dim, error.
-func themeSwatches(c themeColors) []lipgloss.Color {
-	return []lipgloss.Color{
-		lipgloss.Color(c.Blue),
-		lipgloss.Color(c.OffWhite),
-		lipgloss.Color(c.Gray),
-		lipgloss.Color(c.Error),
+// themeSwatches picks the seven representative roles of a palette:
+// scrim and selection as background cells, text/dim/accent roles as
+// foreground blocks.
+func themeSwatches(c themeColors) []themeSwatch {
+	return []themeSwatch{
+		{lipgloss.Color(c.Scrim), true},
+		{lipgloss.Color(c.SelectionBg), true},
+		{lipgloss.Color(c.OffWhite), false},
+		{lipgloss.Color(c.Gray), false},
+		{lipgloss.Color(c.Blue), false},
+		{lipgloss.Color(c.BlueLight), false},
+		{lipgloss.Color(c.Error), false},
 	}
+}
+
+func swatchBar(swatches []themeSwatch) string {
+	if lipgloss.DefaultRenderer().ColorProfile() == termenv.Ascii {
+		return ""
+	}
+	var b strings.Builder
+	for i, sw := range swatches {
+		if i > 0 {
+			b.WriteString(" ")
+		}
+		if sw.asBackground {
+			b.WriteString(lipgloss.NewStyle().Background(sw.color).Render("  "))
+		} else {
+			b.WriteString(lipgloss.NewStyle().Foreground(sw.color).Render("██"))
+		}
+	}
+	return b.String()
 }
 
 // keyConflictActions returns the set of actions whose effective key lists

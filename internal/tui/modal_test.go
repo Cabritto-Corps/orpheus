@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 func teaDown() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyDown} }
@@ -81,15 +82,25 @@ func TestMiniGaugeBounds(t *testing.T) {
 	}
 }
 
-func TestSwatchBarRendersOneBlockPerColor(t *testing.T) {
-	colors := themeSwatches(themePreset("default"))
-	if len(colors) != 4 {
-		t.Fatalf("swatch colors = %d, want 4", len(colors))
+func TestSwatchBarRendersSpacedSwatches(t *testing.T) {
+	t.Cleanup(func() { lipgloss.DefaultRenderer().SetColorProfile(termenv.Ascii) })
+	lipgloss.DefaultRenderer().SetColorProfile(termenv.TrueColor)
+
+	swatches := themeSwatches(themePreset("default"))
+	if len(swatches) != 7 {
+		t.Fatalf("swatch colors = %d, want 7", len(swatches))
 	}
-	bar := swatchBar(colors)
-	// each swatch is two spaces of background; width sums to 2*len(colors)
-	if lipgloss.Width(bar) != 8 {
-		t.Fatalf("swatch bar width = %d, want 8", lipgloss.Width(bar))
+	bar := swatchBar(swatches)
+	// 7 swatches x 2 cells + 6 single-space gaps
+	if lipgloss.Width(bar) != 7*2+6 {
+		t.Fatalf("swatch bar width = %d, want %d", lipgloss.Width(bar), 7*2+6)
+	}
+
+	// Ascii profile: color-only output degrades to nothing rather than
+	// blank cells; the picker rows fall back to name + accent hex.
+	lipgloss.DefaultRenderer().SetColorProfile(termenv.Ascii)
+	if got := swatchBar(swatches); got != "" {
+		t.Fatalf("swatch bar should be empty under Ascii profile, got %q", got)
 	}
 }
 

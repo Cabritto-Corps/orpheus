@@ -124,6 +124,7 @@ type settingsMode int
 const (
 	settingsModeRoot settingsMode = iota
 	settingsModeKeys
+	settingsModeTheme
 	settingsModeCapture
 )
 
@@ -135,6 +136,8 @@ type settingsModel struct {
 	captureKey  string
 	pendingKey  string
 	themePreset string
+	themeCursor int
+	themeBackup string
 	keysPath    string
 	themePath   string
 	envPath     string

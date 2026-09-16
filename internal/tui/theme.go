@@ -225,18 +225,51 @@ func LoadTheme(preset, path string) themeColors {
 	return colors
 }
 
+// loadThemeOverrides reads the valid per-color overrides stored in a
+// theme.json, so previews can resolve preset + user tweaks.
+func loadThemeOverrides(path string) map[string]any {
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	delete(raw, "preset")
+	return raw
+}
+
+// resolveThemeColors combines a preset with stored per-color overrides.
+func resolveThemeColors(preset string, overrides map[string]any) themeColors {
+	colors := themePreset(preset)
+	applyThemeOverrides(&colors, overrides)
+	return colors
+}
+
 // SaveThemePreset persists the chosen preset as a marker in theme.json.
-// Per-color overrides present in the file are dropped: they would otherwise
-// fight the preset. The write is atomic.
+// Per-color overrides already in the file are preserved and keep applying
+// on top of the preset. The write is atomic.
 func SaveThemePreset(path, preset string) error {
 	if path == "" {
 		return fmt.Errorf("no theme file path configured")
 	}
 	name := themePresetName(preset)
-	body, err := json.MarshalIndent(map[string]string{"preset": name}, "", "  ")
+	body := map[string]any{"preset": name}
+	for k, v := range loadThemeOverrides(path) {
+		body[k] = v
+	}
+	marshaled, err := json.MarshalIndent(body, "", "  ")
 	if err != nil {
 		return err
 	}
+	return writeThemeFile(path, marshaled)
+}
+
+func writeThemeFile(path string, body []byte) error {
 	body = append(body, '\n')
 	if dir := filepath.Dir(path); dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {

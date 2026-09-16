@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -46,6 +47,8 @@ func (m model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSettingsCapture(msg)
 	case settingsModeKeys:
 		return m.handleSettingsKeysMode(msg)
+	case settingsModeTheme:
+		return m.handleSettingsTheme(msg)
 	default:
 		return m.handleSettingsRoot(msg)
 	}
@@ -76,15 +79,8 @@ func (m model) handleSettingsRoot(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) settingsActivate() (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
 	switch s.cursor {
-	case 0: // theme: cycle presets, live-apply
-		next := settingsNextThemePreset(s.themePreset)
-		s.themePreset = next
-		applyTheme(themePreset(next))
-		m.rethemeBrowseLists()
-		s.keysTableDirty = true
-		if err := SaveThemePreset(s.themePath, next); err != nil {
-			slog.Warn("failed saving theme preset", "path", s.themePath, "error", err)
-		}
+	case 0: // theme: open the live-preview picker
+		m.openThemePicker()
 	case 1: // keybinds: open the action list
 		s.mode = settingsModeKeys
 		s.keysCursor = 0
@@ -137,18 +133,49 @@ func clampCacheSizeMB(v int64) int64 {
 	return v
 }
 
-func settingsNextPresetIdx(preset string) int {
-	for i, name := range settingsThemeOrder {
-		if name == themePresetName(preset) {
-			return i
-		}
-	}
-	return 0
+func (m *model) openThemePicker() {
+	s := &m.ui.settings
+	s.mode = settingsModeTheme
+	s.themeBackup = s.themePreset
+	s.themeCursor = max(0, slices.Index(settingsThemeOrder, themePresetName(s.themePreset)))
 }
 
-func settingsNextThemePreset(current string) string {
-	return settingsThemeOrder[(settingsNextPresetIdx(current)+1)%len(settingsThemeOrder)]
+func (m model) themePreviewApply(name string) model {
+	colors := resolveThemeColors(name, loadThemeOverrides(m.ui.settings.themePath))
+	applyTheme(colors)
+	m.rethemeBrowseLists()
+	m.ui.settings.keysTableDirty = true
+	return m
 }
+
+func (m model) handleSettingsTheme(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	s := &m.ui.settings
+	k := m.ui.keys
+	switch {
+	case keyMatches(msg, k.QueueUp):
+		s.themeCursor = (s.themeCursor + len(settingsThemeOrder) - 1) % len(settingsThemeOrder)
+		return m.themePreviewApply(settingsThemeOrder[s.themeCursor]), nil
+	case keyMatches(msg, k.QueueDown):
+		s.themeCursor = (s.themeCursor + 1) % len(settingsThemeOrder)
+		return m.themePreviewApply(settingsThemeOrder[s.themeCursor]), nil
+	case keyMatches(msg, k.Select):
+		picked := settingsThemeOrder[s.themeCursor]
+		s.themePreset = themePresetName(picked)
+		if err := SaveThemePreset(s.themePath, picked); err != nil {
+			slog.Warn("failed saving theme preset", "path", s.themePath, "error", err)
+		}
+		s.mode = settingsModeRoot
+		return m, nil
+	case keyMatches(msg, k.CloseModal):
+		// Revert to the theme that was active when the picker opened.
+		s.themePreset = s.themeBackup
+		m = m.themePreviewApply(s.themeBackup)
+		s.mode = settingsModeRoot
+		return m, nil
+	}
+	return m, nil
+}
+
 
 func itoa64(v int64) string {
 	return strconv.FormatInt(v, 10)
@@ -343,6 +370,35 @@ func tableStyles() table.Styles {
 	return st
 }
 
+func (m model) themePickerView(modalW, innerH int) string {
+	s := m.ui.settings
+	overrides := loadThemeOverrides(s.themePath)
+	listH := max(3, innerH-6)
+
+	// Scrolling window over the registry rows.
+	offset := 0
+	if s.themeCursor >= listH {
+		offset = s.themeCursor - listH + 1
+	}
+	var rows []string
+	for i := offset; i < min(len(settingsThemeOrder), offset+listH); i++ {
+		name := settingsThemeOrder[i]
+		colors := resolveThemeColors(name, overrides)
+		marker := "  "
+		if themePresetName(s.themePreset) == themePresetName(name) {
+			marker = "✓"
+		}
+		bar := swatchBar(themeSwatches(colors))
+		row := fmt.Sprintf(" %s %-14s %s %s", marker, name, bar, lipgloss.Color(colors.Blue))
+		rows = append(rows, modalRow(row, "", s.themeCursor == i, modalW))
+	}
+
+	var body strings.Builder
+	body.WriteString("\n" + strings.Join(rows, "\n") + "\n")
+	body.WriteString("\n" + styleModalHint.Render("swatches: scrim sel text dim accent 2nd error") + "\n")
+	return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Theme"), styleModalHint.Render("↑/↓: preview   enter: save   esc: revert"), body.String(), modalW, innerH)
+}
+
 func (m model) settingsModalView() string {
 	modalW := m.ui.width - 4
 	innerH := max(8, m.ui.height-headerH-2)
@@ -359,6 +415,9 @@ func (m model) settingsModalView() string {
 			body = "\n  bind \"" + settingsActionLabel(s.captureKey) + "\" to " + pending + "\n\n  enter: confirm   esc: cancel\n"
 		}
 		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"), styleModalHint.Render("enter: confirm   esc: cancel"), body, modalW, innerH)
+
+	case settingsModeTheme:
+		return m.themePickerView(modalW, innerH)
 
 	case settingsModeKeys:
 		conflictCount := min(len(s.conflicts), maxConflictHintLines)
@@ -387,7 +446,7 @@ func (m model) settingsModalView() string {
 			cacheGauge = " " + miniGauge(float64(s.cacheSizeMB-64)/float64(4096-64), 6)
 		}
 		rows := []string{
-			modalRow("Theme", themeValue(s.themePreset), s.cursor == 0, modalW),
+			modalRow("Theme", m.themeValue(s.themePreset), s.cursor == 0, modalW),
 			modalRow("Keybinds", "edit...", s.cursor == 1, modalW),
 			modalRow("Crossfade", settingsCrossfadeLabel(&s)+crossfadeGauge, s.cursor == 2, modalW),
 			modalRow("Audio cache", settingsCacheLabel(&s)+cacheGauge, s.cursor == 3, modalW),
@@ -407,8 +466,9 @@ func (m model) settingsModalView() string {
 	}
 }
 
-func themeValue(preset string) string {
-	return preset + "  " + swatchBar(themeSwatches(themePreset(preset)))
+func (m model) themeValue(preset string) string {
+	colors := resolveThemeColors(preset, loadThemeOverrides(m.ui.settings.themePath))
+	return preset + "  " + swatchBar(themeSwatches(colors)) + " " + colors.Blue
 }
 
 func settingsActionLabel(action string) string {

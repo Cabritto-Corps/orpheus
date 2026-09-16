@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,33 +78,70 @@ func TestSettingsModalOpenCloseCursor(t *testing.T) {
 	}
 }
 
-func TestSettingsThemeCycleLiveAppliesAndPersists(t *testing.T) {
+func TestSettingsThemePickerLiveAppliesAndPersists(t *testing.T) {
 	m, _, themePath, _ := newSettingsTestModel(t)
 	applyTheme(themePreset("default"))
 
 	next := openViaKey(m)
-	next = sendEnter(next) // theme row: cycle default -> minimal
-	if next.ui.settings.themePreset != "minimal" {
-		t.Fatalf("preset = %q, want minimal", next.ui.settings.themePreset)
+	next = sendEnter(next) // theme row: open the picker
+	if next.ui.settings.mode != settingsModeTheme {
+		t.Fatal("enter on the theme row should open the theme picker")
 	}
-	if !next.ui.settings.open {
-		t.Fatal("theme cycle must not close the modal")
+
+	// moving down previews the next theme live
+	idx := next.ui.settings.themeCursor
+	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	if next.ui.settings.themeCursor != idx+1 {
+		t.Fatalf("down should advance the theme cursor, got %d", next.ui.settings.themeCursor)
 	}
-	if themePreset("minimal").Blue == themePreset("default").Blue {
-		t.Fatal("presets must differ for the live-apply assertion to be meaningful")
+	if next.ui.settings.themePreset == settingsThemeOrder[next.ui.settings.themeCursor] {
+		t.Fatal("preset must not change until enter persists")
+	}
+
+	// enter persists the previewed theme
+	next = sendEnter(next)
+	picked := settingsThemeOrder[idx+1]
+	if next.ui.settings.themePreset != themePresetName(picked) {
+		t.Fatalf("persisted preset = %q, want %q", next.ui.settings.themePreset, themePresetName(picked))
+	}
+	if next.ui.settings.mode != settingsModeRoot {
+		t.Fatal("enter should return to the settings root")
 	}
 
 	data, err := os.ReadFile(themePath)
 	if err != nil {
 		t.Fatalf("theme.json not written: %v", err)
 	}
-	if string(data) != "{\n  \"preset\": \"minimal\"\n}\n" {
-		t.Fatalf("unexpected theme.json content: %q", string(data))
+	var saved map[string]any
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatalf("theme.json malformed: %v", err)
+	}
+	if saved["preset"] != themePresetName(picked) {
+		t.Fatalf("theme.json preset = %v, want %q", saved["preset"], themePresetName(picked))
 	}
 
 	// the persisted marker survives a reload
 	if got := themePresetName("minimal"); got != "minimal" {
 		t.Fatalf("preset name normalization broken: %q", got)
+	}
+}
+
+func TestSettingsThemePickerEscReverts(t *testing.T) {
+	m, _, _, _ := newSettingsTestModel(t)
+	applyTheme(themePreset("default"))
+
+	next := openViaKey(m)
+	next = sendEnter(next) // open picker
+	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	if next.ui.settings.themeBackup != "default" {
+		t.Fatalf("backup preset = %q, want default", next.ui.settings.themeBackup)
+	}
+	next = sendEsc(next) // revert
+	if next.ui.settings.mode != settingsModeRoot {
+		t.Fatal("esc should return to the settings root")
+	}
+	if next.ui.settings.themePreset != "default" {
+		t.Fatalf("reverted preset = %q, want default", next.ui.settings.themePreset)
 	}
 }
 
