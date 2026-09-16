@@ -11,16 +11,33 @@ const (
 	modalValueWidth = 22
 )
 
-// modalFrame renders a modal: title row with a right-aligned hint, a
-// separator, the body, and the shared box + centered placement on a dim
-// backdrop. termW/termH are the outer placement dimensions.
-func modalFrame(termW, termH int, title, hint, body string, width, height int) string {
-	header := title
+// modalGeometry clamps a modal's inner dimensions to the placement budget:
+// the framed box (content + 2 border rows/cols) must fit inside the
+// terminal with a margin, because Style.Width wraps and Style.Height is
+// only a minimum — nothing else bounds an oversized modal.
+func modalGeometry(termW, termH, wantedW, wantedH int) (width, height int) {
+	width = min(wantedW, max(16, termW-4))
+	height = min(wantedH, max(4, termH-2))
+	return width, height
+}
+
+// modalFrame renders a modal covering the full terminal frame: title row
+// with a right-aligned (truncated) hint, a separator, the body clipped to
+// the remaining height, all inside the shared box on the themed scrim.
+// Everything below the header dims — modals own the whole frame.
+func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int) string {
+	width, height := modalGeometry(termW, termH, wantedW, wantedH)
+	innerW := max(8, width-4)
+
 	if hint != "" {
-		hintGap := max(2, width-lipgloss.Width(title)-lipgloss.Width(hint)-4)
-		header = title + strings.Repeat(" ", hintGap) + hint
+		hint = fitCell(hint, max(8, innerW-lipgloss.Width(fitCell(title, innerW))-2))
 	}
-	sep := styleModalHint.Render(strings.Repeat("─", max(4, width-4)))
+	title = fitCell(title, max(8, innerW-lipgloss.Width(hint)))
+
+	gap := max(2, innerW-lipgloss.Width(title)-lipgloss.Width(hint))
+	header := title + strings.Repeat(" ", gap) + hint
+	sep := styleModalHint.Render(strings.Repeat("─", innerW))
+	body = lipgloss.NewStyle().MaxHeight(max(2, height-2)).Render(body)
 
 	box := styleModalBox.
 		Width(width).
@@ -34,23 +51,32 @@ func modalFrame(termW, termH int, title, hint, body string, width, height int) s
 		lipgloss.Center,
 		box,
 		lipgloss.WithWhitespaceChars("░"),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("#1a1a2a")),
+		lipgloss.WithWhitespaceForeground(colorScrim),
 	)
 }
 
-// modalRow renders one settings/menu row: label in a fixed column, value
-// right-aligned in its own fixed column, highlight on the selected row.
-// Below a minimum width the classic "> " marker is used instead of the
-// highlight (small-terminal fallback).
+// modalRow renders one settings/menu row: a fixed marker gutter on every
+// row (so selection never shifts content), label in a fixed column, value
+// right-aligned in the remaining width, all truncated/padded to the shared
+// inner width, then exactly one style over the whole row. Below a minimum
+// width the ">" marker replaces the highlight (small-terminal fallback).
 func modalRow(label, value string, selected bool, width int) string {
-	row := padTo(label, modalLabelWidth) + alignRight(value, modalValueWidth)
-	if selected {
-		if width >= 40 {
-			return styleModalSelectedRow.Render(strings.TrimRight(row, " "))
-		}
-		return "> " + row
+	inner := max(12, width-3) // box padding + marker gutter
+	labelW := min(modalLabelWidth, max(1, (inner-1)/2))
+	valueW := inner - 1 - labelW
+
+	marker := " "
+	if selected && width < 40 {
+		marker = ">"
 	}
-	return "  " + row
+	row := marker + padCell(fitCell(label, labelW), labelW) + alignRight(fitCell(value, valueW), valueW)
+	if pad := inner - lipgloss.Width(row); pad > 0 {
+		row += strings.Repeat(" ", pad)
+	}
+	if selected && width >= 40 {
+		return styleModalSelectedRow.Render(row)
+	}
+	return row
 }
 
 // alignRight left-pads s with spaces so it occupies width cells.

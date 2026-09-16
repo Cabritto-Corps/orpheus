@@ -112,7 +112,8 @@ var helpGroupsLayout = []struct {
 	{"Queue", "queue_move_down", "move row down"},
 }
 
-// helpGroupLines renders one group as label……key lines.
+// helpGroupLines renders one group as label……key lines. Labels are padded
+// in display cells; keys come from the live keyMap so rebinds reflect.
 func (m model) helpGroupLines(title string, labelWidth int) []string {
 	lines := []string{styleSectionLabel.Render(title)}
 	for _, g := range helpGroupsLayout {
@@ -124,10 +125,7 @@ func (m model) helpGroupLines(title string, labelWidth int) []string {
 			continue
 		}
 		label := g.label
-		if g.action == "quit" {
-			label += " (ctrl+c always quits)"
-		}
-		lines = append(lines, styleQueueTrack.Render(padTo(label, labelWidth))+
+		lines = append(lines, styleQueueTrack.Render(padCell(label, labelWidth))+
 			styleTrackPopupTitle.Render(shortKeyLabel(keys)))
 	}
 	return lines
@@ -148,18 +146,22 @@ func (m model) helpGroupedBody(contentW, availH int) string {
 	for _, title := range groups {
 		cols = append(cols, m.helpGroupLines(title, labelWidth))
 	}
+	colW := labelWidth + 10
 
 	var body string
-	if m.ui.width >= 90 {
+	switch {
+	case len(cols) > 1 && contentW >= colW*2:
 		left := strings.Join(append(cols[0], ""), "\n")
 		right := strings.Join(append(cols[1], "\n", strings.Join(cols[2], "\n")), "\n")
 		body = lipgloss.JoinHorizontal(lipgloss.Top, left, "    ", right)
-	} else {
+	default:
 		parts := make([]string, 0, len(cols))
 		for _, col := range cols {
 			parts = append(parts, strings.Join(col, "\n"))
 		}
 		body = strings.Join(parts, "\n\n")
 	}
+	body += "\n\n" + styleTrackPopupHint.Render("ctrl+c always quits")
+	// No clipping here: the caller (help viewport) decides overflow.
 	return body
 }

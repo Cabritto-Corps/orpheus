@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -78,6 +79,7 @@ func (m model) settingsActivate() (tea.Model, tea.Cmd) {
 		next := settingsNextThemePreset(s.themePreset)
 		s.themePreset = next
 		applyTheme(themePreset(next))
+		m.rethemeBrowseLists()
 		if err := SaveThemePreset(s.themePath, next); err != nil {
 			slog.Warn("failed saving theme preset", "path", s.themePath, "error", err)
 		}
@@ -338,14 +340,15 @@ func tableStyles() table.Styles {
 		Bold(false).
 		Foreground(colorMutedBlue)
 	st.Selected = st.Selected.
-		Border(lipgloss.NormalBorder(), false, false, false, false)
+		Border(lipgloss.NormalBorder(), false, false, false, false).
+		Foreground(colorSelectionFg).
+		Background(colorSelectionBg)
 	return st
 }
 
 func (m model) settingsModalView() string {
 	modalW := min(m.ui.width-8, 52)
-	bodyH := m.ui.height - headerH - tabBarH - 2
-	innerH := max(bodyH-4, 10)
+	innerH := max(8, m.ui.height-headerH-6)
 
 	s := m.ui.settings
 
@@ -358,15 +361,23 @@ func (m model) settingsModalView() string {
 			pending := styleTrackPopupTitle.Render(shortKeyLabel([]string{s.pendingKey}))
 			body = "\n  bind \"" + settingsActionLabel(s.captureKey) + "\" to " + pending + "\n\n  enter: confirm   esc: cancel\n"
 		}
-		return modalFrame(m.ui.width, bodyH, styleModalTitle.Render("Settings"), styleModalHint.Render("enter: confirm   esc: cancel"), body, modalW, innerH)
+		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"), styleModalHint.Render("enter: confirm   esc: cancel"), body, modalW, innerH)
 
 	case settingsModeKeys:
-		t := m.settingsKeysTable(max(4, modalW-6), max(6, innerH-6))
+		conflictCount := min(len(s.conflicts), maxConflictHintLines)
+		tableH := max(4, innerH-4-conflictCount)
+		t := m.settingsKeysTable(max(4, modalW-6), tableH)
 		body := "\n" + t.View() + "\n"
+		shown := 0
 		for action := range s.conflicts {
+			if shown == maxConflictHintLines {
+				body += styleError.Render("  ⚠ more conflicts…") + "\n"
+				break
+			}
 			body += styleError.Render("  ⚠ conflict: "+settingsActionLabel(action)) + "\n"
+			shown++
 		}
-		return modalFrame(m.ui.width, bodyH, styleModalTitle.Render("Keybinds"), styleModalHint.Render("enter: rebind   esc: back"), body, modalW, innerH)
+		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Keybinds"), styleModalHint.Render("enter: rebind   esc: back"), body, modalW, innerH)
 
 	default:
 		crossfadeGauge := ""
@@ -394,7 +405,7 @@ func (m model) settingsModalView() string {
 		if s.cursor == 0 {
 			body += styleTrackPopupHint.Render("  edit theme.json for per-color overrides") + "\n"
 		}
-		return modalFrame(m.ui.width, bodyH, styleModalTitle.Render("Settings"), styleModalHint.Render("o/esc: close"), body, modalW, innerH)
+		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"), styleModalHint.Render("o/esc: close"), body, modalW, innerH)
 	}
 }
 
@@ -441,9 +452,37 @@ func (m model) primaryKeyLabel(action string) string {
 	return shortKeyLabel(def)
 }
 
-func padTo(s string, width int) string {
-	for len(s) < width {
-		s += " "
+const maxConflictHintLines = 3
+
+// rethemeBrowseLists rebuilds both browser lists with a fresh delegate so
+// selection styles follow the new palette: the delegate is embedded by value
+// inside list.Model, so the only way to re-style it is a rebuild. Items,
+// size, flags and the global cursor position are preserved.
+func (m *model) rethemeBrowseLists() {
+	m.browse.playlistList = rebuildThemedList(m.browse.playlistList)
+	m.browse.albumList = rebuildThemedList(m.browse.albumList)
+}
+
+func rebuildThemedList(old list.Model) list.Model {
+	globalIdx := old.GlobalIndex()
+	items := old.Items()
+	w, h := old.Width(), old.Height()
+
+	l := list.New(items, newCachedPlaylistDelegate(), w, h)
+	l.SetShowTitle(false)
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(true)
+	l.SetShowFilter(true)
+	l.SetShowHelp(false)
+	l.FilterInput.Prompt = "Search: "
+	applyListStyles(&l)
+
+	if len(items) > 0 {
+		gi := clampInt(globalIdx, 0, len(items)-1)
+		if pg := l.Paginator; pg.PerPage > 0 {
+			l.Paginator.Page = gi / pg.PerPage
+		}
+		l.Select(gi % max(l.Paginator.PerPage, 1))
 	}
-	return s
+	return l
 }

@@ -16,6 +16,10 @@ var (
 	colorDimBlue   = lipgloss.Color(themePresets["default"].DimBlue)
 	colorDivider   = lipgloss.Color(themePresets["default"].Divider)
 	colorError     = lipgloss.Color(themePresets["default"].Error)
+	colorScrim     = lipgloss.Color("#1a1a2a")
+
+	colorSelectionFg = lipgloss.Color(themePresets["default"].OffWhite)
+	colorSelectionBg = lipgloss.Color(themePresets["default"].DimBlue)
 )
 
 // applyTheme rebuilds every package-level style from the resolved theme
@@ -32,6 +36,9 @@ func applyTheme(c themeColors) {
 	colorDimBlue = lipgloss.Color(c.DimBlue)
 	colorDivider = lipgloss.Color(c.Divider)
 	colorError = lipgloss.Color(c.Error)
+	colorScrim = lipgloss.Color(c.Scrim)
+	colorSelectionFg = lipgloss.Color(c.SelectionFg)
+	colorSelectionBg = lipgloss.Color(c.SelectionBg)
 
 	styleHeaderStatus = lipgloss.NewStyle().
 		Foreground(colorMutedBlue)
@@ -98,6 +105,14 @@ func applyTheme(c themeColors) {
 	styleQueueCursor = lipgloss.NewStyle().
 		Foreground(colorBlueLight)
 
+	styleQueueSelected = lipgloss.NewStyle().
+		Foreground(colorSelectionFg).
+		Background(colorSelectionBg)
+
+	styleQueuePlaying = lipgloss.NewStyle().
+		Foreground(colorBlue).
+		Bold(true)
+
 	stylePlayerTime = lipgloss.NewStyle().
 		Foreground(colorMutedBlue)
 
@@ -147,8 +162,11 @@ func applyTheme(c themeColors) {
 		Foreground(colorMutedBlue)
 
 	styleModalSelectedRow = lipgloss.NewStyle().
-		Background(colorDimBlue).
-		Foreground(colorOffWhite)
+		Background(colorSelectionBg).
+		Foreground(colorSelectionFg)
+
+	styleFooter = lipgloss.NewStyle().
+		Foreground(colorBlue)
 }
 
 var (
@@ -172,6 +190,8 @@ var (
 	styleQueueTrack        lipgloss.Style
 	styleQueueArtist       lipgloss.Style
 	styleQueueCursor       lipgloss.Style
+	styleQueueSelected     lipgloss.Style
+	styleQueuePlaying      lipgloss.Style
 	stylePlayerTime        lipgloss.Style
 	styleProgressBarFilled lipgloss.Style
 	styleProgressBarEmpty  lipgloss.Style
@@ -187,6 +207,7 @@ var (
 	styleModalTitle        lipgloss.Style
 	styleModalHint         lipgloss.Style
 	styleModalSelectedRow  lipgloss.Style
+	styleFooter            lipgloss.Style
 )
 
 func init() {
@@ -194,7 +215,7 @@ func init() {
 }
 
 func sectionDivider(w int) string {
-	return styleDivider.Render(strings.Repeat("─", w))
+	return styleDivider.Render(strings.Repeat("─", max(0, w)))
 }
 
 func verticalDivider(h int) string {
@@ -279,5 +300,8 @@ func applyListStyles(l *list.Model) {
 		SetString("•")
 
 	l.Styles.HelpStyle = lipgloss.NewStyle().
+		Foreground(colorMutedBlue)
+
+	l.Styles.ArabicPagination = lipgloss.NewStyle().
 		Foreground(colorMutedBlue)
 }

@@ -5,17 +5,21 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
-	headerH    = 2
+	headerH    = 3
 	tabBarH    = 2
-	playerBarH = 1
-	gapFooterH = 0
+	playerBarH = 2
+	// spareLineH is the deliberately empty last row: kitty overlays place
+	// images absolutely, and a frame that fills the terminal's last row
+	// makes the terminal scroll under the renderer, shifting every
+	// absolute placement each frame (observed: covers vanish).
+	footerH = 1
 )
 
-const chromeH = headerH + tabBarH + playerBarH + 2
+const chromeH = headerH + tabBarH + playerBarH + footerH
 
 const bodyStartRow1Based = headerH + tabBarH + 1
 
@@ -46,15 +50,13 @@ func (m model) View() string {
 	header := m.headerView()
 
 	if m.ui.helpOpen {
-		return header + "\n" + m.helpModalView() + m.kittyOverlay()
+		return m.helpModalView() + m.kittyOverlay()
 	}
-
 	if m.ui.settings.open {
-		return header + "\n" + m.settingsModalView() + m.kittyOverlay()
+		return m.settingsModalView() + m.kittyOverlay()
 	}
-
 	if m.ui.trackPopupOpen {
-		return header + "\n" + m.trackPopupView() + m.kittyOverlay()
+		return m.trackPopupView() + m.kittyOverlay()
 	}
 
 	tabBar := m.tabBarView()
@@ -70,7 +72,8 @@ func (m model) View() string {
 	}
 
 	bar := m.playerBarView()
-	return header + "\n" + tabBar + "\n" + body + "\n" + bar + m.kittyOverlay()
+	parts := []string{header, tabBar, body, bar}
+	return strings.Join(parts, "\n") + m.kittyOverlay()
 }
 
 type bodyLayout struct {
@@ -84,9 +87,9 @@ type bodyLayout struct {
 }
 
 func (m model) bodyLayout() bodyLayout {
-	bodyH := m.ui.height - chromeH - 1
+	bodyH := m.ui.height - chromeH
 	if m.ui.width <= 0 || m.ui.height <= 0 {
-		return bodyLayout{bodyH: bodyH, leftW: minLeftW, rightW: m.ui.width - minLeftW, coverStartRow: bodyStartRow1Based + 3, coverStartCol: 1}
+		return bodyLayout{bodyH: bodyH, leftW: minLeftW, rightW: m.ui.width - minLeftW, coverStartRow: bodyStartRow1Based + 2, coverStartCol: 1}
 	}
 	metaLines := 3
 	availH := max(bodyH-2-2-metaLines, 1)
@@ -114,7 +117,7 @@ func (m model) bodyLayout() bodyLayout {
 		rightW:        rightW,
 		coverCols:     coverCols,
 		coverRows:     coverRows,
-		coverStartRow: bodyStartRow1Based + 3,
+		coverStartRow: bodyStartRow1Based + 2,
 		coverStartCol: 1,
 	}
 }
@@ -175,18 +178,7 @@ func truncate(s string, max int) string {
 	if max <= 1 {
 		return "…"
 	}
-	limit := max - 1
-	var b strings.Builder
-	w := 0
-	for _, r := range s {
-		rw := runewidth.RuneWidth(r)
-		if w+rw > limit {
-			break
-		}
-		b.WriteRune(r)
-		w += rw
-	}
-	return b.String() + "…"
+	return ansi.Truncate(s, max-1, "") + "…"
 }
 
 func centerText(s string, w int) string {
@@ -206,4 +198,18 @@ func (m *model) getBodyLayout() bodyLayout {
 	m.ui.cachedBodyLayout = layout
 	m.ui.cachedBodyLayoutValid = true
 	return layout
+}
+
+// padCell pads s with spaces to width display cells (not bytes).
+func padCell(s string, width int) string {
+	pad := width - lipgloss.Width(s)
+	if pad <= 0 {
+		return s
+	}
+	return s + strings.Repeat(" ", pad)
+}
+
+// fitCell truncates s to width display cells with an ellipsis, escape-aware.
+func fitCell(s string, width int) string {
+	return truncate(s, width)
 }

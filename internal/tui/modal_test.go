@@ -42,21 +42,27 @@ func TestModalFrameGoldenParts(t *testing.T) {
 
 func TestModalRowSelectedAndFallback(t *testing.T) {
 	sel := modalRow("Theme", "default", true, 60)
-	if lipgloss.Width(sel) > modalLabelWidth+modalValueWidth {
-		t.Fatalf("selected row width %d exceeds columns", lipgloss.Width(sel))
+	plain := modalRow("Theme", "default", false, 60)
+	if lipgloss.Width(sel) > 58 || lipgloss.Width(plain) > 58 {
+		t.Fatalf("rows must fit the modal inner width: %d/%d", lipgloss.Width(sel), lipgloss.Width(plain))
 	}
 	if strings.Contains(sel, "> ") {
 		t.Fatal("wide selected row must use the highlight, not the marker")
 	}
-
-	fallback := modalRow("Theme", "default", true, 30)
-	if !strings.HasPrefix(fallback, "> ") {
-		t.Fatal("narrow selected row must fall back to the > marker")
+	// Same gutter for every row: selection must never shift content (A1).
+	if sel[1:8] != plain[1:8] {
+		t.Fatalf("selected and unselected rows must share the label column: %q vs %q", sel[:10], plain[:10])
+	}
+	if lipgloss.Width(plain) != lipgloss.Width(sel) {
+		t.Fatal("unselected row must be padded to the same width as the highlighted row")
 	}
 
-	plain := modalRow("Theme", "default", false, 60)
-	if !strings.HasPrefix(plain, "  ") {
-		t.Fatal("unselected row must be indented")
+	fallback := modalRow("Theme", "default", true, 30)
+	if !strings.HasPrefix(fallback, ">") {
+		t.Fatal("narrow selected row must fall back to the > marker")
+	}
+	if lipgloss.Width(fallback) > 28 {
+		t.Fatalf("narrow fallback row width %d exceeds the 28-cell budget", lipgloss.Width(fallback))
 	}
 }
 

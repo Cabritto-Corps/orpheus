@@ -596,6 +596,83 @@ func TestKittyOverlayDeletesWhenHelpOpens(t *testing.T) {
 	}
 }
 
+func TestKittyOverlayDeletesWhenSettingsOpen(t *testing.T) {
+	m := NewLoaderModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	if m.kittyOverlay() == "" {
+		t.Fatal("expected initial overlay render")
+	}
+	m.ui.settings.open = true
+
+	if overlay := m.kittyOverlay(); !strings.Contains(overlay, kittyDeleteAll) {
+		t.Fatal("expected settings modal to clear Kitty image")
+	}
+	if again := m.kittyOverlay(); !strings.Contains(again, kittyDeleteAll) {
+		t.Fatalf("expected settings-open state to keep emitting delete-all, got %q", again)
+	}
+}
+
+func TestKittyOverlayDeletesWhenTrackPopupOpen(t *testing.T) {
+	m := NewLoaderModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	if m.kittyOverlay() == "" {
+		t.Fatal("expected initial overlay render")
+	}
+	m.ui.trackPopupOpen = true
+
+	if overlay := m.kittyOverlay(); !strings.Contains(overlay, kittyDeleteAll) {
+		t.Fatal("expected track popup to clear Kitty image")
+	}
+	if again := m.kittyOverlay(); !strings.Contains(again, kittyDeleteAll) {
+		t.Fatalf("expected popup-open state to keep emitting delete-all, got %q", again)
+	}
+}
+
+func TestKittyOverlayRestoresAfterModalCloses(t *testing.T) {
+	m := NewLoaderModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	if m.kittyOverlay() == "" {
+		t.Fatal("expected initial overlay render")
+	}
+	m.ui.helpOpen = true
+	if overlay := m.kittyOverlay(); !strings.Contains(overlay, kittyDeleteAll) {
+		t.Fatal("expected delete while modal open")
+	}
+
+	m.ui.helpOpen = false
+	restored := m.kittyOverlay()
+	if restored == "" {
+		t.Fatal("expected overlay to retransmit after modal closes")
+	}
+	if strings.Contains(restored, kittyDeleteAll) {
+		t.Fatalf("expected restore without spurious delete-all, got %q", restored)
+	}
+	if !strings.Contains(restored, "\x1b_Ga=T") {
+		t.Fatalf("expected a kitty transmission on restore, got %q", restored)
+	}
+	if again := m.kittyOverlay(); again != "" {
+		t.Fatalf("expected settled overlay to stop transmitting, got %q", again)
+	}
+}
+
 func TestKittyOverlayPlayerClearsPreviousImageWhileNextLoads(t *testing.T) {
 	m := NewLoaderModel()
 	m.ui.width = 120

@@ -93,8 +93,10 @@ func TestUnknownPresetFallsBackToDefault(t *testing.T) {
 
 func TestMinimalPresetUsesANSIAndNoColor(t *testing.T) {
 	colors := LoadTheme("minimal", "")
-	if colors.Blue != "" {
-		t.Fatalf("minimal blue should be empty (default foreground), got %q", colors.Blue)
+	// D5: minimal must keep roles distinguishable — accent (bold 7), bright
+	// (15), dim (8) and selection inverted (black on 7) — not one flat "".
+	if colors.Blue == colors.OffWhite && colors.Blue == colors.Gray {
+		t.Fatal("minimal preset must keep at least three distinguishable roles")
 	}
 	if colors.Gray != "8" {
 		t.Fatalf("minimal gray should be ANSI 8, got %q", colors.Gray)
@@ -104,7 +106,7 @@ func TestMinimalPresetUsesANSIAndNoColor(t *testing.T) {
 func TestApplyThemeAppliesAndIsIdempotent(t *testing.T) {
 	theme := LoadTheme("minimal", "")
 	applyTheme(theme)
-	if colorBlue != lipgloss.Color("") {
+	if colorBlue != lipgloss.Color("7") {
 		t.Fatalf("minimal blue not applied, got %v", colorBlue)
 	}
 	first := colorGray

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	golibrespot "github.com/elxgy/go-librespot"
 
 	"orpheus/internal/spotify"
 )
@@ -34,6 +35,8 @@ func (m model) playlistBrowserPanel(w, h int) string {
 		inner = styleError.Render(truncate(errStr, w-2)) + rateHint + "\n" + styleDimmed.Render("r to retry")
 	} else if m.browse.playlistsLoading && len(m.browse.playlistList.Items()) == 0 {
 		inner = styleDimmed.Render("loading library...")
+	} else if len(m.browse.playlistList.Items()) == 0 {
+		inner = styleDimmed.Render("No playlists yet — press r to refresh")
 	} else {
 		inner = m.browse.playlistList.View()
 	}
@@ -54,7 +57,7 @@ func (m model) playlistBrowserPanel(w, h int) string {
 	}
 
 	content := labelLine + "\n" + inner
-	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 }
 
 func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
@@ -95,7 +98,7 @@ func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
 	}
 
 	content := labelLine + "\n" + coverStr + meta
-	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 }
 
 func (m model) playbackScreenView() string {
@@ -130,12 +133,14 @@ func (m model) albumBrowserPanel(w, h int) string {
 		inner = styleDimmed.Render("loading albums...")
 	} else if m.browse.albumsForbidden && len(m.browse.albumList.Items()) == 0 {
 		inner = styleDimmed.Render("saved albums unavailable — re-run 'orpheus auth login' (needs user-library-read)")
+	} else if len(m.browse.albumList.Items()) == 0 {
+		inner = styleDimmed.Render("No saved albums yet — press r to refresh")
 	} else {
 		inner = m.browse.albumList.View()
 	}
 
 	content := labelLine + "\n" + inner
-	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 }
 
 func (m model) albumPreviewPanel(w, h, coverCols, coverRows int) string {
@@ -172,7 +177,7 @@ func (m model) albumPreviewPanel(w, h, coverCols, coverRows int) string {
 	}
 
 	content := labelLine + "\n" + coverStr + meta
-	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 }
 
 func (m model) albumCoverPanel(w, h, coverCols, coverRows int) string {
@@ -220,71 +225,53 @@ func (m model) albumCoverPanel(w, h, coverCols, coverRows int) string {
 	}
 
 	content := labelLine + "\n" + coverStr + meta
-	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 }
 
 func (m model) queuePanel(w, h int) string {
 	label := styleSectionLabel.Render("Up Next")
 	divLine := sectionDivider(w)
-	contentLines := h - 4
 
-	idxW := 3
-	contentW := max(12, w-idxW-4)
-	artistW := min(20, max(6, contentW*2/5))
-	durW := 5
-	titleW := max(4, contentW-artistW-durW-2)
-
-	colHeader := styleQueueHeader.Render(
-		strings.Repeat(" ", 1+idxW+1) + fmt.Sprintf("%-*s  %-*s %-5s", titleW, "Title", artistW, "Artist", "Len"),
-	)
+	grid := queueGridFor(w)
+	colHeader := grid.header()
 	colDivider := sectionDivider(w)
+
+	headerLines := 4 // label, divider, column header, divider
+	errLines := 0
+	if m.transport.playbackErr != nil {
+		errLines = 2
+	}
+	rowBudget := max(0, h-headerLines-errLines)
 
 	lines := []string{label, divLine, colHeader, colDivider}
 
 	displayQueue := m.visibleQueue()
+	currentID := ""
+	if m.transport.status != nil {
+		currentID = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
+	}
+
 	if m.transport.status == nil {
 		lines = append(lines, styleDimmed.Render("  nothing playing"))
 	}
 
 	if len(displayQueue) == 0 {
-		lines = append(lines, styleDimmed.Render("  queue is empty"))
+		if m.transport.status != nil {
+			lines = append(lines, styleDimmed.Render("  queue is empty"))
+		}
 	} else {
-		maxRows := contentLines - 2
+		maxRows := max(0, rowBudget-1) // reserve the "+ more" line
 		window := min(len(displayQueue), maxRows)
 		cursor := min(m.transport.queueCursor, len(displayQueue)-1)
 		start := 0
-		if cursor >= maxRows {
+		if cursor >= maxRows && maxRows > 0 {
 			start = cursor - maxRows + 1
 		}
 		for i := range window {
 			qi := start + i
 			q := displayQueue[qi]
-			idx := styleQueueIndex.Render(fmt.Sprintf("%*d.", idxW-1, qi+1))
-			title := truncate(q.Name, titleW)
-			artist := truncate(q.Artist, artistW)
-			dur := ""
-			if q.DurationMS > 0 {
-				dur = fmtDuration(q.DurationMS)
-			}
-			titlePad := titleW - lipgloss.Width(title)
-			artistPad := artistW - lipgloss.Width(artist)
-			if titlePad < 0 {
-				titlePad = 0
-			}
-			if artistPad < 0 {
-				artistPad = 0
-			}
-			rowStyle := styleQueueTrack
-			marker := " "
-			selectedRow := qi == cursor
-			if selectedRow {
-				marker = ">"
-				rowStyle = styleQueueCursor
-			}
-			lines = append(lines, marker+idx+rowStyle.Render(title)+strings.Repeat(" ", titlePad)+"  "+styleQueueArtist.Render(artist)+strings.Repeat(" ", artistPad)+" "+stylePlayerTime.Render(dur))
-			if selectedRow && w >= 40 {
-				lines[len(lines)-1] = styleModalSelectedRow.Render(lines[len(lines)-1])
-			}
+			row := grid.row(w, qi+1, q.Name, q.Artist, q.DurationMS, currentID != "" && golibrespot.NormalizeSpotifyId(q.ID) == currentID, qi == cursor)
+			lines = append(lines, row)
 		}
 
 		stableVisibleQueueLen := m.transport.stableQueueLen
@@ -292,14 +279,12 @@ func (m model) queuePanel(w, h int) string {
 			stableVisibleQueueLen--
 		}
 		notVisible := max(0, stableVisibleQueueLen-(start+window))
-		if notVisible > 0 {
-			if m.transport.queueHasMore {
-				lines = append(lines, styleDimmed.Render("  + more"))
-			} else {
-				lines = append(lines, styleDimmed.Render(fmt.Sprintf("  + %d more", notVisible)))
+		if notVisible > 0 || m.transport.queueHasMore {
+			marker := "+ more"
+			if notVisible > 0 && !m.transport.queueHasMore {
+				marker = fmt.Sprintf("+ %d more", notVisible)
 			}
-		} else if m.transport.queueHasMore {
-			lines = append(lines, styleDimmed.Render("  + more"))
+			lines = append(lines, styleDimmed.Render("  "+marker))
 		}
 	}
 
@@ -316,7 +301,7 @@ func (m model) queuePanel(w, h int) string {
 	}
 
 	content := strings.Join(lines, "\n")
-	return lipgloss.NewStyle().Width(w).Height(h).Render(content)
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 }
 
 func (m model) blankArt(cols, rows int) string {
@@ -359,3 +344,84 @@ func (m model) placeholderArt(cols, rows int) string {
 	placeholderCache.put(key, out)
 	return out
 }
+
+// queueGrid is the shared column layout for the up-next panel's header and
+// rows: one reserved marker gutter, a right-aligned index, flexible
+// title/artist columns and a right-aligned duration, all inside the panel
+// width. Header and rows come from the same constants so the grid aligns.
+type queueGrid struct {
+	lead    int
+	idxW    int
+	titleW  int
+	artistW int
+	durW    int
+}
+
+func queueGridFor(w int) queueGrid {
+	g := queueGrid{lead: 1, idxW: 4, durW: 8}
+	g.durW = min(g.durW, max(4, (w-9)/6))
+	budget := w - g.lead - g.idxW - 1 - 2 - 1 - g.durW // title+artist
+	g.artistW = min(20, max(6, budget*2/5))
+	if g.artistW > max(0, budget-4) {
+		g.artistW = max(0, budget-4)
+	}
+	g.titleW = max(4, budget-g.artistW)
+	if budget < 8 {
+		g.titleW = max(4, budget)
+		g.artistW = 0
+	}
+	if g.lead+g.idxW+1+g.titleW+2+g.artistW+1+g.durW > w {
+		g.titleW = max(4, g.titleW-(g.lead+g.idxW+1+g.titleW+2+g.artistW+1+g.durW-w))
+	}
+	return g
+}
+
+func (g queueGrid) header() string {
+	var b strings.Builder
+	b.WriteString(styleQueueHeader.Render(strings.Repeat(" ", g.lead+g.idxW+1) + padCell("Title", g.titleW)))
+	if g.artistW > 0 {
+		b.WriteString("  " + styleQueueHeader.Render(padCell("Artist", g.artistW)))
+	}
+	b.WriteString(" " + styleQueueHeader.Render(alignRight("Len", g.durW)))
+	return b.String()
+}
+
+// row renders one queue row: unstyled cells padded to the grid, then exactly
+// one style applied over the whole padded row (single-owner selection).
+func (g queueGrid) row(w, num int, title, artist string, durMS int, playing, selected bool) string {
+	name := truncate(title, g.titleW)
+	artist = truncate(artist, g.artistW)
+	dur := ""
+	if durMS > 0 {
+		dur = fmtDuration(durMS)
+	}
+
+	var b strings.Builder
+	b.WriteString(strings.Repeat(" ", g.lead))
+	b.WriteString(alignRight(fmt.Sprintf("%d.", num), g.idxW))
+	b.WriteString(" ")
+	b.WriteString(padCell(name, g.titleW))
+	if g.artistW > 0 {
+		b.WriteString("  ")
+		b.WriteString(padCell(artist, g.artistW))
+	}
+	b.WriteString(" ")
+	b.WriteString(alignRight(dur, g.durW))
+
+	row := b.String()
+	if pad := w - lipgloss.Width(row); pad > 0 {
+		row += strings.Repeat(" ", pad)
+	}
+	switch {
+	case selected && w >= 40:
+		return styleQueueSelected.Render(row)
+	case playing:
+		return styleQueuePlaying.Render(strings.TrimRight(row, " ") + " " + iconNowPlaying + " ")
+	case selected:
+		return styleQueueCursor.Render(row)
+	default:
+		return styleQueueTrack.Render(row)
+	}
+}
+
+const iconNowPlaying = "♪"

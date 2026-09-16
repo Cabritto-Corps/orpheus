@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,14 +11,17 @@ import (
 )
 
 type themeColors struct {
-	Blue      string `json:"blue"`
-	BlueLight string `json:"blue_light"`
-	OffWhite  string `json:"off_white"`
-	Gray      string `json:"gray"`
-	MutedBlue string `json:"muted_blue"`
-	DimBlue   string `json:"dim_blue"`
-	Divider   string `json:"divider"`
-	Error     string `json:"error"`
+	Blue        string `json:"blue"`
+	BlueLight   string `json:"blue_light"`
+	OffWhite    string `json:"off_white"`
+	Gray        string `json:"gray"`
+	MutedBlue   string `json:"muted_blue"`
+	DimBlue     string `json:"dim_blue"`
+	Divider     string `json:"divider"`
+	Error       string `json:"error"`
+	Scrim       string `json:"scrim"`
+	SelectionFg string `json:"selection_fg"`
+	SelectionBg string `json:"selection_bg"`
 }
 
 var themePresets = map[string]themeColors{
@@ -30,16 +34,24 @@ var themePresets = map[string]themeColors{
 		DimBlue:   "#728FB0",
 		Divider:   "#2A3A4A",
 		Error:     "#FF5757",
+
+		Scrim:       "#0D1018",
+		SelectionFg: "#C8CDD4",
+		SelectionBg: "#2E4A66",
 	},
 	"minimal": {
-		Blue:      "",
-		BlueLight: "8",
-		OffWhite:  "",
+		Blue:      "7",
+		BlueLight: "15",
+		OffWhite:  "7",
 		Gray:      "8",
 		MutedBlue: "8",
-		DimBlue:   "8",
+		DimBlue:   "0",
 		Divider:   "8",
 		Error:     "1",
+
+		Scrim:       "0",
+		SelectionFg: "0",
+		SelectionBg: "7",
 	},
 	"high_contrast": {
 		Blue:      "#00FF87",
@@ -50,12 +62,17 @@ var themePresets = map[string]themeColors{
 		DimBlue:   "#909090",
 		Divider:   "#666666",
 		Error:     "#FF3B3B",
+
+		Scrim:       "#101010",
+		SelectionFg: "#000000",
+		SelectionBg: "#00FF87",
 	},
 }
 
 var validThemeColors = map[string]bool{
 	"blue": true, "blue_light": true, "off_white": true, "gray": true,
 	"muted_blue": true, "dim_blue": true, "divider": true, "error": true,
+	"scrim": true, "selection_fg": true, "selection_bg": true,
 }
 
 // LoadTheme resolves the configured preset plus optional per-color overrides
@@ -91,6 +108,9 @@ func LoadTheme(preset, path string) themeColors {
 // Per-color overrides present in the file are dropped: they would otherwise
 // fight the preset. The write is atomic.
 func SaveThemePreset(path, preset string) error {
+	if path == "" {
+		return fmt.Errorf("no theme file path configured")
+	}
 	name := themePresetName(preset)
 	body, err := json.MarshalIndent(map[string]string{"preset": name}, "", "  ")
 	if err != nil {
@@ -141,6 +161,12 @@ func applyThemeOverrides(colors *themeColors, raw map[string]any) {
 			colors.Divider = s
 		case "error":
 			colors.Error = s
+		case "scrim":
+			colors.Scrim = s
+		case "selection_fg":
+			colors.SelectionFg = s
+		case "selection_bg":
+			colors.SelectionBg = s
 		}
 	}
 }

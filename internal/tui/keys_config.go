@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -263,6 +264,9 @@ func defaultKeysForAction(k keyMap, action string) ([]string, bool) {
 // the default bindings are omitted so the file only carries actual user
 // customizations.
 func SaveKeys(path string, overrides map[string][]string) error {
+	if path == "" {
+		return fmt.Errorf("no keys file path configured")
+	}
 	defaults := newKeys()
 	out := make(map[string][]string, len(overrides))
 	for action, keys := range overrides {

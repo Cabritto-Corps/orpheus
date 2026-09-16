@@ -11,6 +11,7 @@ import (
 	"image/png"
 	_ "image/png"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -18,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	_ "golang.org/x/image/webp"
 
 	"orpheus/internal/cache"
@@ -205,6 +208,8 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 	if protocol == imageProtocolKitty {
 		if s, err := encodeImageAsPNGBase64AtSize(img, displayCols, displayRows); err == nil {
 			encoded = s
+		} else {
+			slog.Warn("kitty encode failed", "url", url, "cols", displayCols, "rows", displayRows, "error", err)
 		}
 	}
 	c.mu.Lock()
@@ -739,6 +744,11 @@ func resizeBilinear(src image.Image, width, height int) *image.RGBA {
 
 func renderHalfBlock(img image.Image, cols, rows int) string {
 	if cols <= 0 || rows <= 0 || img == nil {
+		return ""
+	}
+	if lipgloss.DefaultRenderer().ColorProfile() == termenv.Ascii {
+		// NO_COLOR / no-color terminals strip truecolor ANSI, turning the
+		// half-block mosaic into meaningless blank blocks.
 		return ""
 	}
 

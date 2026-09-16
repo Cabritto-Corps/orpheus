@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	golibrespot "github.com/elxgy/go-librespot"
@@ -79,18 +80,23 @@ func (m model) headerView() string {
 
 func layoutThreeZone(w int, left, center, right string) string {
 	leftW := lipgloss.Width(left)
-	centerW := lipgloss.Width(center)
 	rightW := lipgloss.Width(right)
 
-	centerPad := max((w-centerW)/2, leftW+1)
-	leftPad := max(centerPad-leftW, 0)
-	afterCenter := centerPad + centerW
-	rightPad := max(w-afterCenter-rightW, 1)
+	// The centre zone owns exactly the space left of the fixed-size side
+	// zones; it is truncated BEFORE joining so the row can never exceed the
+	// terminal (a style would wrap instead of clip).
+	centerBudget := max(0, w-leftW-rightW-2)
+	center = fitCell(center, centerBudget)
+	centerW := lipgloss.Width(center)
+
+	gap := max(0, w-leftW-centerW-rightW)
+	leftGap := min(max(gap/2, 1), gap)
+	rightGap := gap - leftGap
 
 	return left +
-		strings.Repeat(" ", leftPad) +
+		strings.Repeat(" ", leftGap) +
 		center +
-		strings.Repeat(" ", rightPad) +
+		strings.Repeat(" ", rightGap) +
 		right
 }
 
@@ -141,7 +147,6 @@ func (m model) playerBarView() string {
 		// gutter shifts between idle and playing frames.
 		return sep + "\n"
 	}
-
 	playIcon := m.icon(iconPlay, iconPlayNF)
 	pauseIcon := m.icon(iconPause, iconPauseNF)
 	stateIcon := styleHeaderPaused.Render(pauseIcon)
@@ -185,13 +190,11 @@ func (m model) playerBarView() string {
 
 func (m model) trackPopupView() string {
 	modalW := min(m.ui.width-8, 60)
-	bodyH := m.ui.height - headerH - tabBarH - 2
-	innerH := max(bodyH-4, 10)
+	innerH := max(8, m.ui.height-headerH-6)
 
-	title := styleTrackPopupTitle.Render(fmt.Sprintf("  %s", m.ui.trackPopupName))
+	title := styleTrackPopupTitle.Render("  " + m.ui.trackPopupName)
 
 	var body string
-	var hint string
 	if m.ui.trackPopupItems == nil {
 		body = styleTrackPopupLoading.Render("\n  Loading...")
 	} else if len(m.ui.trackPopupItems) == 0 {
@@ -199,13 +202,14 @@ func (m model) trackPopupView() string {
 	} else {
 		body = m.ui.trackPopupList.View()
 	}
-	if hint == "" {
-		if m.ui.trackPopupItems != nil {
-			hint = styleTrackPopupHint.Render("enter: play  /: search  esc: close")
-		}
+	var hint string
+	if m.ui.trackPopupItems != nil {
+		k := m.ui.keys
+		hint = styleTrackPopupHint.Render(k.Select.Help().Key + ": play · " +
+			k.Filter.Help().Key + ": search · " + k.CloseModal.Help().Key + ": close")
 	}
 
-	return modalFrame(m.ui.width, bodyH, title, hint, body, modalW, innerH)
+	return modalFrame(m.ui.width, m.ui.height, title, hint, body, modalW, innerH)
 }
 
 // ensureHelpViewport builds (or rebuilds) the help modal's viewport when the
@@ -213,7 +217,7 @@ func (m model) trackPopupView() string {
 // resize) because View cannot persist state.
 func (m *model) ensureHelpViewport() {
 	modalW := min(m.ui.width-8, 80)
-	outerH := m.ui.height - headerH - tabBarH - gapFooterH
+	outerH := m.ui.height - headerH
 	innerH := max(6, outerH-4)
 	contentW := max(12, modalW-4)
 	body := m.helpGroupedBody(contentW, innerH-4)
@@ -244,7 +248,7 @@ func (m model) scrollHelp(dy int) model {
 
 func (m model) helpModalView() string {
 	modalW := min(m.ui.width-8, 80)
-	outerH := m.ui.height - headerH - tabBarH - gapFooterH
+	outerH := m.ui.height - headerH
 	innerH := max(6, outerH-4)
 	contentW := max(12, modalW-4)
 
@@ -253,19 +257,26 @@ func (m model) helpModalView() string {
 		body = vp.View()
 	}
 
-	return modalFrame(m.ui.width, outerH, styleModalTitle.Render("Help"),
+	return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Help"),
 		styleModalHint.Render("? or esc close"), body, modalW, innerH)
+}
+
+func (m model) overlayBlocked() bool {
+	return m.ui.helpOpen || m.ui.settings.open || m.ui.trackPopupOpen
 }
 
 func (m model) kittyOverlay() string {
 	if m.ui.imgs == nil || m.ui.imgs.protocol != imageProtocolKitty {
 		return ""
 	}
-	if m.ui.helpOpen || m.ui.trackPopupOpen || m.ui.settings.open {
-		m.ui.imgs.beginKittyOverlayState("", "")
+	// Kitty graphics sit on a terminal layer above text and persist until
+	// deleted, so any popup would render beneath them. Hide the overlay for
+	// the whole time a modal is open and retransmit on the first unblocked
+	// frame via forceKittyRedraw.
+	if m.overlayBlocked() {
+		m.ui.imgs.forceKittyRedraw()
 		return kittyDeleteAll
 	}
-
 	layout := m.getBodyLayout()
 	if layout.coverCols <= 0 || layout.coverRows <= 0 {
 		_, shouldDelete, _, _ := m.ui.imgs.beginKittyOverlayState("", "")
@@ -343,4 +354,25 @@ func (m model) kittyOverlay() string {
 		return kittyDeleteAll + out
 	}
 	return out
+}
+
+// tabHints picks the contextual key bindings for the active tab, formatted
+// from the live binding labels.
+func (m model) tabHints() string {
+	k := m.ui.keys
+	var bindings []key.Binding
+	switch m.ui.activeTab {
+	case tabPlaylists, tabAlbums:
+		bindings = []key.Binding{k.Tab, k.Select, k.Filter, k.Refresh, k.ToggleHelp, k.Settings, k.Quit}
+	default:
+		bindings = []key.Binding{k.PlayPause, k.Next, k.SeekFwd, k.Loop, k.ToggleHelp, k.Settings, k.Quit}
+	}
+	var parts []string
+	for _, b := range bindings {
+		if b.Help().Key == "" || b.Help().Desc == "" {
+			continue
+		}
+		parts = append(parts, b.Help().Key+" "+b.Help().Desc)
+	}
+	return strings.Join(parts, "  ·  ")
 }
