@@ -254,13 +254,17 @@ func (m model) scrollHelp(dy int) model {
 func (m model) helpModalView() string {
 	modalW, innerH, contentW := helpModalSize(m.ui.width, m.ui.height)
 
+	hint := "↑/↓ scroll   " + m.ui.keys.ToggleHelp.Help().Key + " or " + m.ui.keys.CloseModal.Help().Key + " close"
 	body := m.helpGroupedBody(contentW, innerH-4)
 	if vp := m.ui.helpViewport; vp != nil {
 		body = vp.View()
+		if vp.AtTop() {
+			hint = "↑/↓ scroll   " + m.ui.keys.CloseModal.Help().Key + " close"
+		}
 	}
 
 	return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Help"),
-		styleModalHint.Render("? or esc close"), body, modalW, innerH)
+		styleModalHint.Render(hint), body, modalW, innerH)
 }
 
 func (m model) overlayBlocked() bool {

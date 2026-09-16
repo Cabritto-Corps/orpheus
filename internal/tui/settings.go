@@ -333,9 +333,17 @@ func (m model) settingsOpen() bool {
 func (m model) settingsKeysTable(w, h int) *table.Model {
 	s := &m.ui.settings
 	if s.keysTable == nil || s.keysTableDirty {
+		// Key column sized to the longest real label: a width-derived
+		// column left ~80 empty cells inside full-width modals.
+		keyW := 6
+		for _, entry := range settingsKeyActions {
+			if lw := lipgloss.Width(m.primaryKeyLabel(entry.action)); lw+2 > keyW {
+				keyW = lw + 2
+			}
+		}
 		cols := []table.Column{
-			{Title: "Action", Width: 24},
-			{Title: "Key", Width: max(6, w-28)},
+			{Title: "Action", Width: max(24, w-keyW)},
+			{Title: "Key", Width: keyW},
 		}
 		rows := make([]table.Row, 0, len(settingsKeyActions))
 		for _, entry := range settingsKeyActions {
@@ -396,7 +404,9 @@ func (m model) themePickerView(modalW, innerH int) string {
 	var body strings.Builder
 	body.WriteString("\n" + strings.Join(rows, "\n") + "\n")
 	body.WriteString("\n" + styleModalHint.Render("swatches: scrim sel text dim accent 2nd error") + "\n")
-	return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Theme"), styleModalHint.Render("↑/↓: preview   enter: save   esc: revert"), body.String(), modalW, innerH)
+	k := m.ui.keys
+	return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Theme"),
+		styleModalHint.Render(k.QueueUp.Help().Key+"/"+k.QueueDown.Help().Key+": preview   "+k.Select.Help().Key+": save   "+k.CloseModal.Help().Key+": revert"), body.String(), modalW, innerH)
 }
 
 func (m model) settingsModalView() string {
@@ -412,9 +422,10 @@ func (m model) settingsModalView() string {
 			body = "\n" + styleTrackPopupLoading.Render("  Press any key to bind \""+settingsActionLabel(s.captureKey)+"\"") + "\n"
 		} else {
 			pending := styleTrackPopupTitle.Render(shortKeyLabel([]string{s.pendingKey}))
-			body = "\n  bind \"" + settingsActionLabel(s.captureKey) + "\" to " + pending + "\n\n  enter: confirm   esc: cancel\n"
+			body = "\n  bind \"" + settingsActionLabel(s.captureKey) + "\" to " + pending + "\n"
 		}
-		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"), styleModalHint.Render("enter: confirm   esc: cancel"), body, modalW, innerH)
+		// Capture is a 3-line prompt: a full-height box reads as empty.
+		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"), styleModalHint.Render(m.ui.keys.Select.Help().Key+": confirm   "+m.ui.keys.CloseModal.Help().Key+": cancel"), body, modalW, 7)
 
 	case settingsModeTheme:
 		return m.themePickerView(modalW, innerH)
@@ -434,7 +445,7 @@ func (m model) settingsModalView() string {
 			body.WriteString(styleError.Render("  ⚠ conflict: "+settingsActionLabel(action)) + "\n")
 			shown++
 		}
-		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Keybinds"), styleModalHint.Render("enter: rebind   esc: back"), body.String(), modalW, innerH)
+		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Keybinds"), styleModalHint.Render(m.ui.keys.Select.Help().Key+": rebind   "+m.ui.keys.CloseModal.Help().Key+": back"), body.String(), modalW, innerH)
 
 	default:
 		crossfadeGauge := ""
@@ -452,7 +463,7 @@ func (m model) settingsModalView() string {
 			modalRow("Audio cache", settingsCacheLabel(&s)+cacheGauge, s.cursor == 3, modalW),
 		}
 		body := "\n" + strings.Join(rows, "\n") + "\n"
-		body += "\n" + styleModalHint.Render("enter: change   +/-: adjust   esc: close") + "\n"
+		body += "\n" + styleModalHint.Render(m.ui.keys.Select.Help().Key+": change   "+m.ui.keys.VolUp.Help().Key+"/"+m.ui.keys.VolDown.Help().Key+": adjust") + "\n"
 		if s.restartRequiredCrossfade {
 			body += styleError.Render("  crossfade applies on restart") + "\n"
 		}
@@ -462,7 +473,7 @@ func (m model) settingsModalView() string {
 		if s.cursor == 0 {
 			body += styleTrackPopupHint.Render("  edit theme.json for per-color overrides") + "\n"
 		}
-		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"), styleModalHint.Render("o/esc: close"), body, modalW, innerH)
+		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"), styleModalHint.Render(m.ui.keys.CloseModal.Help().Key+": close"), body, modalW, innerH)
 	}
 }
 

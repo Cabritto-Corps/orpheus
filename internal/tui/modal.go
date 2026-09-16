@@ -10,6 +10,11 @@ import (
 
 const (
 	modalLabelWidth = 16
+
+	// modalContentInset is the box's horizontal padding: header, separator,
+	// rows and the selected-row highlight all share this content width so
+	// their right edges line up instead of ragged.
+	modalContentInset = 2
 )
 
 // modalGeometry clamps a modal's inner dimensions to the placement budget:
@@ -28,7 +33,7 @@ func modalGeometry(termW, termH, wantedW, wantedH int) (width, height int) {
 // Everything below the header dims — modals own the whole frame.
 func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int) string {
 	width, height := modalGeometry(termW, termH, wantedW, wantedH)
-	innerW := max(8, width-4)
+	innerW := max(8, width-modalContentInset)
 
 	if hint != "" {
 		hint = fitCell(hint, max(8, innerW-lipgloss.Width(fitCell(title, innerW))-2))
@@ -57,20 +62,27 @@ func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int
 }
 
 // modalRow renders one settings/menu row: a fixed marker gutter on every
-// row (so selection never shifts content), label in a fixed column, value
-// right-aligned in the remaining width, all truncated/padded to the shared
-// inner width, then exactly one style over the whole row. Below a minimum
-// width the ">" marker replaces the highlight (small-terminal fallback).
+// row (so selection never shifts content), label in a fixed column with the
+// value left-aligned after it (right-alignment left a dead band inside
+// full-width modals), all truncated/padded to the shared content width, then
+// exactly one style over the whole row. An empty value lets the label span
+// the row (picker/list entries). Below a minimum width the ">" marker
+// replaces the highlight (small-terminal fallback).
 func modalRow(label, value string, selected bool, width int) string {
-	inner := max(12, width-3) // box padding + marker gutter
-	labelW := min(modalLabelWidth, max(1, (inner-1)/2))
-	valueW := inner - 1 - labelW
+	inner := max(12, width-modalContentInset)
 
 	marker := " "
 	if selected && width < 40 {
 		marker = ">"
 	}
-	row := marker + padCell(fitCell(label, labelW), labelW) + alignRight(fitCell(value, valueW), valueW)
+	var row string
+	if value == "" {
+		row = marker + padCell(fitCell(label, inner-1), inner-1)
+	} else {
+		labelW := min(modalLabelWidth, max(1, (inner-1)/2))
+		valueW := inner - 1 - labelW
+		row = marker + padCell(fitCell(label, labelW), labelW) + padCell(fitCell(value, valueW), valueW)
+	}
 	if pad := inner - lipgloss.Width(row); pad > 0 {
 		row += strings.Repeat(" ", pad)
 	}

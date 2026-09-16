@@ -34,7 +34,7 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.ui.trackPopupOpen {
-		modalW := min(m.ui.width-8, 60)
+		modalW := m.ui.width - 4
 		popupBodyH := m.ui.height - headerH - tabBarH - 2
 		popupInnerH := max(popupBodyH-4, 10)
 		m.ui.trackPopupList.SetSize(modalW-2, popupInnerH-4)

@@ -148,12 +148,14 @@ func (m model) helpGroupedBody(contentW, availH int) string {
 	}
 	colW := labelWidth + 10
 
+	// Fill the modal: two columns at medium widths, three at wide ones,
+	// instead of leaving half the frame empty.
 	var body string
 	switch {
+	case len(cols) == 3 && contentW >= colW*3+16:
+		body = joinTopAligned(cols[0], cols[1], cols[2])
 	case len(cols) > 1 && contentW >= colW*2:
-		left := strings.Join(append(cols[0], ""), "\n")
-		right := strings.Join(append(cols[1], "\n", strings.Join(cols[2], "\n")), "\n")
-		body = lipgloss.JoinHorizontal(lipgloss.Top, left, "    ", right)
+		body = joinTopAligned(cols[0], cols[1], cols[2])
 	default:
 		parts := make([]string, 0, len(cols))
 		for _, col := range cols {
@@ -164,4 +166,18 @@ func (m model) helpGroupedBody(contentW, availH int) string {
 	body += "\n\n" + styleTrackPopupHint.Render("ctrl+c always quits")
 	// No clipping here: the caller (help viewport) decides overflow.
 	return body
+}
+
+// joinTopAligned pads each column to the tallest height and places them
+// side by side with a shared gutter.
+func joinTopAligned(cols ...[]string) string {
+	blocks := make([]string, 0, len(cols))
+	for _, col := range cols {
+		blocks = append(blocks, strings.Join(col, "\n"))
+	}
+	out := blocks[0]
+	for _, b := range blocks[1:] {
+		out = lipgloss.JoinHorizontal(lipgloss.Top, out, "    ", b)
+	}
+	return out
 }

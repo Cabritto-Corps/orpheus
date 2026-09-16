@@ -305,7 +305,7 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.ui.trackPopupName = sel.summary.Name
 	m.ui.trackPopupItems = nil
 
-	modalW := min(m.ui.width-8, 60)
+	modalW := m.ui.width - 4
 	bodyH := m.ui.height - headerH - tabBarH - 2
 	innerH := max(bodyH-4, 10)
 
