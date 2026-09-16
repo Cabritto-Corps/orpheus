@@ -394,6 +394,7 @@ func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 	}
 
 	if m.tuiCmdCh != nil {
+		nowPlayingContextURI = m.ui.trackPopupURI
 		cmd := librespot.TUICommand{
 			Kind:    librespot.TUICommandPlayContextFromTrack,
 			URI:     m.ui.trackPopupURI,
@@ -440,6 +441,7 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 	m.transport.interpolationProgressMS = 0
 	if m.tuiCmdCh != nil {
 		m.beginTransportTransition()
+		nowPlayingContextURI = sel.summary.URI
 		cmds := []tea.Cmd{
 			m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandPlayContext, URI: sel.summary.URI}),
 			m.loadImageCmd(sel.summary.ImageURL, true),

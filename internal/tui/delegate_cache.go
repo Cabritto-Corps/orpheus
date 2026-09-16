@@ -132,6 +132,11 @@ type cachedDelegate struct {
 	cache *delegateCache
 }
 
+// nowPlayingContextURI identifies the playlist/album the player is currently
+// drawing from; written only from the event loop (same goroutine View runs
+// on), read inside the delegate render.
+var nowPlayingContextURI string
+
 func newCachedPlaylistDelegate() cachedDelegate {
 	c := &delegateCache{entries: make(map[delegateKey]string, 64)}
 	registerDelegateCache(c)
@@ -144,6 +149,10 @@ func (d cachedDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		d.DefaultDelegate.Render(w, m, index, item)
 		return
 	}
+	// Stamp the now-playing flag before reading the title: the glyph
+	// becomes part of Title(), which automatically invalidates the cache
+	// key for that row when playback moves to another context.
+	pi.nowPlaying = strings.TrimSpace(pi.summary.URI) == nowPlayingContextURI
 	title := pi.Title()
 	desc := pi.Description()
 	key := delegateKey{

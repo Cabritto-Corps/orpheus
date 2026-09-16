@@ -121,13 +121,15 @@ func applyTheme(c themeColors) {
 		Foreground(colorBlue)
 
 	styleProgressBarEmpty = lipgloss.NewStyle().
-		Foreground(colorDivider)
+		Foreground(colorGray)
 
 	styleVolumeBarFilled = lipgloss.NewStyle().
 		Foreground(colorBlue)
 
 	styleVolumeBarEmpty = lipgloss.NewStyle().
-		Foreground(colorDivider)
+		// The empty track must stay visible on dark terminals; the divider
+		// color reads as a gap there (~1.3:1).
+		Foreground(colorGray)
 
 	stylePlaceholderBorder = lipgloss.NewStyle().
 		Foreground(colorDivider)

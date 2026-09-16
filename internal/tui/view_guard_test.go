@@ -48,8 +48,14 @@ func guardModel(tb testing.TB, v frameVariant) model {
 	if v.hasQueue {
 		m.transport.queue = make([]spotify.QueueItem, 30)
 		for i := range m.transport.queue {
+			// Row 7 carries the playing track's ID when playing, so the ♪
+			// marker path and the selected+playing combination are exercised.
+			id := fmt.Sprintf("spotify:track:%011d", i)
+			if i == 7 && v.playing {
+				id = "spotify:track:7GhIk7Il098yCjg4BQjzvb"
+			}
 			m.transport.queue[i] = spotify.QueueItem{
-				ID:         fmt.Sprintf("spotify:track:%011d", i),
+				ID:         id,
 				Name:       fmt.Sprintf("Queue Track %d — Extended Remix Featuring A Guest 🎧", i),
 				Artist:     "Some Artist Name",
 				DurationMS: 3721000,
@@ -61,10 +67,15 @@ func guardModel(tb testing.TB, v frameVariant) model {
 	for i := range items {
 		items[i] = playlistItem{summary: spotify.PlaylistSummary{
 			ID:         fmt.Sprintf("pl%d", i),
+			URI:        fmt.Sprintf("spotify:playlist:pl%d", i),
 			Name:       fmt.Sprintf("Playlist number %d with a long name that wraps", i),
 			Owner:      "A Owner Name",
 			TrackCount: 42,
 		}}
+	}
+	if v.playing {
+		// One browse row carries the now-playing glyph.
+		nowPlayingContextURI = "spotify:playlist:pl3"
 	}
 	m.browse.playlistList.SetItems(items)
 	m.browse.albumList.SetItems(items[:20])

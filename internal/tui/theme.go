@@ -156,8 +156,10 @@ var themeRegistry = []themeEntry{
 		Divider:   "#586E75",
 		Error:     "#DC322F",
 
-		Scrim:       "#001219",
-		SelectionFg: "#839496",
+		Scrim: "#001219",
+		// Official highlight pairing is base02:base1 — brighter than the
+		// body-text base0, which misses 4.5:1 on the selection bg.
+		SelectionFg: "#93A1A1",
 		SelectionBg: "#073642",
 	}},
 	{"rose_pine", themeColors{

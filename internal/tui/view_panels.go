@@ -355,20 +355,24 @@ type queueGrid struct {
 	titleW  int
 	artistW int
 	durW    int
+	markerW int
 }
 
 func queueGridFor(w int) queueGrid {
 	g := queueGrid{lead: 1, idxW: 4, durW: 8}
-	g.durW = min(g.durW, max(4, (w-9)/6))
-	budget := w - g.lead - g.idxW - 1 - 2 - 1 - g.durW // title+artist
+	// A reserved marker column keeps the now-playing glyph from overflowing
+	// the padded row and pushing sibling content off-panel.
+	g.markerW = 3
+	g.durW = min(g.durW, max(4, (w-9-g.markerW)/6))
+	budget := w - g.lead - g.idxW - 1 - 2 - 1 - g.durW - g.markerW // title+artist
 	g.artistW = min(min(20, max(6, budget*2/5)), max(0, budget-4))
 	g.titleW = max(4, budget-g.artistW)
 	if budget < 8 {
 		g.titleW = max(4, budget)
 		g.artistW = 0
 	}
-	if g.lead+g.idxW+1+g.titleW+2+g.artistW+1+g.durW > w {
-		g.titleW = max(4, g.titleW-(g.lead+g.idxW+1+g.titleW+2+g.artistW+1+g.durW-w))
+	if g.lead+g.idxW+1+g.titleW+2+g.artistW+1+g.durW+g.markerW > w {
+		g.titleW = max(4, g.titleW-(g.lead+g.idxW+1+g.titleW+2+g.artistW+1+g.durW+g.markerW-w))
 	}
 	return g
 }
@@ -380,6 +384,7 @@ func (g queueGrid) header() string {
 		b.WriteString("  " + styleQueueHeader.Render(padCell("Artist", g.artistW)))
 	}
 	b.WriteString(" " + styleQueueHeader.Render(alignRight("Len", g.durW)))
+	b.WriteString(strings.Repeat(" ", g.markerW))
 	return b.String()
 }
 
@@ -404,6 +409,13 @@ func (g queueGrid) row(w, num int, title, artist string, durMS int, playing, sel
 	}
 	b.WriteString(" ")
 	b.WriteString(alignRight(dur, g.durW))
+	if g.markerW > 0 {
+		if playing {
+			b.WriteString(" " + iconNowPlaying + " ")
+		} else {
+			b.WriteString("   ")
+		}
+	}
 
 	row := b.String()
 	if pad := w - lipgloss.Width(row); pad > 0 {
@@ -413,9 +425,9 @@ func (g queueGrid) row(w, num int, title, artist string, durMS int, playing, sel
 	case selected && w >= 40:
 		return styleQueueSelected.Render(row)
 	case playing:
-		return styleQueuePlaying.Render(strings.TrimRight(row, " ") + " " + iconNowPlaying + " ")
+		return styleQueuePlaying.Render(row)
 	case selected:
-		return styleQueueCursor.Render(row)
+		return styleQueueCursor.Render(strings.TrimRight(row, " ") + " > ")
 	default:
 		return styleQueueTrack.Render(row)
 	}

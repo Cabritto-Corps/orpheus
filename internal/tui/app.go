@@ -53,9 +53,18 @@ const (
 
 type playlistItem struct {
 	summary spotify.PlaylistSummary
+
+	// nowPlaying is set per render by the delegate wrapper; it makes Title()
+	// carry the now-playing glyph so the delegate cache key changes too.
+	nowPlaying bool
 }
 
-func (p playlistItem) Title() string { return p.summary.Name }
+func (p playlistItem) Title() string {
+	if p.nowPlaying {
+		return p.summary.Name + " ♪"
+	}
+	return p.summary.Name
+}
 func (p playlistItem) FilterValue() string {
 	return p.summary.Name
 }
