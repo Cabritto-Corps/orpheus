@@ -43,9 +43,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		switch {
 		case keyMatches(msg, k.QueueUp):
-			m.scrollHelp(-3)
+			// Reassign: scrollHelp has a value receiver, so discarding its
+			// return silently threw the scrolled copy away.
+			m = m.scrollHelp(-3)
 		case keyMatches(msg, k.QueueDown):
-			m.scrollHelp(3)
+			m = m.scrollHelp(3)
 		}
 		return m, nil
 	}

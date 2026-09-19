@@ -183,7 +183,10 @@ func TestHelpViewportScrollKeys(t *testing.T) {
 		t.Fatal("overflowing help must have a viewport")
 	}
 	before := next.ui.helpViewport.YOffset
-	moved := next.scrollHelp(3)
+	// Go through handleKey, not scrollHelp directly: the seam where the
+	// scrolled copy was discarded is exactly what this must cover.
+	m2, _ = next.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	moved := m2.(model)
 	if moved.ui.helpViewport.YOffset <= before {
 		t.Fatalf("scroll down should advance offset: %d -> %d", before, moved.ui.helpViewport.YOffset)
 	}
