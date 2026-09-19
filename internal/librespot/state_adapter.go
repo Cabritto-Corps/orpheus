@@ -60,7 +60,8 @@ func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUp
 		out.ArtistName = metadataValue(p.state.player.Track.Metadata, "artist_name", "artist", "artists", "show_name")
 		out.AlbumName = metadataValue(p.state.player.Track.Metadata, "album_title", "album_name", "album")
 	}
-	if p.primaryStream != nil && p.prodInfo != nil {
+	prod := p.prodInfoSnapshot()
+	if p.primaryStream != nil && prod != nil {
 		durationMs := int64(p.primaryStream.Media.Duration())
 		if durationMs > 0 && pos > durationMs {
 			pos = durationMs
