@@ -4,27 +4,32 @@ on:
   push:
     tags: ['v*']
 
+permissions:
+  contents: read
+
+env:
+  # Build releases with the toolchain go.mod pins, never a downloaded one.
+  GOTOOLCHAIN: local
+
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.6'
+          go-version-file: go.mod
+          cache: false
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: go-${{ runner.os }}-
-
+      # No module/build cache here: this workflow publishes artifacts, and a
+      # shared cache entry is an attack surface for the binaries it produces.
+      # Releases are rare, so the uncached cost is acceptable.
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get upgrade -y && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
 
       - name: Vet
         run: go vet ./...
@@ -34,34 +39,54 @@ jobs:
 
   build:
     needs: test
+    timeout-minutes: 20
     strategy:
       matrix:
         include:
           - os: ubuntu-24.04
             suffix: linux-amd64
-            deps: sudo apt-get update && sudo apt-get upgrade -y && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
+            deps: sudo apt-get update && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
+            checksum: sha256sum
           - os: macos-15
             suffix: darwin-arm64
             deps: brew update && brew install libogg libvorbis flac
+            checksum: shasum -a 256
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.6'
+          go-version-file: go.mod
+          cache: false
 
       - name: Install dependencies
         run: ${{ matrix.deps }}
 
+      # Stamps the tag into the binary so `./orpheus --version` identifies a
+      # download. Kept un-stripped so panic stack traces stay useful.
+      # env indirection instead of ${{ }} inline: git tag names may legally
+      # contain shell metacharacters, and env values are data, never re-parsed
+      # by the shell.
       - name: Build
-        run: go build -o orpheus-${{ matrix.suffix }} ./cmd/orpheus
+        env:
+          ORPHEUS_VERSION: ${{ github.ref_name }}
+        run: go build -ldflags "-X main.version=$ORPHEUS_VERSION" -o orpheus ./cmd/orpheus
 
+      - name: Verify version stamp
+        run: ./orpheus --version
+
+      # The archive holds a binary named `orpheus`, so the tutorial's
+      # `./orpheus` instructions work straight after extraction.
       - name: Package
-        run: tar -czf orpheus-${{ matrix.suffix }}.tar.gz orpheus-${{ matrix.suffix }}
+        run: tar -czf "orpheus-${{ matrix.suffix }}.tar.gz" orpheus
 
+      # sha256sum does not exist on macOS runners; the manifest lists GNU
+      # tools only with g-aliases (gtar) and no coreutils.
       - name: Checksum
-        run: sha256sum orpheus-${{ matrix.suffix }}.tar.gz > orpheus-${{ matrix.suffix }}.tar.gz.sha256
+        run: ${{ matrix.checksum }} "orpheus-${{ matrix.suffix }}.tar.gz" > "orpheus-${{ matrix.suffix }}.tar.gz.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -73,9 +98,55 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history + tags: the notes are built from the commit range
+          # between the previous tag and the one being released.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      # Commits between tags are grouped by the conventional-commit type
+      # that commitlint already enforces. generate_release_notes stays on:
+      # GitHub appends its PR-based notes and the Full Changelog link below
+      # this body.
+      - name: Build release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          PREV=$(git describe --tags --abbrev=0 "refs/tags/${TAG}^" 2>/dev/null || true)
+          if [ -n "$PREV" ]; then RANGE="$PREV..$TAG"; else RANGE="$TAG"; fi
+          echo "commit range: $RANGE"
+          {
+            echo "## Changes"
+            section() {
+              local neg="$1" title="$2" regex="$3" list
+              list=$(git log --no-merges --format='%h%x09%s' "$RANGE" | awk -F'\t' -v r="$regex" -v n="$neg" 'n == "yes" ? $2 !~ r : $2 ~ r')
+              if [ -n "$list" ]; then
+                printf '\n### %s\n\n' "$title"
+                while IFS=$'\t' read -r sha msg; do
+                  printf -- '- %s (`%s`)\n' "$msg" "$sha"
+                done <<<"$list"
+              fi
+            }
+            section no "Features" '^feat([(][^)]*[)])?: '
+            section no "Fixes" '^(fix|hotfix)([(][^)]*[)])?: '
+            section no "Performance" '^perf([(][^)]*[)])?: '
+            section no "Refactoring" '^refactor([(][^)]*[)])?: '
+            section no "Docs" '^docs([(][^)]*[)])?: '
+            section no "Tests" '^test([(][^)]*[)])?: '
+            section no "Maintenance" '^(chore|release)([(][^)]*[)])?: '
+            # Fallback: subjects with no conventional-commit type. Direct
+            # pushes to main are not commitlinted, so they land here instead
+            # of vanishing from the notes.
+            section yes "Other" '^(feat|fix|hotfix|perf|refactor|docs|test|chore|release)([(][^)]*[)])?: '
+          } > release-notes.md
+          cat release-notes.md
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -84,4 +155,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          body_path: release-notes.md
           files: dist/*

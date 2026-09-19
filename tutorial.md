@@ -2,7 +2,7 @@
 
 **You need spotify premium to configure this**
 
-1. Download latest release from [here](https://github.com/Cabritto-Corps/orpheus/releases) or compile the source code yourself
+1. Download latest release from [the releases page](https://github.com/Cabritto-Corps/orpheus/releases) or compile the source code yourself. The release tarball contains a binary named `orpheus`; verify the install with `./orpheus --version`, which prints the release it was built from
 
 2. Go into [spotify developer dashboard](https://developer.spotify.com/dashboard/) and create an app with the following informations:
 

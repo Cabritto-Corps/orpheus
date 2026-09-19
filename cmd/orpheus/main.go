@@ -30,7 +30,15 @@ const (
 	oauthHTTPTimeout    = 20 * time.Second
 )
 
+// version is stamped at build time with -ldflags "-X main.version=<tag>".
+var version = "dev"
+
 func main() {
+	if len(os.Args) >= 2 && (os.Args[1] == "--version" || os.Args[1] == "-v" || os.Args[1] == "version") {
+		fmt.Printf("orpheus %s\n", version)
+		return
+	}
+
 	if len(os.Args) < 2 || os.Args[1] == "librespot" {
 		if err := runLibrespotTUI(); err != nil {
 			slog.Error("tui failed", "error", err)
