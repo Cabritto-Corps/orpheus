@@ -31,7 +31,7 @@ go.work.sum
 # .idea/
 # .vscode/
 crashes/
-orpheus
+/orpheus
 *.bin
 improvements-fixes/
 AGENTS.md
