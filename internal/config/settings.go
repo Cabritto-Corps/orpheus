@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 )
@@ -76,9 +77,11 @@ func LoadAppSettings(path string) AppSettings {
 	return settings
 }
 
-// SaveAppSettings persists the managed sections atomically. Both sections
-// are written with their current concrete values, so the first save also
-// migrates whatever the environment carried.
+// SaveAppSettings persists the managed sections atomically, merged over
+// whatever the file already contains: keys outside the two managed sections
+// survive a save instead of being silently dropped, and the managed
+// sections always win. A malformed existing file starts from a clean
+// object rather than failing the save.
 func SaveAppSettings(path string, settings AppSettings) error {
 	if path == "" {
 		return os.ErrInvalid
@@ -88,7 +91,24 @@ func SaveAppSettings(path string, settings AppSettings) error {
 			return err
 		}
 	}
-	data, err := json.MarshalIndent(settings, "", "  ")
+	merged := map[string]any{}
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, &merged); err != nil || merged == nil {
+			// Malformed or null: start from a clean object; the managed
+			// sections still win.
+			merged = map[string]any{}
+		}
+	}
+	ours, err := json.Marshal(settings)
+	if err != nil {
+		return err
+	}
+	var overlay map[string]any
+	if err := json.Unmarshal(ours, &overlay); err != nil {
+		return err
+	}
+	maps.Copy(merged, overlay)
+	data, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
 		return err
 	}
