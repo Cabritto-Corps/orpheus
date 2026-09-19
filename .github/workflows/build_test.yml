@@ -2,31 +2,37 @@ name: Build and Test
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
     branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Never let the go command swap toolchains behind our back. The version
+  # installed by setup-go is the version that builds, or the job fails loudly.
+  GOTOOLCHAIN: local
 
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.6'
-
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: go-${{ runner.os }}-
+          go-version-file: go.mod
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get upgrade -y && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
 
       - name: Download dependencies
         run: go mod download
@@ -34,17 +40,19 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test with race detector
-        run: go test -race ./...
-
-      - name: Test with coverage
-        run: go test -coverprofile=coverage.out ./...
+      # One pass instead of two: race and coverage in the same run.
+      - name: Test with race and coverage
+        run: go test -race -coverprofile=coverage.out ./...
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
 
+      # Stamps the commit into the binary so a PR artifact can be traced
+      # back to the exact commit that produced it.
       - name: Build
-        run: go build -o orpheus ./cmd/orpheus
+        env:
+          ORPHEUS_VERSION: ${{ github.sha }}
+        run: go build -ldflags "-X main.version=$ORPHEUS_VERSION" -o orpheus ./cmd/orpheus
 
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'pull_request'
@@ -55,24 +63,18 @@ jobs:
 
   lint:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.6'
-
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: go-${{ runner.os }}-
+          go-version-file: go.mod
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get upgrade -y && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
