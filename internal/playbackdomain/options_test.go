@@ -2,9 +2,6 @@ package playbackdomain
 
 import "testing"
 
-//go:fix inline
-func boolPtr(v bool) *bool { return new(v) }
-
 func TestResolveOptionsNoOverrides(t *testing.T) {
 	curr := TraversalOptions{RepeatContext: true, RepeatTrack: false, Shuffle: false}
 	got := ResolveOptions(curr, nil, nil, nil)

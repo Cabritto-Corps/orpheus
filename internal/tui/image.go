@@ -83,16 +83,6 @@ func (c *imgCache) getImage(url string) (image.Image, bool) {
 	return c.imgs.Get(url)
 }
 
-func (c *imgCache) hasImage(url string) bool {
-	if url == "" {
-		return false
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	_, ok := c.imgs.Peek(url)
-	return ok
-}
-
 func (c *imgCache) encodedFor(url string) string {
 	if url == "" {
 		return ""

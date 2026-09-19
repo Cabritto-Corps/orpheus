@@ -6,7 +6,6 @@ const (
 	spclientTimeout          = 30 * time.Second
 	contextResolveTimeout    = 30 * time.Second
 	trackTransitionTimeout   = 30 * time.Second
-	playerEventTimeout       = 30 * time.Second
 	prefetchJobTimeout       = 30 * time.Second
 	metadataBatchTimeout     = 15 * time.Second
 	stateAdapterBatchTimeout = 8 * time.Second

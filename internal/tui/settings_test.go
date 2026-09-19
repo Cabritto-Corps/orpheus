@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -32,7 +33,7 @@ func newSettingsTestModel(t *testing.T) (model, string, string, string) {
 		AudioCacheEnabled: false,
 		AudioCacheSizeMB:  1024,
 	}
-	return newModel(nil, nil, nil, cfg, nil, make(chan librespot.ContextTracksResult, 1), nil), keysPath, themePath, configPath
+	return newModel(context.Background(), nil, nil, cfg, nil, make(chan librespot.ContextTracksResult, 1), nil), keysPath, themePath, configPath
 }
 
 func send(m model, msg tea.KeyMsg) model {

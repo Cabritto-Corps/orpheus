@@ -6,10 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"orpheus/internal/spotify"
+
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
-	"orpheus/internal/spotify"
 )
 
 // The view paints backgrounds by re-asserting them after every style reset,

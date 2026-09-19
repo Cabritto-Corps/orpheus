@@ -16,7 +16,9 @@ fix:
 	go fix ./...
 
 fmt:
-	go fmt ./...
+	# golangci-lint fmt applies the configured gofmt and goimports
+	# formatters; `go fmt` alone cannot fix import grouping/aliasing.
+	golangci-lint fmt
 
 lint:
 	golangci-lint run --timeout=5m

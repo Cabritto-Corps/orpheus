@@ -353,10 +353,6 @@ func keyContains(keys []string, want string) bool {
 	return slices.Contains(keys, want)
 }
 
-func (m model) settingsOpen() bool {
-	return m.ui.settings.open
-}
-
 func (m model) settingsKeysTable(w, h int) *table.Model {
 	s := &m.ui.settings
 	if s.keysTable == nil || s.keysTableDirty {

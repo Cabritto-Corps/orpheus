@@ -443,9 +443,7 @@ func (p *AppPlayer) maybeAdvanceOnTrackEndGuard() {
 	p.runAdvanceNextTransition("end_guard", false, dropTransition)
 }
 
-func (p *AppPlayer) handlePlayerEvent(ctx context.Context, ev *player.Event) {
-	ctx, cancel := context.WithTimeout(ctx, playerEventTimeout)
-	defer cancel()
+func (p *AppPlayer) handlePlayerEvent(ev *player.Event) {
 	if p.state.player.Options == nil {
 		p.state.player.Options = &connectpb.ContextPlayerOptions{}
 	}
