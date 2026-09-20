@@ -11,6 +11,7 @@ import (
 	"image/png"
 	_ "image/png"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -18,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	_ "golang.org/x/image/webp"
 
 	"orpheus/internal/cache"
@@ -45,6 +48,7 @@ type imgCache struct {
 	failedAt         map[string]time.Time
 	rendering        map[coverKey]chan struct{}
 	protocol         imageProtocol
+	protocolExplicit bool
 	lastKittyOverlay string
 	lastKittyURL     string
 	kittyVisible     bool
@@ -58,17 +62,18 @@ type imgCache struct {
 
 func newImgCache() *imgCache {
 	return &imgCache{
-		imgs:            cache.NewLRU[string, image.Image](maxCachedImages),
-		covers:          cache.NewLRU[coverKey, string](maxCachedCoverRenders),
-		encoded:         make(map[string]string),
-		inflight:        make(map[string]struct{}),
-		failedAt:        make(map[string]time.Time),
-		rendering:       make(map[coverKey]chan struct{}),
-		protocol:        detectImageProtocol(os.Getenv),
-		kittyChunks:     make(map[string][]string),
-		kittyChunkOrder: make([]string, 0, maxKittyChunkCacheEntries),
-		coverKeysByURL:  make(map[string]map[coverKey]struct{}),
-		pinned:          make(map[string]struct{}),
+		imgs:             cache.NewLRU[string, image.Image](maxCachedImages),
+		covers:           cache.NewLRU[coverKey, string](maxCachedCoverRenders),
+		encoded:          make(map[string]string),
+		inflight:         make(map[string]struct{}),
+		failedAt:         make(map[string]time.Time),
+		rendering:        make(map[coverKey]chan struct{}),
+		protocol:         detectImageProtocol(os.Getenv),
+		kittyChunks:      make(map[string][]string),
+		kittyChunkOrder:  make([]string, 0, maxKittyChunkCacheEntries),
+		protocolExplicit: detectProtocolOverride(os.Getenv),
+		coverKeysByURL:   make(map[string]map[coverKey]struct{}),
+		pinned:           make(map[string]struct{}),
 	}
 }
 
@@ -76,16 +81,6 @@ func (c *imgCache) getImage(url string) (image.Image, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.imgs.Get(url)
-}
-
-func (c *imgCache) hasImage(url string) bool {
-	if url == "" {
-		return false
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	_, ok := c.imgs.Peek(url)
-	return ok
 }
 
 func (c *imgCache) encodedFor(url string) string {
@@ -139,6 +134,10 @@ func (c *imgCache) beginKittyOverlayState(key, url string) (changed bool, should
 func (c *imgCache) resetKittyOverlayState() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.resetKittyOverlayStateLocked()
+}
+
+func (c *imgCache) resetKittyOverlayStateLocked() {
 	c.lastKittyOverlay = ""
 	c.lastKittyURL = ""
 	c.kittyVisible = false
@@ -203,8 +202,10 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 	c.mu.RUnlock()
 	encoded := ""
 	if protocol == imageProtocolKitty {
-		if s, err := encodeImageAsPNGBase64AtSize(img, displayCols, displayRows); err == nil {
+		if s, err := encodeImageAsPNGBase64(img); err == nil {
 			encoded = s
+		} else {
+			slog.Warn("kitty encode failed", "url", url, "cols", displayCols, "rows", displayRows, "error", err)
 		}
 	}
 	c.mu.Lock()
@@ -216,6 +217,9 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 	}
 	for evicted {
 		if _, pinned := c.pinned[evictedURL]; pinned {
+			if len(c.pinned) >= c.imgs.Capacity() {
+				break
+			}
 			evictedURL, evictedImg, evicted = c.imgs.Set(evictedURL, evictedImg)
 			continue
 		}
@@ -229,7 +233,32 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 func (c *imgCache) setProtocol(protocol imageProtocol) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.protocolExplicit || c.protocol == protocol {
+		return
+	}
 	c.protocol = protocol
+	c.covers.Clear()
+	for url := range c.coverKeysByURL {
+		delete(c.coverKeysByURL, url)
+	}
+	c.resetKittyOverlayStateLocked()
+}
+
+func detectProtocolOverride(getenv func(string) string) bool {
+	switch strings.ToLower(strings.TrimSpace(getenv("ORPHEUS_IMAGE_PROTOCOL"))) {
+	case "none", "ansi", "kitty":
+		return true
+	}
+	return false
+}
+
+// refreshURL replaces an image and drops every cached render of the old
+// one — used when a procedurally generated cover's palette changes.
+func (c *imgCache) refreshURL(url string, img image.Image, w, h int) {
+	c.mu.Lock()
+	c.deleteCoversForURLLocked(url)
+	c.mu.Unlock()
+	c.setImage(url, img, w, h)
 }
 
 func (c *imgCache) pinURL(url string) {
@@ -263,9 +292,8 @@ func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
 			c.mu.Unlock()
 			continue
 		}
-		if ch, rendering := c.rendering[key]; rendering {
+		if _, rendering := c.rendering[key]; rendering {
 			c.mu.Unlock()
-			<-ch
 			continue
 		}
 		ch := make(chan struct{})
@@ -368,6 +396,20 @@ func (c *imgCache) shouldQueuePriorityLoad(url string) bool {
 	return true
 }
 
+// protocolForRender reads the negotiated protocol under the lock so render
+// paths cannot race the writer (the bare field read was a latent race).
+func (c *imgCache) protocolForRender() imageProtocol {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.protocol
+}
+
+func (c *imgCache) hasKittyEncoding(url string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.hasKittyEncodingLocked(url)
+}
+
 func (c *imgCache) hasKittyEncodingLocked(url string) bool {
 	if c.protocol != imageProtocolKitty {
 		return true
@@ -375,7 +417,7 @@ func (c *imgCache) hasKittyEncodingLocked(url string) bool {
 	return strings.TrimSpace(c.encoded[url]) != ""
 }
 
-func (c *imgCache) ensureKittyEncoding(url string, img image.Image, displayCols, displayRows int) error {
+func (c *imgCache) ensureKittyEncoding(url string, img image.Image) error {
 	if url == "" || img == nil {
 		return nil
 	}
@@ -385,7 +427,7 @@ func (c *imgCache) ensureKittyEncoding(url string, img image.Image, displayCols,
 	if !needsEncode {
 		return nil
 	}
-	encoded, err := encodeImageAsPNGBase64AtSize(img, displayCols, displayRows)
+	encoded, err := encodeImageAsPNGBase64(img)
 	if err != nil {
 		return err
 	}
@@ -451,9 +493,8 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 		}
 		encoded := c.encoded[url]
 		protocol := c.protocol
-		if ch, rendering := c.rendering[key]; rendering {
+		if _, rendering := c.rendering[key]; rendering {
 			c.mu.Unlock()
-			<-ch
 			continue
 		}
 		ch := make(chan struct{})
@@ -493,7 +534,7 @@ const (
 	maxCachedImages                = 256
 	maxCachedCoverRenders          = 512
 	maxKittyChunkCacheEntries      = 64
-	kittyEncodeMaxSize             = 1024
+	kittyEncodePixelBudget         = 512
 )
 
 func (c *imgCache) deleteCoversForURLLocked(url string) {
@@ -526,32 +567,28 @@ func (c *imgCache) deleteKittyChunksLocked(url string) {
 	}
 }
 
-func encodeImageAsPNGBase64AtSize(img image.Image, displayCols, displayRows int) (string, error) {
+func encodeImageAsPNGBase64(img image.Image) (string, error) {
 	if img == nil {
 		return "", nil
 	}
-	if displayCols > 0 && displayRows > 0 {
-		sb := img.Bounds()
-		pw := sb.Dx()
-		ph := sb.Dy()
-		if pw > kittyEncodeMaxSize || ph > kittyEncodeMaxSize {
-			if pw > ph {
-				ph = ph * kittyEncodeMaxSize / pw
-				pw = kittyEncodeMaxSize
-			} else {
-				pw = pw * kittyEncodeMaxSize / ph
-				ph = kittyEncodeMaxSize
-			}
-			if pw < 1 {
-				pw = 1
-			}
-			if ph < 1 {
-				ph = 1
-			}
+	sb := img.Bounds()
+	pw, ph := sb.Dx(), sb.Dy()
+	longest := max(pw, ph)
+	if longest > kittyEncodePixelBudget {
+		if pw >= ph {
+			ph = ph * kittyEncodePixelBudget / pw
+			pw = kittyEncodePixelBudget
+		} else {
+			pw = pw * kittyEncodePixelBudget / ph
+			ph = kittyEncodePixelBudget
 		}
-		if pw != sb.Dx() || ph != sb.Dy() {
-			img = resizeBilinear(img, pw, ph)
+		if pw < 1 {
+			pw = 1
 		}
+		if ph < 1 {
+			ph = 1
+		}
+		img = resizeBilinear(img, pw, ph)
 	}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
@@ -739,6 +776,11 @@ func resizeBilinear(src image.Image, width, height int) *image.RGBA {
 
 func renderHalfBlock(img image.Image, cols, rows int) string {
 	if cols <= 0 || rows <= 0 || img == nil {
+		return ""
+	}
+	if lipgloss.DefaultRenderer().ColorProfile() == termenv.Ascii {
+		// NO_COLOR / no-color terminals strip truecolor ANSI, turning the
+		// half-block mosaic into meaningless blank blocks.
 		return ""
 	}
 

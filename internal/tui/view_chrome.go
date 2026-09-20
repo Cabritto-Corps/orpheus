@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	golibrespot "github.com/elxgy/go-librespot"
 )
@@ -14,8 +16,7 @@ func (m model) headerView() string {
 	var statusStr, centerL1, rightL1 string
 
 	if m.transport.status != nil {
-		playIcon := m.icon(iconPlay, iconPlayNF)
-		pauseIcon := m.icon(iconPause, iconPauseNF)
+		playIcon, pauseIcon := m.playPauseGlyphs()
 		if m.transport.status.Playing {
 			statusStr = styleHeaderPlaying.Render("[" + playIcon + " Playing]")
 		} else {
@@ -78,30 +79,39 @@ func (m model) headerView() string {
 
 func layoutThreeZone(w int, left, center, right string) string {
 	leftW := lipgloss.Width(left)
-	centerW := lipgloss.Width(center)
 	rightW := lipgloss.Width(right)
 
-	centerPad := max((w-centerW)/2, leftW+1)
-	leftPad := max(centerPad-leftW, 0)
-	afterCenter := centerPad + centerW
-	rightPad := max(w-afterCenter-rightW, 1)
+	// The centre zone owns exactly the space left of the fixed-size side
+	// zones; it is truncated BEFORE joining so the row can never exceed the
+	// terminal (a style would wrap instead of clip).
+	centerBudget := max(0, w-leftW-rightW-2)
+	center = fitCell(center, centerBudget)
+	centerW := lipgloss.Width(center)
+
+	// The title is centered on the terminal, not between the side zones:
+	// growing a side zone (repeat/shuffle icons, volume) eats its own gap
+	// instead of pushing the title aside. The truncation above guarantees
+	// the zones never collide with the centered title, so the gaps clamp
+	// to zero without ever exceeding the width.
+	leftGap := max(0, (w-centerW)/2-leftW)
+	rightGap := max(0, w-leftW-leftGap-centerW-rightW)
 
 	return left +
-		strings.Repeat(" ", leftPad) +
+		strings.Repeat(" ", leftGap) +
 		center +
-		strings.Repeat(" ", rightPad) +
+		strings.Repeat(" ", rightGap) +
 		right
 }
 
 func (m model) headerVolumeBar(vol int) string {
-	const w = 6
-	volChar := iconVolume
-	filled := min(int(float64(vol)/100.0*float64(w)), w)
-	return styleVolumeBarFilled.Render(strings.Repeat(volChar, filled)) +
-		styleVolumeBarEmpty.Render(strings.Repeat(volChar, w-filled))
+	return gradientBar(float64(vol)/100.0, volumeBarW)
 }
 
 func (m model) tabBarView() string {
+	key := tabBarCacheKey{m.ui.width, m.ui.activeTab, themeEpoch}
+	if cached, ok := tabBarCache.get(key); ok {
+		return cached
+	}
 	tabs := []struct {
 		label string
 		t     tab
@@ -118,12 +128,13 @@ func (m model) tabBarView() string {
 			parts = append(parts, styleTabInactive.Render(" "+entry.label+" "))
 		}
 	}
-	sep := styleDivider.Render("│")
+	sep := styleDivider.Render("\u2502")
 	bar := strings.Join(parts, sep)
 	underline := sectionDivider(m.ui.width)
-	return bar + "\n" + underline
+	out := bar + "\n" + underline
+	tabBarCache.put(key, out)
+	return out
 }
-
 func (m model) playerBarView() string {
 	barW := m.ui.width
 
@@ -135,9 +146,7 @@ func (m model) playerBarView() string {
 		// gutter shifts between idle and playing frames.
 		return sep + "\n"
 	}
-
-	playIcon := m.icon(iconPlay, iconPlayNF)
-	pauseIcon := m.icon(iconPause, iconPauseNF)
+	playIcon, pauseIcon := m.playPauseGlyphs()
 	stateIcon := styleHeaderPaused.Render(pauseIcon)
 	if m.transport.status.Playing {
 		stateIcon = styleHeaderPlaying.Render(playIcon)
@@ -165,12 +174,13 @@ func (m model) playerBarView() string {
 	elapsedW := lipgloss.Width(elapsed)
 	totalW := lipgloss.Width(total)
 	iconW := lipgloss.Width(stateIcon)
-	progressW := barW - elapsedW - totalW - iconW - 8
+	progressW := barW - elapsedW - totalW - iconW - playerBarGaps*playerBarGap
 	var progressStr string
 	if m.transport.status.DurationMS <= 0 {
-		progressStr = styleProgressBarEmpty.Render(strings.Repeat("░", progressW))
+		_, empty := themeBarRunes()
+		progressStr = styleProgressBarEmpty.Render(strings.Repeat(string(empty), progressW))
 	} else {
-		progressStr = m.renderProgressBar(pct, progressW)
+		progressStr = gradientBar(pct, progressW)
 	}
 
 	bar := "  " + stateIcon + "  " + elapsed + "  " + progressStr + "  " + total
@@ -178,78 +188,101 @@ func (m model) playerBarView() string {
 }
 
 func (m model) trackPopupView() string {
-	modalW := min(m.ui.width-8, 60)
-	bodyH := m.ui.height - headerH - tabBarH - 2
-	innerH := max(bodyH-4, 10)
+	modalW, _, listH := popupModalSize(m.ui.width, m.ui.height)
+	innerH := listH + 2
 
-	title := styleTrackPopupTitle.Render(fmt.Sprintf("  %s", m.ui.trackPopupName))
+	title := styleTrackPopupTitle.Render("  " + m.ui.trackPopupName)
 
 	var body string
-	var hint string
 	if m.ui.trackPopupItems == nil {
-		body = styleTrackPopupLoading.Render("\n  Loading...")
-		hint = ""
+		body = styleTrackPopupLoading.Render("\n  " + m.ui.spinner.View() + " Loading...")
 	} else if len(m.ui.trackPopupItems) == 0 {
 		body = styleTrackPopupLoading.Render("\n  No tracks found")
-		hint = styleTrackPopupHint.Render("  esc: close")
 	} else {
 		body = m.ui.trackPopupList.View()
-		hint = styleTrackPopupHint.Render("  enter: play  /: search  esc: close")
+	}
+	var hint string
+	if m.ui.trackPopupItems != nil {
+		hint = styleTrackPopupHint.Render(hintLine([]key.Binding{m.ui.keys.Select, m.ui.keys.Filter, m.ui.keys.CloseModal}, modalW-modalContentInset))
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		title,
-		body,
-		hint,
-	)
+	return modalFrame(m.ui.width, m.ui.height, title, hint, body, modalW, innerH)
+}
 
-	box := styleModalBox.
-		Width(modalW).
-		Height(innerH).
-		Render(content)
+// helpModalSize is the single source for the help modal's dimensions so the
+// Update-side viewport rebuild and the View-side render can never drift.
+func helpModalSize(termW, termH int) (modalW, innerH, contentW int) {
+	innerH = max(6, termH-headerH-2)
+	modalW, boxH := modalGeometry(termW, termH, termW-4, innerH)
+	contentW = max(12, modalW-4)
+	innerH = boxH
+	return modalW, innerH, contentW
+}
 
-	return lipgloss.Place(m.ui.width, bodyH, lipgloss.Center, lipgloss.Center, box)
+// ensureHelpViewport builds (or rebuilds) the help modal's viewport when the
+// grouped help body overflows the modal. It runs from Update paths (open,
+// resize) because View cannot persist state.
+func (m *model) ensureHelpViewport() {
+	_, innerH, contentW := helpModalSize(m.ui.width, m.ui.height)
+	body := m.helpGroupedBody(contentW, innerH-4)
+	if lipgloss.Height(body) > innerH-2 {
+		v := viewport.New(contentW, innerH-2)
+		v.SetContent(body)
+		m.ui.helpViewport = &v
+	} else {
+		m.ui.helpViewport = nil
+	}
+}
+
+// scrollHelp scrolls the help modal's viewport when the content overflows;
+// a no-op otherwise.
+func (m model) scrollHelp(dy int) model {
+	if m.ui.helpViewport == nil {
+		return m
+	}
+	vp := *m.ui.helpViewport
+	if dy < 0 {
+		vp.ScrollUp(-dy)
+	} else {
+		vp.ScrollDown(dy)
+	}
+	m.ui.helpViewport = &vp
+	return m
 }
 
 func (m model) helpModalView() string {
-	modalW := min(m.ui.width-8, 80)
-	innerH := max(m.ui.height-14, 6)
-	contentW := max(12, modalW-4)
-	title := styleModalTitle.Render("Help")
-	hint := styleModalHint.Render("? or esc close")
-	header := lipgloss.PlaceHorizontal(contentW, lipgloss.Center, title+"  "+hint)
-	sep := styleModalHint.Render(strings.Repeat("─", contentW))
+	modalW, innerH, contentW := helpModalSize(m.ui.width, m.ui.height)
 
-	h := m.ui.help
-	h.ShowAll = true
-	helpText := centerBlockLines(h.View(m.ui.keys), contentW)
-	helpAreaH := max(3, innerH-4)
-	helpBody := lipgloss.Place(contentW, helpAreaH, lipgloss.Center, lipgloss.Center, helpText)
+	hint := "↑/↓ scroll   " + m.ui.keys.ToggleHelp.Help().Key + " or " + m.ui.keys.CloseModal.Help().Key + " close"
+	body := m.helpGroupedBody(contentW, innerH-4)
+	if vp := m.ui.helpViewport; vp != nil {
+		body = vp.View()
+		if vp.AtTop() {
+			hint = "↑/↓ scroll   " + m.ui.keys.CloseModal.Help().Key + " close"
+		}
+	}
 
-	boxContent := header + "\n" + sep + "\n\n" + helpBody
-	box := styleModalBox.Width(modalW).Height(innerH).Render(boxContent)
-	placed := lipgloss.Place(
-		m.ui.width,
-		m.ui.height-headerH-tabBarH-gapFooterH,
-		lipgloss.Center,
-		lipgloss.Center,
-		box,
-		lipgloss.WithWhitespaceChars("░"),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("#1a1a2a")),
-	)
-	return placed
+	return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Help"),
+		styleModalHint.Render(hint), body, modalW, innerH)
+}
+
+func (m model) overlayBlocked() bool {
+	return m.ui.helpOpen || m.ui.settings.open || m.ui.trackPopupOpen
 }
 
 func (m model) kittyOverlay() string {
-	if m.ui.imgs == nil || m.ui.imgs.protocol != imageProtocolKitty {
+	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() != imageProtocolKitty {
 		return ""
 	}
-	if m.ui.helpOpen || m.ui.trackPopupOpen {
-		m.ui.imgs.beginKittyOverlayState("", "")
+	// Kitty graphics sit on a terminal layer above text and persist until
+	// deleted, so any popup would render beneath them. Hide the overlay for
+	// the whole time a modal is open and retransmit on the first unblocked
+	// frame via forceKittyRedraw.
+	if m.overlayBlocked() {
+		m.ui.imgs.forceKittyRedraw()
 		return kittyDeleteAll
 	}
-
-	layout := m.getBodyLayout()
+	layout := m.bodyLayout()
 	if layout.coverCols <= 0 || layout.coverRows <= 0 {
 		_, shouldDelete, _, _ := m.ui.imgs.beginKittyOverlayState("", "")
 		if shouldDelete {
@@ -312,16 +345,24 @@ func (m model) kittyOverlay() string {
 	if m.ui.activeTab == tabPlayer {
 		playerEpoch = m.transport.playerCoverEpoch
 	}
-	key := fmt.Sprintf("%d:%d:%d:%d:%s:%s:%s:%d", layout.coverStartRow, layout.coverStartCol, layout.coverCols, layout.coverRows, m.ui.activeTab, subjectID, url, playerEpoch)
+	// With a cover frame the art insets inside the frame's inner ring: the
+	// panel text draws the border, the image lands one cell in.
+	artCols, artRows := layout.coverCols, layout.coverRows
+	startRow, startCol := layout.coverStartRow, layout.coverStartCol
+	if coverFrameFits(artCols, artRows) {
+		artCols, artRows = artCols-2, artRows-2
+		startRow, startCol = startRow+1, startCol+1
+	}
+	key := fmt.Sprintf("%d:%d:%d:%d:%s:%s:%s:%d", startRow, startCol, artCols, artRows, m.ui.activeTab, subjectID, url, playerEpoch)
 	changed, shouldDelete, placementChanged, urlChanged := m.ui.imgs.beginKittyOverlayState(key, url)
 	if !changed {
 		return ""
 	}
-	payload := m.ui.imgs.buildKittyPayload(url, encoded, layout.coverCols, layout.coverRows, m.ui.imgs.nextKittyImageID())
+	payload := m.ui.imgs.buildKittyPayload(url, encoded, artCols, artRows, m.ui.imgs.nextKittyImageID())
 	if payload == "" {
 		return kittyDeleteAll
 	}
-	out := fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", layout.coverStartRow, layout.coverStartCol, payload)
+	out := fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", startRow, startCol, payload)
 	if shouldDelete && (placementChanged || urlChanged) {
 		return kittyDeleteAll + out
 	}

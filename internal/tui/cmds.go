@@ -98,6 +98,11 @@ type coverImageURLsBatchResolvedMsg struct {
 	results []coverImageResolvedMsg
 }
 
+type indexedImageMsg struct {
+	idx int
+	msg imageLoadedMsg
+}
+
 type imagesBatchLoadedMsg struct {
 	results []imageLoadedMsg
 }
@@ -155,7 +160,7 @@ func StartContextTracksListener(ch <-chan librespot.ContextTracksResult, send fu
 			case res := <-ch:
 				items := make([]spotify.QueueItem, 0, len(res.Entries))
 				for _, e := range res.Entries {
-					items = append(items, spotify.QueueItem{ID: e.ID, Name: e.Name, Artist: e.Artist, DurationMS: e.DurationMS})
+					items = append(items, spotify.QueueItem{ID: e.ID, Name: e.Name, Artist: e.Artist, DurationMS: e.DurationMS, ImageURL: e.ImageURL})
 				}
 				send(trackPopupItemsMsg{token: res.ReqToken, items: items})
 			case <-ctx.Done():
@@ -190,7 +195,7 @@ func PlaybackStateFromLibrespot(u *librespot.PlaybackStateUpdate) (*spotify.Play
 	}
 	queue := make([]spotify.QueueItem, 0, len(u.Queue))
 	for _, e := range u.Queue {
-		queue = append(queue, spotify.QueueItem{ID: e.ID, Name: e.Name, Artist: e.Artist, DurationMS: e.DurationMS})
+		queue = append(queue, spotify.QueueItem{ID: e.ID, Name: e.Name, Artist: e.Artist, DurationMS: e.DurationMS, ImageURL: e.ImageURL})
 	}
 	return status, queue, u.QueueHasMore, true
 }

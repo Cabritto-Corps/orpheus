@@ -22,13 +22,24 @@ type Config struct {
 	DeviceResolutionMode string
 	AllowActiveFallback  bool
 	TokenPath            string
+	SettingsPath         string
+	KeysPath             string
+	Theme                string
+	ThemePath            string
+	EnvPath              string
 	PollInterval         time.Duration
 	NerdFonts            bool
 	OnSongChange         string
 	LogFile              string
+	AudioCacheEnabled    bool
+	AudioCacheSizeMB     int64
+	AudioCacheDir        string
+	Crossfade            bool
+	CrossfadeSeconds     float64
 }
 
 func LoadFromEnv() (Config, error) {
+	configWarnings = nil
 	loadEnvFile()
 
 	cfg := Config{
@@ -39,11 +50,23 @@ func LoadFromEnv() (Config, error) {
 		DeviceResolutionMode: envDefault("orpheus_device_resolution_mode", "strict"),
 		AllowActiveFallback:  envBool("orpheus_allow_active_fallback", false),
 		TokenPath:            envDefault("orpheus_token_path", defaultTokenPath()),
+		SettingsPath:         envDefault("orpheus_config_file", defaultSettingsPath()),
+		KeysPath:             envDefault("orpheus_keys_file", defaultKeysPath()),
+		Theme:                envDefault("orpheus_theme", "default"),
+		ThemePath:            envDefault("orpheus_theme_file", defaultThemePath()),
+		EnvPath:              resolveEnvFilePath(),
 		PollInterval:         envDuration("orpheus_poll_interval", 1500*time.Millisecond),
 		NerdFonts:            resolveNerdFonts(os.Getenv("orpheus_nerd_fonts")),
 		OnSongChange:         envDefault("orpheus_on_song_change", ""),
 		LogFile:              envDefault("orpheus_log_file", defaultLogPath()),
+		AudioCacheEnabled:    envBool("orpheus_audio_cache_enabled", false),
+		AudioCacheSizeMB:     envInt64("orpheus_audio_cache_size_mb", 1024),
+		AudioCacheDir:        envDefault("orpheus_audio_cache_dir", ""),
+		Crossfade:            envBool("orpheus_crossfade", false),
+		CrossfadeSeconds:     envFloat64("orpheus_crossfade_seconds", 3),
 	}
+
+	ApplyAppSettings(&cfg, LoadAppSettings(cfg.SettingsPath))
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -109,6 +132,7 @@ func envBool(key string, fallback bool) bool {
 	}
 	v, err := strconv.ParseBool(raw)
 	if err != nil {
+		warnConfigValue(key, raw)
 		slog.Warn("invalid boolean value, using default", "key", key, "value", raw, "default", fallback)
 		return fallback
 	}
@@ -143,6 +167,34 @@ func detectNerdFontsInstalled() bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(string(out)), "nerd font")
+}
+
+func envFloat64(key string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || v < 0 {
+		warnConfigValue(key, raw)
+		slog.Warn("invalid float value, using default", "key", key, "value", raw, "default", fallback)
+		return fallback
+	}
+	return v
+}
+
+func envInt64(key string, fallback int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v <= 0 {
+		warnConfigValue(key, raw)
+		slog.Warn("invalid integer value, using default", "key", key, "value", raw, "default", fallback)
+		return fallback
+	}
+	return v
 }
 
 func envDuration(key string, fallback time.Duration) time.Duration {
@@ -183,22 +235,44 @@ func DefaultConfigDir() (string, error) {
 }
 
 func loadEnvFile() {
-	if _, err := os.Stat(".env"); err == nil {
-		if loadErr := godotenv.Load(); loadErr != nil {
-			slog.Warn("failed to parse .env file", "error", loadErr)
-		}
-		return
-	}
-	dir, err := DefaultConfigDir()
-	if err != nil {
-		return
-	}
-	path := filepath.Join(dir, ".env")
-	if _, err := os.Stat(path); err == nil {
+	if path := resolveEnvFilePath(); path != "" {
 		if loadErr := godotenv.Load(path); loadErr != nil {
 			slog.Warn("failed to parse .env file", "path", path, "error", loadErr)
 		}
 	}
+}
+
+// resolveEnvFilePath mirrors loadEnvFile precedence: cwd .env wins over the
+// config-dir .env. Empty when neither exists.
+func resolveEnvFilePath() string {
+	if _, err := os.Stat(".env"); err == nil {
+		return ".env"
+	}
+	dir, err := DefaultConfigDir()
+	if err != nil {
+		return ""
+	}
+	path := filepath.Join(dir, ".env")
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	return ""
+}
+
+// configWarnings collects human-readable load problems (malformed values
+// falling back to defaults) so the UI can surface what the log-only
+// warnings used to hide.
+var configWarnings []string
+
+func warnConfigValue(key, value string) {
+	configWarnings = append(configWarnings, key+" = "+value+" ignored (invalid value)")
+}
+
+// Warnings returns the problems found while parsing configuration values,
+// in load order. Rendered by the settings UI so what is shown can always
+// be traced back to the config files.
+func Warnings() []string {
+	return append([]string(nil), configWarnings...)
 }
 
 func defaultTokenPath() string {
@@ -207,6 +281,22 @@ func defaultTokenPath() string {
 		return ".orpheus-token.json"
 	}
 	return filepath.Join(dir, "token.json")
+}
+
+func defaultKeysPath() string {
+	dir, err := DefaultConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
+		return "keys.json"
+	}
+	return filepath.Join(dir, "keys.json")
+}
+
+func defaultThemePath() string {
+	dir, err := DefaultConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
+		return "theme.json"
+	}
+	return filepath.Join(dir, "theme.json")
 }
 
 func defaultLogPath() string {

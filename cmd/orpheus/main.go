@@ -30,7 +30,15 @@ const (
 	oauthHTTPTimeout    = 20 * time.Second
 )
 
+// version is stamped at build time with -ldflags "-X main.version=<tag>".
+var version = "dev"
+
 func main() {
+	if len(os.Args) >= 2 && (os.Args[1] == "--version" || os.Args[1] == "-v" || os.Args[1] == "version") {
+		fmt.Printf("orpheus %s\n", version)
+		return
+	}
+
 	if len(os.Args) < 2 || os.Args[1] == "librespot" {
 		if err := runLibrespotTUI(); err != nil {
 			slog.Error("tui failed", "error", err)
@@ -320,6 +328,12 @@ func runLibrespotTUI() error {
 	if cfg.DeviceName != "" {
 		librespotCfg.DeviceName = cfg.DeviceName
 	}
+	librespotCfg.AudioCacheEnabled = cfg.AudioCacheEnabled
+	librespotCfg.AudioCacheSizeMB = cfg.AudioCacheSizeMB
+	librespotCfg.AudioCacheDir = cfg.AudioCacheDir
+	if cfg.Crossfade && cfg.CrossfadeSeconds > 0 {
+		librespotCfg.CrossfadeSeconds = cfg.CrossfadeSeconds
+	}
 
 	playbackStateCh := make(chan *librespot.PlaybackStateUpdate, 32)
 	runtime, err := librespot.NewRuntime(librespotCfg, appState, logger, playbackStateCh)
@@ -337,6 +351,8 @@ func runLibrespotTUI() error {
 	go appPlayer.Run(ctx, tuiCmdCh)
 
 	tuiCfg := config.Config{
+		Theme:                cfg.Theme,
+		SettingsPath:         cfg.SettingsPath,
 		SpotifyClientID:      cfg.SpotifyClientID,
 		RedirectURI:          cfg.RedirectURI,
 		Scopes:               cfg.Scopes,
@@ -348,6 +364,14 @@ func runLibrespotTUI() error {
 		NerdFonts:            cfg.NerdFonts,
 		OnSongChange:         cfg.OnSongChange,
 		LogFile:              cfg.LogFile,
+		ThemePath:            cfg.ThemePath,
+		KeysPath:             cfg.KeysPath,
+		EnvPath:              cfg.EnvPath,
+		Crossfade:            cfg.Crossfade,
+		CrossfadeSeconds:     cfg.CrossfadeSeconds,
+		AudioCacheEnabled:    cfg.AudioCacheEnabled,
+		AudioCacheSizeMB:     cfg.AudioCacheSizeMB,
+		AudioCacheDir:        cfg.AudioCacheDir,
 	}
 
 	var catalog spotify.PlaylistCatalog

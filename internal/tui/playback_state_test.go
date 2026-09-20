@@ -607,3 +607,19 @@ func TestStatusQueueCacheScopedPerModel(t *testing.T) {
 		t.Fatal("expected each model to own an isolated status queue cache")
 	}
 }
+
+func TestMergeStatusFromPreviousUsesQueueImageFallback(t *testing.T) {
+	next := &spotify.PlaybackStatus{TrackID: "track-1", TrackName: "New Track", ArtistName: "A", DurationMS: 100}
+	queue := []spotify.QueueItem{{ID: "track-1", Name: "New Track", ImageURL: "https://img/track-1"}}
+
+	merged := mergeStatusFromPrevious(nil, queue, next, nil)
+	if merged.AlbumImageURL != "https://img/track-1" {
+		t.Fatalf("expected queue image fallback for a track change with empty URL, got %+v", merged)
+	}
+
+	withURL := &spotify.PlaybackStatus{TrackID: "track-1", TrackName: "New Track", AlbumImageURL: "https://img/direct"}
+	merged = mergeStatusFromPrevious(nil, queue, withURL, nil)
+	if merged.AlbumImageURL != "https://img/direct" {
+		t.Fatalf("expected direct URL to win over queue fallback, got %+v", merged)
+	}
+}

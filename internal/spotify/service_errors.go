@@ -10,12 +10,10 @@ import (
 )
 
 func IsTransientAPIError(err error) bool {
-	var apiErr spotifyapi.Error
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[spotifyapi.Error](err); ok {
 		return apiErr.Status == 429 || apiErr.Status >= 500
 	}
-	var statusErr *httpStatusError
-	if errors.As(err, &statusErr) {
+	if statusErr, ok := errors.AsType[*httpStatusError](err); ok {
 		return statusErr.status == 429 || statusErr.status >= 500
 	}
 	msg := strings.ToLower(err.Error())
@@ -39,12 +37,10 @@ func IsForbidden(err error) bool {
 }
 
 func HTTPStatusFromError(err error) (status int, ok bool) {
-	var apiErr spotifyapi.Error
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[spotifyapi.Error](err); ok {
 		return apiErr.Status, true
 	}
-	var statusErr *httpStatusError
-	if errors.As(err, &statusErr) {
+	if statusErr, ok := errors.AsType[*httpStatusError](err); ok {
 		return statusErr.status, true
 	}
 	return 0, false

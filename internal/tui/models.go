@@ -5,8 +5,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/viewport"
 
 	"orpheus/internal/cache"
 	"orpheus/internal/librespot"
@@ -17,6 +19,7 @@ import (
 type transportModel struct {
 	status                  *spotify.PlaybackStatus
 	queue                   []spotify.QueueItem
+	queueCursor             int
 	queueHasMore            bool
 	stableQueueLen          int
 	pendingContextFrom      string
@@ -68,6 +71,7 @@ type browseModel struct {
 type uiModel struct {
 	activeTab               tab
 	helpOpen                bool
+	spinner                 spinner.Model
 	navToken                int
 	trackPopupOpen          bool
 	trackPopupList          list.Model
@@ -82,9 +86,7 @@ type uiModel struct {
 	width                   int
 	height                  int
 	nerdFonts               bool
-	cachedBodyLayout        bodyLayout
-	cachedBodyLayoutValid   bool
-	help                    help.Model
+	helpViewport            *viewport.Model
 	keys                    keyMap
 	pollInterval            time.Duration
 	pollTick                int
@@ -100,6 +102,7 @@ type uiModel struct {
 	imgs                    *imgCache
 	statusQueueCache        *statusQueueSnapshotCache
 	cover                   coverManager
+	settings                settingsModel
 }
 
 type model struct {
@@ -115,3 +118,74 @@ type model struct {
 	browse    browseModel
 	ui        uiModel
 }
+
+type settingsMode int
+
+const (
+	settingsModeRoot settingsMode = iota
+	settingsModeKeys
+	settingsModeTheme
+	settingsModeCapture
+	settingsModeThemeOptions
+)
+
+type settingsModel struct {
+	open        bool
+	mode        settingsMode
+	cursor      int
+	keysCursor  int
+	captureKey  string
+	pendingKey  string
+	themePreset string
+	themeCursor int
+	themeBackup string
+
+	// themeOptionsPreset is the editor's base palette (row 0 may change
+	// it); pendingState is the live draft; stateBackup holds the applied
+	// theme to restore on esc.
+	themeOptionsPreset string
+	themeStatePending  themeState
+	themeStateBackup   themeState
+	optionsCursor      int
+
+	// themeOverrides caches the parsed theme.json so per-frame view paths
+	// (picker rows, root value) do not re-read the file at the 200ms tick.
+	themeOverrides map[string]any
+	keysPath       string
+	themePath      string
+	configPath     string
+
+	keysTable *table.Model
+	conflicts map[string]bool
+
+	crossfadeEnabled bool
+	crossfadeSeconds float64
+	cacheEnabled     bool
+	cacheSizeMB      int64
+
+	restartRequiredCrossfade bool
+	restartRequiredCache     bool
+	keysTableDirty           bool
+	saveErr                  string
+}
+
+// settingsKeyActions derives the settings keys-menu rows (order + labels)
+// from the shared action registry.
+var settingsKeyActions = func() []struct {
+	action string
+	label  string
+} {
+	out := make([]struct {
+		action string
+		label  string
+	}, 0, len(actionRegistry))
+	for _, m := range actionRegistry {
+		out = append(out, struct {
+			action string
+			label  string
+		}{m.action, m.label})
+	}
+	return out
+}()
+
+var settingsThemeOrder = themeRegistryNames()

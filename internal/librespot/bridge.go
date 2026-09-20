@@ -14,16 +14,25 @@ const (
 	TUICommandSetVolume
 	TUICommandShuffle
 	TUICommandCycleRepeat
+	TUICommandQueueRemove
+	TUICommandQueueReorder
+	TUICommandQueueJump
 )
 
+// Queue commands address entries by VISIBLE position (the "up next" view):
+// position 0 is the entry the panel shows first, i.e. the fork's visible-view
+// index where the currently playing queue entry (if any) is excluded. Track
+// IDs are not used: they can duplicate within a queue.
 type TUICommand struct {
-	Kind     TUICommandKind
-	URI      string
-	TrackID  string
-	Position int64
-	Volume   int
-	ReqToken int
-	ResultCh chan<- ContextTracksResult
+	Kind             TUICommandKind
+	URI              string
+	TrackID          string
+	Position         int64
+	Volume           int
+	ReqToken         int
+	QueueIndex       int
+	QueueTargetIndex int
+	ResultCh         chan<- ContextTracksResult
 }
 
 // ContextTracksResult is the reply to TUICommandGetContextTracks. ReqToken
@@ -39,6 +48,7 @@ type PlaybackStateQueueEntry struct {
 	Name       string
 	Artist     string
 	DurationMS int
+	ImageURL   string
 }
 
 type PlaybackStateUpdate struct {

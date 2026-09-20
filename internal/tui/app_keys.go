@@ -26,7 +26,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyMatches(msg, k.ToggleHelp):
 		if !filtering {
 			m.ui.helpOpen = !m.ui.helpOpen
+			if m.ui.helpOpen {
+				m.ensureHelpViewport()
+			}
 			return m, nil
+		}
+	case keyMatches(msg, k.Settings):
+		if !filtering {
+			return m.openSettings()
 		}
 	}
 
@@ -34,7 +41,19 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if keyMatches(msg, k.CloseModal) {
 			m.ui.helpOpen = false
 		}
+		switch {
+		case keyMatches(msg, k.QueueUp):
+			// Reassign: scrollHelp has a value receiver, so discarding its
+			// return silently threw the scrolled copy away.
+			m = m.scrollHelp(-3)
+		case keyMatches(msg, k.QueueDown):
+			m = m.scrollHelp(3)
+		}
 		return m, nil
+	}
+
+	if m.ui.settings.open {
+		return m.handleSettingsKey(msg)
 	}
 
 	if m.ui.trackPopupOpen {
@@ -53,7 +72,6 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.normalizeLibraryPagination()
 			m.ui.coverRefreshTick = 0
-			m.ui.cachedBodyLayoutValid = false
 			return m, m.loadVisiblePlaylistCoversCmd()
 		}
 	}
@@ -163,8 +181,56 @@ func (m model) handleAlbumKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) isFiltering() bool {
+	if m.ui.trackPopupOpen && m.ui.trackPopupList.FilterState() == list.Filtering {
+		return true
+	}
 	return (m.ui.activeTab == tabPlaylists && m.browse.playlistList.FilterState() == list.Filtering) ||
 		(m.ui.activeTab == tabAlbums && m.browse.albumList.FilterState() == list.Filtering)
+}
+
+// handleQueueKey handles the up-next panel's interaction keys (player tab).
+// Cursor positions and command payloads use the visible-view addressing the
+// backend expects: position 0 is the entry the panel shows first.
+func (m *model) handleQueueKey(msg tea.KeyMsg) tea.Cmd {
+	q := m.visibleQueue()
+	if len(q) == 0 {
+		return nil
+	}
+
+	cursor := min(m.transport.queueCursor, len(q)-1)
+	switch msg.String() {
+	case "up":
+		if cursor > 0 {
+			m.transport.queueCursor = cursor - 1
+		}
+		return nil
+	case "down":
+		if cursor < len(q)-1 {
+			m.transport.queueCursor = cursor + 1
+		}
+		return nil
+	case "enter", "return":
+		// Jump loads a track — same class as next/prev, so it must not
+		// fire while a transport transition is mid-flight.
+		if m.transport.transition.Pending() {
+			return nil
+		}
+		return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueJump, QueueIndex: cursor})
+	case "x", "d":
+		return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueRemove, QueueIndex: cursor})
+	case "[":
+		if cursor > 0 {
+			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueReorder, QueueIndex: cursor, QueueTargetIndex: cursor - 1})
+		}
+		return nil
+	case "]":
+		if cursor < len(q)-1 {
+			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueReorder, QueueIndex: cursor, QueueTargetIndex: cursor + 1})
+		}
+		return nil
+	default:
+		return nil
+	}
 }
 
 func (m model) matchGlobalPlaybackKey(msg tea.KeyMsg) playbackInputKind {
@@ -180,8 +246,11 @@ func (m model) matchGlobalPlaybackKey(msg tea.KeyMsg) playbackInputKind {
 }
 
 func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	k := m.ui.keys
+	if cmd := m.handleQueueKey(msg); cmd != nil {
+		return m, cmd
+	}
 	if m.shouldBlockTransportInput(msg) {
-		k := m.ui.keys
 		switch {
 		case keyMatches(msg, k.PlayPause):
 			m.enqueuePlaybackInput(playbackInputPlayPause)
@@ -196,7 +265,6 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	k := m.ui.keys
 	var action playbackInputKind
 	switch {
 	case keyMatches(msg, k.Refresh):
@@ -231,6 +299,27 @@ type trackPopupItemsMsg struct {
 	items []spotify.QueueItem
 }
 
+// newTrackPopupList builds the track popup's list with the shared chrome:
+// themed filter prompt, a readable status bar (the item count stays visible
+// even on a single page) and pagination dots the framework's default greys
+// bury on dark themes.
+func newTrackPopupList(termW, termH int) list.Model {
+	_, listW, listH := popupModalSize(termW, termH)
+	popup := list.New(nil, newTrackPopupDelegate(), listW, listH)
+	popup.SetShowTitle(false)
+	popup.SetShowStatusBar(true)
+	popup.SetFilteringEnabled(true)
+	popup.SetShowFilter(true)
+	popup.SetShowHelp(false)
+	popup.FilterInput.Prompt = "/ "
+	popup.SetStatusBarItemName("track", "tracks")
+	popup.Styles.FilterPrompt = lipgloss.NewStyle().Foreground(colorMutedBlue)
+	popup.Styles.StatusBar = lipgloss.NewStyle().Foreground(colorOffWhite).PaddingLeft(1)
+	popup.Styles.ActivePaginationDot = lipgloss.NewStyle().Foreground(colorBlue).SetString(" •")
+	popup.Styles.InactivePaginationDot = lipgloss.NewStyle().Foreground(colorDimBlue).SetString(" •")
+	return popup
+}
+
 func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.ui.trackPopupOpen = true
 	m.ui.trackPopupReqToken++
@@ -241,22 +330,9 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.ui.trackPopupName = sel.summary.Name
 	m.ui.trackPopupItems = nil
 
-	modalW := min(m.ui.width-8, 60)
-	bodyH := m.ui.height - headerH - tabBarH - 2
-	innerH := max(bodyH-4, 10)
-
-	delegate := newTrackPopupDelegate()
-	popup := list.New(nil, delegate, modalW, innerH)
-	popup.SetShowTitle(false)
-	popup.SetShowStatusBar(true)
-	popup.SetFilteringEnabled(true)
-	popup.SetShowFilter(true)
-	popup.SetShowHelp(false)
-	popup.FilterInput.Prompt = "/ "
-	popup.Styles.FilterPrompt = lipgloss.NewStyle().Foreground(colorMutedBlue)
-	popup.Styles.StatusBar = lipgloss.NewStyle().Foreground(colorMutedBlue).PaddingLeft(1)
+	popup := newTrackPopupList(m.ui.width, m.ui.height)
 	m.ui.trackPopupList = popup
-	m.ui.trackPopupWidth = modalW - 4
+	m.ui.trackPopupWidth = m.ui.trackPopupList.Width() - 4
 
 	if m.tuiCmdCh != nil && m.contextTracksCh != nil {
 		select {
@@ -280,14 +356,20 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 
 func (m model) handleTrackPopupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
+	if m.ui.trackPopupList.FilterState() == list.Filtering {
+		// While searching inside the popup everything goes to the filter:
+		// bubbles exits the filter on the first esc and accepts on enter,
+		// so the close and play actions below only see keys typed outside
+		// of search mode.
+		var cmd tea.Cmd
+		m.ui.trackPopupList, cmd = m.ui.trackPopupList.Update(msg)
+		return m, cmd
+	}
 	switch {
 	case keyMatches(msg, k.CloseModal):
 		m.ui.trackPopupOpen = false
 		return m, nil
 	case keyMatches(msg, k.Select):
-		if m.ui.trackPopupList.FilterState() == list.Filtering {
-			break
-		}
 		sel, ok := m.ui.trackPopupList.SelectedItem().(trackItem)
 		if !ok {
 			return m, nil
@@ -330,6 +412,7 @@ func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 	}
 
 	if m.tuiCmdCh != nil {
+		nowPlayingContextURI = m.ui.trackPopupURI
 		cmd := librespot.TUICommand{
 			Kind:    librespot.TUICommandPlayContextFromTrack,
 			URI:     m.ui.trackPopupURI,
@@ -376,6 +459,7 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 	m.transport.interpolationProgressMS = 0
 	if m.tuiCmdCh != nil {
 		m.beginTransportTransition()
+		nowPlayingContextURI = sel.summary.URI
 		cmds := []tea.Cmd{
 			m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandPlayContext, URI: sel.summary.URI}),
 			m.loadImageCmd(sel.summary.ImageURL, true),

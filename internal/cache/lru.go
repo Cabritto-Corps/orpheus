@@ -86,10 +86,10 @@ func (c *LRU[K, V]) Keys() []K {
 	return out
 }
 
-func (c *LRU[K, V]) Len() int {
-	return len(c.items)
-}
-
 func (c *LRU[K, V]) Capacity() int {
 	return c.capacity
+}
+
+func (c *LRU[K, V]) Len() int {
+	return len(c.items)
 }

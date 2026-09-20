@@ -4,23 +4,29 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   commitlint:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Check commit messages
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          BASE=${{ github.event.pull_request.base.sha }}
-          HEAD=${{ github.event.pull_request.head.sha }}
           ALLOWED="feat|fix|hotfix|release|refactor|perf|chore|docs|test"
           FAILED=0
 
-          for SHA in $(git rev-list $BASE..$HEAD); do
-            MSG=$(git log --format=%s -n1 $SHA)
+          for SHA in $(git rev-list "$BASE..$HEAD"); do
+            MSG=$(git log --format=%s -n1 "$SHA")
             if ! echo "$MSG" | grep -qE "^($ALLOWED)(\(.*\))?: "; then
               echo "FAIL: $SHA: $MSG"
               echo "  Expected format: <type>: <description>"

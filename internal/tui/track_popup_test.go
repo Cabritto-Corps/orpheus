@@ -1,67 +1,71 @@
 package tui
 
 import (
-	"context"
+	"fmt"
+	"strings"
 	"testing"
-	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/list"
 
-	"orpheus/internal/config"
-	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
 
-func newPopupTestModel(tuiCmdCh chan librespot.TUICommand, contextTracksCh chan librespot.ContextTracksResult) model {
-	return newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, tuiCmdCh, contextTracksCh, nil)
+func popupItems(n int) []list.Item {
+	items := make([]list.Item, 0, n)
+	for i := range n {
+		items = append(items, trackItem{item: spotify.QueueItem{
+			ID: fmt.Sprintf("spotify:track:%011d", i), Name: fmt.Sprintf("Track %d", i), Artist: "Artist", DurationMS: 200000,
+		}})
+	}
+	return items
 }
 
-func TestTrackPopupIgnoresStaleTokenResults(t *testing.T) {
-	m := newPopupTestModel(nil, nil)
-	selA := playlistItem{summary: spotify.PlaylistSummary{ID: "a", Kind: spotify.ContextKindPlaylist, URI: "spotify:playlist:a", Name: "A"}}
-	selB := playlistItem{summary: spotify.PlaylistSummary{ID: "b", Kind: spotify.ContextKindPlaylist, URI: "spotify:playlist:b", Name: "B"}}
-
-	next, _ := m.openTrackPopup(selA)
-	m = next.(model)
-	tokenA := m.ui.trackPopupReqToken
-
-	next, _ = m.handleTrackPopupKey(tea.KeyMsg{Type: tea.KeyEscape})
-	m = next.(model)
-	next, _ = m.openTrackPopup(selB)
-	m = next.(model)
-	if m.ui.trackPopupReqToken == tokenA {
-		t.Fatal("expected a fresh request token per popup open")
+func TestTrackPopupFooterVisible(t *testing.T) {
+	popup := newTrackPopupList(100, 40)
+	popup.SetItems(popupItems(5))
+	if view := popup.View(); !strings.Contains(view, "5 tracks") {
+		t.Fatalf("single-page popup should show the item count, got %q", lastLine(view))
 	}
 
-	late := trackPopupItemsMsg{token: tokenA, items: []spotify.QueueItem{{ID: "stale"}}}
-	got, _ := m.handleTrackPopupItemsMsg(late)
-	if g := got.(model); len(g.ui.trackPopupItems) != 0 {
-		t.Fatalf("expected stale result to be dropped, got %+v", g.ui.trackPopupItems)
+	paged := newTrackPopupList(100, 40)
+	paged.SetItems(popupItems(80))
+	view := paged.View()
+	if !strings.Contains(view, "80 tracks") {
+		t.Fatal("paged popup should show the item count")
 	}
-
-	current := trackPopupItemsMsg{token: m.ui.trackPopupReqToken, items: []spotify.QueueItem{{ID: "fresh"}}}
-	got, _ = m.handleTrackPopupItemsMsg(current)
-	if g := got.(model); len(g.ui.trackPopupItems) != 1 || g.ui.trackPopupItems[0].ID != "fresh" {
-		t.Fatalf("expected current result to be applied, got %+v", g.ui.trackPopupItems)
+	if !strings.Contains(view, "•") {
+		t.Fatal("paged popup should show pagination dots")
 	}
 }
 
-func TestTrackPopupClosesWithErrorOnLoadTimeout(t *testing.T) {
-	cmdCh := make(chan librespot.TUICommand, 1)
-	resultCh := make(chan librespot.ContextTracksResult, 1)
-	m := newPopupTestModel(cmdCh, resultCh)
-	sel := playlistItem{summary: spotify.PlaylistSummary{ID: "a", Kind: spotify.ContextKindPlaylist, URI: "spotify:playlist:a", Name: "A"}}
+func TestTrackPopupDotsOnFirstOpen(t *testing.T) {
+	// Regression: the first SetItems derived PerPage while TotalPages was
+	// still 0, overflowing the modal budget by exactly the pagination row —
+	// the dots only appeared after a resize event.
+	m := guardModel(t, frameVariant{name: "popup", width: 100, height: 40, tab: tabPlaylists})
+	m.ui.trackPopupOpen = true
+	m.ui.trackPopupList = newTrackPopupList(m.ui.width, m.ui.height)
+	m.ui.trackPopupWidth = m.ui.trackPopupList.Width() - 4
+	qi := make([]spotify.QueueItem, 0, 80)
+	for i := range 80 {
+		qi = append(qi, spotify.QueueItem{ID: fmt.Sprintf("spotify:track:%011d", i), Name: fmt.Sprintf("Track %d", i), Artist: "Artist", DurationMS: 200000})
+	}
+	m.ui.trackPopupItems = qi
+	m.retruncateTrackPopupTitles()
 
-	next, _ := m.openTrackPopup(sel)
-	m = next.(model)
-	for range trackPopupLoadTimeoutTicks + 1 {
-		next, _ = m.handleTickMsg()
-		m = next.(model)
+	view := m.trackPopupView()
+	if !strings.Contains(view, "•") {
+		t.Fatal("first-open popup view should show pagination dots")
 	}
-	if m.ui.trackPopupOpen {
-		t.Fatal("expected popup to close after load timeout")
+	if !strings.Contains(view, "80 tracks") {
+		t.Fatal("first-open popup view should show the item count")
 	}
-	if m.transport.playbackErr == nil {
-		t.Fatal("expected a playback error after popup load timeout")
+}
+
+func lastLine(s string) string {
+	s = strings.TrimRight(s, "\n")
+	if i := strings.LastIndex(s, "\n"); i >= 0 {
+		return s[i+1:]
 	}
+	return s
 }

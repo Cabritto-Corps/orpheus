@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"orpheus/internal/librespot"
@@ -19,9 +20,8 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.ui.height = msg.Height
 
 	m.ui.imgs.invalidateCovers()
-	m.ui.cachedBodyLayoutValid = false
 
-	layout := m.getBodyLayout()
+	layout := m.bodyLayout()
 	listInnerW := layout.rightW - 1
 	listInnerH := layout.bodyH - 4
 
@@ -29,12 +29,14 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.browse.albumList.SetSize(listInnerW, listInnerH)
 	m.normalizeLibraryPagination()
 
+	if m.ui.helpOpen {
+		m.ensureHelpViewport()
+	}
+
 	if m.ui.trackPopupOpen {
-		modalW := min(m.ui.width-8, 60)
-		popupBodyH := m.ui.height - headerH - tabBarH - 2
-		popupInnerH := max(popupBodyH-4, 10)
-		m.ui.trackPopupList.SetSize(modalW-2, popupInnerH-4)
-		m.ui.trackPopupWidth = modalW - 4
+		_, listW, listH := popupModalSize(m.ui.width, m.ui.height)
+		m.ui.trackPopupList.SetSize(listW, listH)
+		m.ui.trackPopupWidth = listW - 4
 		m.retruncateTrackPopupTitles()
 	}
 
@@ -46,12 +48,16 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	m.interpolatePlaybackProgress(uiTickInterval)
+	// Advance the loading spinner from the app tick (the list package's own
+	// pattern for tick-driven spinners); the next-tick cmd is dropped
+	// because the app tick is the clock.
+	m.ui.spinner, _ = m.ui.spinner.Update(spinner.TickMsg{Time: time.Now(), ID: m.ui.spinner.ID()})
 	popupTimeoutCmd := m.tickTrackPopupWait()
 	inputCmd := m.pumpInputExecutor()
 	var startupCoverCmd tea.Cmd
 	if m.ui.startupCoverBoostTicks > 0 {
 		m.ui.startupCoverBoostTicks--
-		startupCoverCmd = m.drainCoverQueueCmd(coverQueueDrainBatch * 8)
+		startupCoverCmd = m.drainCoverQueueCmd(coverQueueDrainBatch * 2)
 	}
 
 	m.ui.coverRefreshTick++
@@ -410,19 +416,26 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 		m.ui.cover.playerCoverFailStreak++
 		m.maybeFallbackFromKittyOnPlayerFailures(msg.url)
 	}
+	return m, m.handleImageLoadFailure(msg.url, msg.err)
+}
 
-	attempt := m.ui.cover.imageRetryCount[msg.url] + 1
+// handleImageLoadFailure applies the shared retry ladder for one failed image
+// load: backoff retries, then a failed stamp and a re-resolve for library URLs
+// whose CDN entry went dead. Used by both the single-load and batch paths so
+// queue-loaded covers get the same recovery as priority loads.
+func (m model) handleImageLoadFailure(url string, err error) tea.Cmd {
+	attempt := m.ui.cover.imageRetryCount[url] + 1
 	if attempt > imageLoadRetryMax {
-		m.ui.cover.clearRetry(msg.url)
-		m.ui.imgs.markFailed(msg.url)
-		slog.Warn("image load retries exhausted", "url", msg.url, "error", msg.err)
-		if m.libraryHasImageURL(msg.url) {
-			return m, m.queueResolvesForImageURLCmd(msg.url, libraryCoverRefreshBatch)
+		m.ui.cover.clearRetry(url)
+		m.ui.imgs.markFailed(url)
+		slog.Warn("image load retries exhausted", "url", url, "error", err)
+		if m.libraryHasImageURL(url) {
+			return m.queueResolvesForImageURLCmd(url, libraryCoverRefreshBatch)
 		}
-		return m, nil
+		return nil
 	}
-	_, token := m.ui.cover.nextRetry(msg.url)
-	return m, m.imageRetryCmd(msg.url, attempt, token)
+	_, token := m.ui.cover.nextRetry(url)
+	return m.imageRetryCmd(url, attempt, token)
 }
 
 func (m model) handleImageRetryMsg(msg imageRetryMsg) (tea.Model, tea.Cmd) {
@@ -572,6 +585,10 @@ func (m model) handleSeekDebounceMsg(msg seekDebounceMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleFilterMatchesMsg(msg list.FilterMatchesMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+	if m.ui.helpOpen {
+		m.ensureHelpViewport()
+	}
+
 	if m.ui.trackPopupOpen {
 		m.ui.trackPopupList, cmd = m.ui.trackPopupList.Update(msg)
 		return m, cmd
@@ -606,6 +623,12 @@ func (m *model) retruncateTrackPopupTitles() {
 		items = append(items, trackItem{item: qi})
 	}
 	m.ui.trackPopupList.SetItems(items)
+	// The first SetItems derives PerPage while TotalPages is still 0, so the
+	// pagination row counts as one line instead of two (dots + margin) and
+	// the modal's exact-fit clamp cuts the dots. Re-running SetSize re-derives
+	// PerPage against the real pagination height; this is why the dots only
+	// appeared after a resize event.
+	m.ui.trackPopupList.SetSize(m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height())
 }
 
 // tickTrackPopupWait closes the popup with an error when a pending
@@ -647,7 +670,9 @@ func (m model) handleImagesBatchLoadedMsg(msg imagesBatchLoadedMsg) (tea.Model, 
 	for _, r := range msg.results {
 		m.ui.imgs.finishLoad(r.url)
 		if r.err != nil {
-			m.ui.imgs.markFailed(r.url)
+			if retryCmd := m.handleImageLoadFailure(r.url, r.err); retryCmd != nil {
+				cmds = append(cmds, retryCmd)
+			}
 			continue
 		}
 		m.ui.imgs.clearFailed(r.url)

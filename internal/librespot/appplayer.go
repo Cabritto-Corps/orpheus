@@ -48,9 +48,10 @@ type AppPlayer struct {
 	sess    *session.Session
 	baseCtx context.Context
 
-	stop      chan struct{}
-	runDone   chan struct{}
-	closeOnce sync.Once
+	stop       chan struct{}
+	runDone    chan struct{}
+	closeOnce  sync.Once
+	runStarted atomic.Bool
 
 	player            *player.Player
 	initialVolumeOnce sync.Once
@@ -60,7 +61,8 @@ type AppPlayer struct {
 
 	suppressEmit bool
 
-	prodInfo *ap.ProductInfo
+	prodInfo   *ap.ProductInfo
+	prodInfoMu sync.RWMutex
 
 	state           *State
 	primaryStream   *player.Stream
@@ -71,6 +73,7 @@ type AppPlayer struct {
 	connectStateTimer   *time.Timer
 	queueTopUpTimer     *time.Timer
 	queueTopUpInFlight  bool
+	topUpSuppressArm    bool
 	prefetchJobs        chan prefetchJob
 	prefetchDone        chan prefetchResult
 
@@ -123,6 +126,7 @@ func (p *AppPlayer) newApiResponseStatusTrack(media *golibrespot.Media, position
 	if imageSize == "" {
 		imageSize = "default"
 	}
+	prod := p.prodInfoSnapshot()
 	if media.IsTrack() {
 		track := media.Track()
 		var artists []string
@@ -138,7 +142,7 @@ func (p *AppPlayer) newApiResponseStatusTrack(media *golibrespot.Media, position
 			Name:          *track.Name,
 			ArtistNames:   artists,
 			AlbumName:     *track.Album.Name,
-			AlbumCoverUrl: p.prodInfo.ImageUrl(albumCoverId),
+			AlbumCoverUrl: prod.ImageUrl(albumCoverId),
 			Position:      position,
 			Duration:      int(*track.Duration),
 			ReleaseDate:   track.Album.Date.String(),
@@ -157,13 +161,28 @@ func (p *AppPlayer) newApiResponseStatusTrack(media *golibrespot.Media, position
 		Name:          *episode.Name,
 		ArtistNames:   []string{*episode.Show.Name},
 		AlbumName:     *episode.Show.Name,
-		AlbumCoverUrl: p.prodInfo.ImageUrl(albumCoverId),
+		AlbumCoverUrl: prod.ImageUrl(albumCoverId),
 		Position:      position,
 		Duration:      int(*episode.Duration),
 		ReleaseDate:   "",
 		TrackNumber:   0,
 		DiscNumber:    0,
 	}
+}
+
+func (p *AppPlayer) setProdInfo(prod *ap.ProductInfo) {
+	p.prodInfoMu.Lock()
+	defer p.prodInfoMu.Unlock()
+	p.prodInfo = prod
+}
+
+// prodInfoSnapshot returns the current catalog pointer. ProductInfo is
+// replaced wholesale on update and never mutated in place, so callers may
+// keep dereferencing a snapshot after the lock is released.
+func (p *AppPlayer) prodInfoSnapshot() *ap.ProductInfo {
+	p.prodInfoMu.RLock()
+	defer p.prodInfoMu.RUnlock()
+	return p.prodInfo
 }
 
 func (p *AppPlayer) handleAccesspointPacket(pktType ap.PacketType, payload []byte) error {
@@ -176,7 +195,7 @@ func (p *AppPlayer) handleAccesspointPacket(pktType ap.PacketType, payload []byt
 		if len(prod.Products) != 1 {
 			return fmt.Errorf("invalid ProductInfo")
 		}
-		p.prodInfo = &prod
+		p.setProdInfo(&prod)
 		return nil
 	case ap.PacketTypeCountryCode:
 		// The fork's player reads the country code from its own goroutines;
@@ -479,8 +498,17 @@ func (p *AppPlayer) Close() {
 		case p.stop <- struct{}{}:
 		default:
 		}
-		<-p.runDone
+		// Only wait when Run was actually started: Close may run on a player
+		// that never entered Run, and runDone would never close there.
+		if p.runStarted.Load() {
+			<-p.runDone
+		}
 
+		// The player owns the output goroutine, so it must stop before the
+		// cgo decoders are freed; the reverse order leaves a window where the
+		// output goroutine reads from a closed stream (same invariant noted
+		// on loadCurrentTrack).
+		p.player.Close()
 		closeStream(p.primaryStream)
 		closeStream(p.secondaryStream)
 		p.clearTransitionStreamCache()
@@ -488,18 +516,24 @@ func (p *AppPlayer) Close() {
 		p.shuffleRefreshTimer.Stop()
 		p.connectStateTimer.Stop()
 		p.queueTopUpTimer.Stop()
-		p.player.Close()
 	})
 }
 
 func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 	p.setRunContext(ctx)
+	p.runStarted.Store(true)
+	// The worker gets its own cancellable context so its exit never depends
+	// on the caller's ctx. Defers run LIFO: cancel first, then wait for the
+	// worker, then close runDone — every Run exit path, p.stop included,
+	// unblocks Close().
+	runCtx, runCancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		p.runPrefetchWorker(ctx)
+		p.runPrefetchWorker(runCtx)
 	})
 	defer close(p.runDone)
 	defer wg.Wait()
+	defer runCancel()
 
 	err := p.sess.Dealer().Connect(ctx)
 	if err != nil {
@@ -564,7 +598,7 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 				playerRecv = nil
 				continue
 			}
-			p.handlePlayerEvent(ctx, &ev)
+			p.handlePlayerEvent(&ev)
 		case <-p.prefetchTimer.C:
 			p.prefetchNext(ctx)
 		case <-p.shuffleRefreshTimer.C:

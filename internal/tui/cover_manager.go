@@ -85,6 +85,24 @@ func (c *coverManager) popURL() (string, bool) {
 	return url, true
 }
 
+// pruneExcept drops queued URLs outside the currently interesting set so a
+// fast scroll does not leave hundreds of off-screen loads queued ahead of
+// what the user is looking at.
+func (c *coverManager) pruneExcept(keep map[string]struct{}) {
+	if len(c.queue) == 0 {
+		return
+	}
+	filtered := c.queue[:0]
+	for _, u := range c.queue {
+		if _, ok := keep[u]; ok {
+			filtered = append(filtered, u)
+		} else {
+			delete(c.queued, u)
+		}
+	}
+	c.queue = filtered
+}
+
 func (c *coverManager) removeFromQueue(url string) bool {
 	url = strings.TrimSpace(url)
 	idx, ok := c.queued[url]
@@ -221,7 +239,7 @@ func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
 }
 
 func (m *model) maybeRecoverKittyProtocol() {
-	if m.ui.imgs == nil || m.ui.imgs.protocol == imageProtocolKitty {
+	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() == imageProtocolKitty {
 		return
 	}
 	// Recovery: after a healthy streak of successful loads while kitty is
@@ -236,7 +254,7 @@ func (m *model) maybeRecoverKittyProtocol() {
 }
 
 func (m *model) maybeFallbackFromKittyOnPlayerFailures(url string) {
-	if m.ui.imgs == nil || m.ui.imgs.protocol != imageProtocolKitty {
+	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() != imageProtocolKitty {
 		return
 	}
 	if m.transport.status == nil || strings.TrimSpace(m.transport.status.AlbumImageURL) == "" {

@@ -2,8 +2,6 @@ package playbackdomain
 
 import "testing"
 
-func boolPtr(v bool) *bool { return &v }
-
 func TestResolveOptionsNoOverrides(t *testing.T) {
 	curr := TraversalOptions{RepeatContext: true, RepeatTrack: false, Shuffle: false}
 	got := ResolveOptions(curr, nil, nil, nil)
@@ -14,7 +12,7 @@ func TestResolveOptionsNoOverrides(t *testing.T) {
 
 func TestResolveOptionsOverrideShuffle(t *testing.T) {
 	curr := TraversalOptions{Shuffle: false}
-	got := ResolveOptions(curr, nil, nil, boolPtr(true))
+	got := ResolveOptions(curr, nil, nil, new(true))
 	if !got.Shuffle {
 		t.Fatal("expected shuffle to be true")
 	}
@@ -22,7 +20,7 @@ func TestResolveOptionsOverrideShuffle(t *testing.T) {
 
 func TestResolveOptionsRepeatTrackDisablesRepeatContext(t *testing.T) {
 	curr := TraversalOptions{RepeatContext: true, RepeatTrack: false}
-	got := ResolveOptions(curr, nil, boolPtr(true), nil)
+	got := ResolveOptions(curr, nil, new(true), nil)
 	if got.RepeatTrack != true {
 		t.Fatal("expected repeat track to be true")
 	}
@@ -33,7 +31,7 @@ func TestResolveOptionsRepeatTrackDisablesRepeatContext(t *testing.T) {
 
 func TestResolveOptionsPartialOverride(t *testing.T) {
 	curr := TraversalOptions{RepeatContext: true, RepeatTrack: false, Shuffle: true}
-	got := ResolveOptions(curr, boolPtr(false), nil, nil)
+	got := ResolveOptions(curr, new(false), nil, nil)
 	if got.RepeatContext {
 		t.Fatal("expected repeat context to be false")
 	}

@@ -211,3 +211,124 @@ func TestDefaultConfigDirRespectsEnv(t *testing.T) {
 		t.Fatalf("expected /custom/orpheus, got %q err=%v", got, err)
 	}
 }
+
+func TestAudioCacheEnvParsing(t *testing.T) {
+	t.Setenv("orpheus_audio_cache_enabled", "true")
+	t.Setenv("orpheus_audio_cache_size_mb", "2048")
+	t.Setenv("orpheus_audio_cache_dir", "/tmp/orpheus-cache-test")
+
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if !cfg.AudioCacheEnabled {
+		t.Fatal("expected audio cache enabled")
+	}
+	if cfg.AudioCacheSizeMB != 2048 {
+		t.Fatalf("AudioCacheSizeMB = %d, want 2048", cfg.AudioCacheSizeMB)
+	}
+	if cfg.AudioCacheDir != "/tmp/orpheus-cache-test" {
+		t.Fatalf("AudioCacheDir = %q", cfg.AudioCacheDir)
+	}
+}
+
+func TestAudioCacheEnvDefaults(t *testing.T) {
+	os.Unsetenv("orpheus_audio_cache_enabled")
+	os.Unsetenv("orpheus_audio_cache_size_mb")
+
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.AudioCacheEnabled {
+		t.Fatal("audio cache must default to disabled")
+	}
+	if cfg.AudioCacheSizeMB != 1024 {
+		t.Fatalf("AudioCacheSizeMB default = %d, want 1024", cfg.AudioCacheSizeMB)
+	}
+}
+
+func TestAudioCacheEnvMalformedFallsBack(t *testing.T) {
+	t.Setenv("orpheus_audio_cache_enabled", "true")
+	t.Setenv("orpheus_audio_cache_size_mb", "lots")
+
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.AudioCacheSizeMB != 1024 {
+		t.Fatalf("malformed size should fall back to default, got %d", cfg.AudioCacheSizeMB)
+	}
+}
+
+func TestCrossfadeEnvParsing(t *testing.T) {
+	t.Setenv("orpheus_crossfade", "true")
+	t.Setenv("orpheus_crossfade_seconds", "6.5")
+
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if !cfg.Crossfade {
+		t.Fatal("expected crossfade enabled")
+	}
+	if cfg.CrossfadeSeconds != 6.5 {
+		t.Fatalf("CrossfadeSeconds = %v, want 6.5", cfg.CrossfadeSeconds)
+	}
+}
+
+func TestCrossfadeEnvDefaults(t *testing.T) {
+	os.Unsetenv("orpheus_crossfade")
+	os.Unsetenv("orpheus_crossfade_seconds")
+
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.Crossfade {
+		t.Fatal("crossfade must default to disabled")
+	}
+	if cfg.CrossfadeSeconds != 3 {
+		t.Fatalf("CrossfadeSeconds default = %v, want 3", cfg.CrossfadeSeconds)
+	}
+}
+
+func TestCrossfadeEnvMalformedFallsBack(t *testing.T) {
+	t.Setenv("orpheus_crossfade", "true")
+	t.Setenv("orpheus_crossfade_seconds", "lots")
+
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.CrossfadeSeconds != 3 {
+		t.Fatalf("malformed CrossfadeSeconds = %v, want default 3", cfg.CrossfadeSeconds)
+	}
+}
+
+func TestCrossfadeNegativeSecondsRejected(t *testing.T) {
+	t.Setenv("orpheus_crossfade", "true")
+	t.Setenv("orpheus_crossfade_seconds", "-2")
+
+	t.Setenv("ORPHEUS_CONFIG_DIR", t.TempDir())
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.CrossfadeSeconds != 3 {
+		t.Fatalf("negative CrossfadeSeconds = %v, want default 3", cfg.CrossfadeSeconds)
+	}
+}

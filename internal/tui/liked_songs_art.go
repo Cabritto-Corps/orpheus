@@ -9,7 +9,11 @@ import (
 
 const likedSongsImageURL = "orpheus://liked-songs"
 
-func generateLikedSongsImage(size int) image.Image {
+// generateLikedSongsImage builds the pseudo-playlist cover from the live
+// theme: the gradient blends the accent into the page tone, corners get
+// progressively closer to full accent. Non-hex palettes (ANSI names) keep
+// the original blue gradient.
+func generateLikedSongsImage(size int, corners [4]color.NRGBA) image.Image {
 	if size < 2 {
 		size = 2
 	}
@@ -18,10 +22,7 @@ func generateLikedSongsImage(size int) image.Image {
 	ssSize := size * ssFactor
 	ssImg := image.NewRGBA(image.Rect(0, 0, ssSize, ssSize))
 
-	tl := color.NRGBA{R: 60, G: 30, B: 120}
-	tr := color.NRGBA{R: 40, G: 60, B: 150}
-	bl := color.NRGBA{R: 30, G: 90, B: 160}
-	br := color.NRGBA{R: 50, G: 130, B: 200}
+	tl, tr, bl, br := corners[0], corners[1], corners[2], corners[3]
 
 	heartScale := float64(ssSize) * 0.07
 	cx := float64(ssSize) / 2
@@ -47,6 +48,57 @@ func generateLikedSongsImage(size int) image.Image {
 	}
 
 	return downsample(ssImg, ssSize, size)
+}
+
+var (
+	likedArtKey    string
+	likedArtColors [4]color.NRGBA
+)
+
+// likedArtPaletteKey identifies the theme palette the gradient follows.
+func likedArtPaletteKey() string {
+	return string(colorBlue) + "|" + string(colorPage)
+}
+
+// likedArtCorners derives the gradient corners from the live theme (accent
+// blending into the page tone), caching the last generated palette so
+// re-theming only regenerates when the palette actually moved. Call it
+// only from the event loop: Init and theme changes both run there, so the
+// palette state needs no locking — the preload cmd receives the corners
+// by value.
+func likedArtCorners() [4]color.NRGBA {
+	key := likedArtPaletteKey()
+	if key == likedArtKey {
+		return likedArtColors
+	}
+	likedArtKey = key
+	likedArtColors = deriveLikedArtColors()
+	return likedArtColors
+}
+
+func deriveLikedArtColors() [4]color.NRGBA {
+	defaults := [4]color.NRGBA{
+		{R: 60, G: 30, B: 120, A: 255}, {R: 40, G: 60, B: 150, A: 255},
+		{R: 30, G: 90, B: 160, A: 255}, {R: 50, G: 130, B: 200, A: 255},
+	}
+	toNRGBA := func(hex string) (color.NRGBA, bool) {
+		r, g, b, ok := hexToRGB(hex)
+		return color.NRGBA{R: r, G: g, B: b, A: 255}, ok
+	}
+	accent, okA := toNRGBA(string(colorBlue))
+	page, okP := toNRGBA(string(colorPage))
+	if !okA || !okP {
+		return defaults
+	}
+	mix := func(t float64) color.NRGBA {
+		return color.NRGBA{
+			R: mixChannel(accent.R, page.R, t),
+			G: mixChannel(accent.G, page.G, t),
+			B: mixChannel(accent.B, page.B, t),
+			A: 255,
+		}
+	}
+	return [4]color.NRGBA{mix(0.30), mix(0.45), mix(0.55), mix(0.0)}
 }
 
 func isInHeart(x, y float64) bool {
@@ -97,18 +149,32 @@ func lerp4(tl, tr, bl, br uint8, tx, ty float64) uint8 {
 
 const likedSongsArtSize = 600
 
-func (m *model) preloadLikedSongsArt() {
+func (m *model) preloadLikedSongsArt(corners [4]color.NRGBA) {
 	if m.ui.imgs == nil {
 		return
 	}
-	img := generateLikedSongsImage(likedSongsArtSize)
+	img := generateLikedSongsImage(likedSongsArtSize, corners)
 	m.ui.imgs.setImage(likedSongsImageURL, img, likedSongsArtSize, likedSongsArtSize)
 	m.ui.imgs.pinURL(likedSongsImageURL)
 }
 
+// refreshLikedSongsArt regenerates the procedural cover when the theme
+// palette moved; a no-op otherwise (the supersampled render is not cheap).
+func (m *model) refreshLikedSongsArt() {
+	if m.ui.imgs == nil {
+		return
+	}
+	if key := likedArtPaletteKey(); key == likedArtKey {
+		return
+	}
+	img := generateLikedSongsImage(likedSongsArtSize, likedArtCorners())
+	m.ui.imgs.refreshURL(likedSongsImageURL, img, likedSongsArtSize, likedSongsArtSize)
+}
+
 func preloadLikedSongsArtCmd(m model) tea.Cmd {
+	corners := likedArtCorners()
 	return func() tea.Msg {
-		m.preloadLikedSongsArt()
+		m.preloadLikedSongsArt(corners)
 		return nil
 	}
 }

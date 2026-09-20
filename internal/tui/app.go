@@ -53,9 +53,20 @@ const (
 
 type playlistItem struct {
 	summary spotify.PlaylistSummary
+
+	// nowPlaying is set per render by the delegate wrapper; it makes Title()
+	// carry the now-playing glyph so the delegate cache key changes too.
+	nowPlaying bool
 }
 
-func (p playlistItem) Title() string { return p.summary.Name }
+func (p playlistItem) Title() string {
+	if p.nowPlaying {
+		if glyph := themeNowPlayingGlyph(); glyph != "" {
+			return p.summary.Name + " " + glyph
+		}
+	}
+	return p.summary.Name
+}
 func (p playlistItem) FilterValue() string {
 	return p.summary.Name
 }
@@ -80,20 +91,26 @@ func (t trackItem) Title() string       { return t.item.Name }
 func (t trackItem) FilterValue() string { return t.item.Name }
 func (t trackItem) Description() string { return t.item.Artist }
 
-func newTrackPopupDelegate() list.DefaultDelegate {
+// newTrackPopupDelegate returns the popup's delegate: the themed default
+// delegate wrapped in the render cache, so the track rows can carry the
+// right-aligned duration while keeping the same styling.
+func newTrackPopupDelegate() cachedDelegate {
+	c := &delegateCache{entries: make(map[delegateKey]string, 64)}
+	registerDelegateCache(c)
 	d := list.NewDefaultDelegate()
 	d.ShowDescription = true
 	d.SetHeight(2)
 	d.SetSpacing(0)
 
 	d.Styles.SelectedTitle = lipgloss.NewStyle().
-		Bold(true).
+		Bold(themeBoldTitles).
 		Foreground(colorBlue).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
 		BorderForeground(colorBlue).
 		Padding(0, 0, 0, 1)
 
 	d.Styles.SelectedDesc = lipgloss.NewStyle().
+		Italic(themeItalicDescs).
 		Foreground(colorMutedBlue).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
 		BorderForeground(colorBlue).
@@ -104,34 +121,18 @@ func newTrackPopupDelegate() list.DefaultDelegate {
 		Padding(0, 0, 0, 2)
 
 	d.Styles.NormalDesc = lipgloss.NewStyle().
+		Italic(themeItalicDescs).
 		Foreground(colorMutedBlue).
 		Padding(0, 0, 0, 2)
 
-	return d
+	return cachedDelegate{DefaultDelegate: d, cache: c}
 }
 
 func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- librespot.ContextTracksResult, ldr *loader.BackgroundLoader) model {
-	delegate := newPlaylistDelegate()
-
-	browser := list.New(nil, delegate, 40, 20)
-	browser.SetShowTitle(false)
-	browser.SetShowStatusBar(false)
-	browser.SetFilteringEnabled(true)
-	browser.SetShowFilter(true)
-	browser.SetShowHelp(false)
-	browser.FilterInput.Prompt = "Search: "
-	applyListStyles(&browser)
-
-	albums := list.New(nil, delegate, 40, 20)
-	albums.SetShowTitle(false)
-	albums.SetShowStatusBar(false)
-	albums.SetFilteringEnabled(true)
-	albums.SetShowFilter(true)
-	albums.SetShowHelp(false)
-	albums.FilterInput.Prompt = "Search: "
-	applyListStyles(&albums)
-
-	h := newHelp()
+	state, resolvedPreset := LoadTheme(cfg.Theme, cfg.ThemePath)
+	applyTheme(state)
+	browser := newBrowseList()
+	albums := newBrowseList()
 
 	m := model{
 		ctx:             ctx,
@@ -160,12 +161,13 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 			pollInterval:           cfg.PollInterval,
 			activeTab:              tabPlaylists,
 			imgs:                   newImgCache(),
+			spinner:                themedSpinner(),
 			statusQueueCache:       newStatusQueueSnapshotCache(),
 			startupCoverBoostTicks: 40,
 			cover:                  newCoverManager(),
 			nerdFonts:              cfg.NerdFonts,
-			help:                   h,
-			keys:                   newKeys(),
+			keys:                   newKeysFromConfig(LoadKeys(cfg.KeysPath)),
+			settings:               newSettingsModel(cfg, resolvedPreset),
 		},
 	}
 
@@ -212,6 +214,11 @@ func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.
 	contextTracksCh := make(chan librespot.ContextTracksResult, 1)
 	ldr := loader.New(ctx, 128, NewTUIExecutor(ctx, catalog))
 	m := newModel(ctx, catalog, service, cfg, tuiCmdCh, contextTracksCh, ldr)
+	// Match the terminal's own background (the padding around the grid)
+	// to the theme's page color for the session; restore on exit.
+	CaptureTerminalBG()
+	defer RestoreTerminalBG()
+	ApplyTerminalBG(colorPage)
 	p := tea.NewProgram(m,
 		tea.WithAltScreen(),
 	)

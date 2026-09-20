@@ -9,6 +9,19 @@ import (
 	"orpheus/internal/cache"
 )
 
+func queueMetaImageURL(p *AppPlayer, coverFileId []byte) string {
+	// Snapshot under the lock: this runs on the metadata-resolution
+	// goroutine, while prodInfo is swapped on the Run goroutine.
+	prod := p.prodInfoSnapshot()
+	if prod == nil || len(coverFileId) == 0 {
+		return ""
+	}
+	if u := prod.ImageUrl(coverFileId); u != nil {
+		return *u
+	}
+	return ""
+}
+
 func (p *AppPlayer) getCachedQueueMeta(id string) *PlaybackStateQueueEntry {
 	p.queueMetaMu.RLock()
 	defer p.queueMetaMu.RUnlock()
@@ -94,6 +107,7 @@ func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*conn
 		if e.Artist == "" {
 			e.Artist = "-"
 		}
+		e.ImageURL = queueMetaImageURL(p, entry.AlbumCoverFileId)
 		p.setCachedQueueMeta(id, e)
 	}
 }
