@@ -88,7 +88,7 @@ jobs:
       - name: Checksum
         run: ${{ matrix.checksum }} "orpheus-${{ matrix.suffix }}.tar.gz" > "orpheus-${{ matrix.suffix }}.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binary-${{ matrix.suffix }}
           path: |
