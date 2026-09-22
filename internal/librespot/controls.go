@@ -441,7 +441,7 @@ func (p *AppPlayer) maybeAdvanceOnTrackEndGuard() {
 		return
 	}
 	dropTransition := p.state.player.Options != nil && p.state.player.Options.RepeatingTrack
-	p.runAdvanceNextTransition("end_guard", false, dropTransition)
+	_, _ = p.runAdvanceNextTransition("end_guard", false, dropTransition)
 }
 
 func (p *AppPlayer) handlePlayerEvent(ev *player.Event) {
@@ -491,7 +491,7 @@ func (p *AppPlayer) handlePlayerEvent(ev *player.Event) {
 			p.state.player != nil &&
 			p.state.player.Options != nil &&
 			p.state.player.Options.RepeatingTrack
-		p.runAdvanceNextTransition("player_not_playing", false, dropTransition)
+		_, _ = p.runAdvanceNextTransition("player_not_playing", false, dropTransition)
 	case player.EventTypeStop:
 		p.emitPlaybackStateLight()
 	default:
