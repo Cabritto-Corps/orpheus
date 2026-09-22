@@ -389,10 +389,10 @@ func (p *AppPlayer) logEndOfTrackInvariant() {
 	}
 }
 
-func (p *AppPlayer) runAdvanceNextTransition(source string, forceNext, dropTransition bool) {
+func (p *AppPlayer) runAdvanceNextTransition(source string, forceNext, dropTransition bool) (bool, error) {
 	if p.advanceInFlight.Load() {
 		p.runtime.Log.WithField("source", source).Debug("ignoring transition while another transition is in flight")
-		return
+		return false, nil
 	}
 	p.advanceInFlight.Store(true)
 	defer p.advanceInFlight.Store(false)
@@ -409,12 +409,12 @@ func (p *AppPlayer) runAdvanceNextTransition(source string, forceNext, dropTrans
 				p.runtime.Log.WithError(err).WithField("source", source).
 					Errorf("giving up end-of-track advance after %d failures", p.endGuardFailures)
 				p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "playback stuck: failed to advance to the next track"})
-				return
+				return false, nil
 			}
 		}
 		p.runtime.Log.WithError(err).WithField("source", source).Error("failed advancing to next track")
 		p.emitPlaybackState()
-		return
+		return false, err
 	}
 	if source == "end_guard" || source == "player_not_playing" {
 		p.endGuardFailures = 0
@@ -422,6 +422,7 @@ func (p *AppPlayer) runAdvanceNextTransition(source string, forceNext, dropTrans
 	if !hasNextTrack {
 		p.emitPlaybackState()
 	}
+	return hasNextTrack, nil
 }
 
 func (p *AppPlayer) maybeAdvanceOnTrackEndGuard() {
@@ -605,10 +606,15 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	p.setPlayerTransportState(true, true, paused)
 	p.state.player.PlaybackSpeed = 0
 	var prefetched bool
+	var promotedSecondary bool
 	if p.secondaryStream != nil && p.secondaryStream.Is(*spotId) {
+		// Promote the prefetched stream without clearing the player's
+		// secondary slot: SetSecondaryStream(nil) closes the displaced source,
+		// which mid-track is this very stream (the audio source only
+		// auto-promotes it at track end). SetPrimaryStream drops the alias.
 		p.primaryStream = p.secondaryStream
 		p.secondaryStream = nil
-		p.player.SetSecondaryStream(nil)
+		promotedSecondary = true
 		prefetched = true
 	} else {
 		if trackPosition == 0 {
@@ -631,6 +637,11 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 		failed := p.primaryStream
 		p.primaryStream = oldStream
 		oldStream = nil
+		if promotedSecondary {
+			// The alias never got dropped by SetPrimaryStream; clear it so the
+			// dead stream cannot be auto-promoted when the old track ends.
+			p.player.SetSecondaryStream(nil)
+		}
 		if failed != nil && failed != p.primaryStream {
 			closeStreamAsync(failed)
 		}
@@ -867,6 +878,9 @@ func (p *AppPlayer) skipPrev(ctx context.Context, allowSeeking bool) error {
 		p.syncPlayerTrackState(p.state.tracks, nil)
 	}
 	if err := p.loadCurrentTrackFromTransition(ctx, p.state.player.IsPaused, true, "skip prev"); err != nil {
+		// Emit even on failure: the TUI holds a transport transition open and
+		// only releases it when a playback update arrives.
+		p.emitPlaybackState()
 		return err
 	}
 	return nil
@@ -882,11 +896,16 @@ func (p *AppPlayer) skipNext(ctx context.Context, track *connectpb.ContextTrack)
 		p.bumpPrefetchGeneration()
 		p.syncPlayerTrackState(p.state.tracks, nil)
 		if err := p.loadCurrentTrackFromTransition(ctx, p.state.player.IsPaused, true, "skip next"); err != nil {
+			// Emit even on failure: the TUI holds a transport transition open and
+			// only releases it when a playback update arrives.
+			p.emitPlaybackState()
 			return err
 		}
 		return nil
 	}
-	if _, err := p.advanceNext(ctx, true, true); err != nil {
+	// Share the transition wrapper with auto-advance so a failed skip emits
+	// state and cannot interleave with an advance already in flight.
+	if _, err := p.runAdvanceNextTransition("skip_next", true, true); err != nil {
 		return fmt.Errorf("failed skipping to next track: %w", err)
 	}
 	return nil

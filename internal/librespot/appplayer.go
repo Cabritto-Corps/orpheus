@@ -20,7 +20,7 @@ import (
 	"github.com/elxgy/go-librespot/player"
 	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
 	metadatapb "github.com/elxgy/go-librespot/proto/spotify/metadata"
-	"github.com/elxgy/go-librespot/session"
+	"github.com/elxgy/go-librespot/spclient"
 	"github.com/elxgy/go-librespot/tracks"
 	"google.golang.org/protobuf/proto"
 
@@ -43,9 +43,18 @@ const (
 	stateReconcileInterval = 30 * time.Second
 )
 
+// sessionAPI is the slice of *session.Session the player relies on. It exists
+// so the control paths can be exercised in tests without a live Spotify session.
+type sessionAPI interface {
+	Events() player.EventManager
+	Spclient() *spclient.Spclient
+	Dealer() *dealer.Dealer
+	Accesspoint() *ap.Accesspoint
+}
+
 type AppPlayer struct {
 	runtime *Runtime
-	sess    *session.Session
+	sess    sessionAPI
 	baseCtx context.Context
 
 	stop       chan struct{}
