@@ -4,17 +4,14 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func validConfig() Config {
 	return Config{
-		RedirectURI:          "http://127.0.0.1:8989/callback",
-		DeviceName:           "test",
-		DeviceResolutionMode: "strict",
-		TokenPath:            "/tmp/token.json",
-		PollInterval:         1500 * time.Millisecond,
-		Scopes:               []string{"streaming"},
+		RedirectURI: "http://127.0.0.1:8989/callback",
+		DeviceName:  "test",
+		TokenPath:   "/tmp/token.json",
+		Scopes:      []string{"streaming"},
 	}
 }
 
@@ -40,35 +37,11 @@ func TestValidateRejectsEmptyDeviceName(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsInvalidResolutionMode(t *testing.T) {
-	cfg := validConfig()
-	cfg.DeviceResolutionMode = "invalid"
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for invalid resolution mode")
-	}
-}
-
-func TestValidateAcceptsRelaxedMode(t *testing.T) {
-	cfg := validConfig()
-	cfg.DeviceResolutionMode = "relaxed"
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("expected relaxed mode to be valid, got: %v", err)
-	}
-}
-
 func TestValidateRejectsEmptyTokenPath(t *testing.T) {
 	cfg := validConfig()
 	cfg.TokenPath = ""
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error for empty token path")
-	}
-}
-
-func TestValidateRejectsZeroPollInterval(t *testing.T) {
-	cfg := validConfig()
-	cfg.PollInterval = 0
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for zero poll interval")
 	}
 }
 
@@ -122,21 +95,6 @@ func TestEnvBool(t *testing.T) {
 	t.Setenv("EBBAD", "notabool")
 	if envBool("EBBAD", false) {
 		t.Fatal("expected fallback (false) on parse error")
-	}
-}
-
-func TestEnvDuration(t *testing.T) {
-	t.Setenv("TEST_DUR", "2s")
-	if got := envDuration("TEST_DUR", time.Second); got != 2*time.Second {
-		t.Fatalf("expected 2s, got %v", got)
-	}
-	t.Setenv("TEST_DUR", "")
-	if got := envDuration("TEST_DUR", 500*time.Millisecond); got != 500*time.Millisecond {
-		t.Fatalf("expected fallback, got %v", got)
-	}
-	t.Setenv("TEST_DUR", "invalid")
-	if got := envDuration("TEST_DUR", time.Second); got != time.Second {
-		t.Fatalf("expected fallback on parse error, got %v", got)
 	}
 }
 

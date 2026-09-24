@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"hash/fnv"
 	"strconv"
 	"strings"
@@ -9,7 +10,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	golibrespot "github.com/elxgy/go-librespot"
 
-	"orpheus/internal/cache"
 	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
@@ -90,14 +90,6 @@ func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.
 	}
 }
 
-func cloneStatus(status *spotify.PlaybackStatus) *spotify.PlaybackStatus {
-	if status == nil {
-		return nil
-	}
-	cp := *status
-	return &cp
-}
-
 func shouldQueueAlbumImageLoad(prev, next *spotify.PlaybackStatus) bool {
 	if next == nil || strings.TrimSpace(next.AlbumImageURL) == "" {
 		return false
@@ -131,8 +123,8 @@ func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
 	if m.ui.imgs != nil && m.ui.imgs.protocolForRender() == imageProtocolKitty {
 		m.ui.imgs.forceKittyRedraw()
 	}
-	if event == transportEventStuck && m.tuiCmdCh == nil {
-		m.ui.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
+	if event == transportEventStuck {
+		m.transport.playbackErr = errors.New("track didn't start — skip again")
 	}
 	m.syncExecutorState()
 }
@@ -147,20 +139,6 @@ func (m *model) shouldBlockTransportInput(msg tea.KeyMsg) bool {
 		keyMatches(msg, k.Prev) ||
 		keyMatches(msg, k.Shuffle) ||
 		keyMatches(msg, k.Loop)
-}
-
-func (m *model) beginReconcileAction(window time.Duration) {
-	m.transport.actionInFlight = true
-	m.syncExecutorState()
-	if window > 0 {
-		m.ui.actionFastPollUntil = time.Now().Add(window)
-	}
-}
-
-func (m *model) clearPreloadedTracks() {
-	for id := range m.browse.preloadedItemIDs {
-		delete(m.browse.preloadedItemIDs, id)
-	}
 }
 
 func (m *model) applyOptimisticSkip(next bool) {
@@ -236,19 +214,6 @@ func (m *model) smoothApplyProgress(incomingProgress int) {
 	m.resetInterpolationBaseline()
 }
 
-func (m *model) clearVolumeSettleTarget(observed int) {
-	if m.transport.volSentTarget < 0 {
-		return
-	}
-	if observed >= 0 && observed == m.transport.volSentTarget {
-		m.transport.volSentTarget = -1
-		return
-	}
-	if time.Since(m.transport.volSentAt) >= volSettleWindow {
-		m.transport.volSentTarget = -1
-	}
-}
-
 const (
 	seekSettleToleranceMS     = 900
 	seekBarEndBufferMS        = 250
@@ -321,23 +286,6 @@ func (m *model) clearSeekSettleTarget(observed int) {
 	}
 }
 
-func (m *model) applyStatusSettleOverrides(status *spotify.PlaybackStatus, observedVol int) {
-	inVolSettle := m.transport.volDebouncePending >= 0 ||
-		(m.transport.volSentTarget >= 0 && time.Since(m.transport.volSentAt) < volSettleWindow)
-	if inVolSettle && status != nil && m.transport.volSentTarget >= 0 {
-		status.Volume = m.transport.volSentTarget
-	}
-	incomingProgress := -1
-	if status != nil {
-		incomingProgress = status.ProgressMS
-	}
-	if m.shouldApplySeekSettle(status) {
-		status.ProgressMS = m.clampSeekTarget(m.seekSettleProgress())
-	}
-	m.clearVolumeSettleTarget(observedVol)
-	m.clearSeekSettleTarget(incomingProgress)
-}
-
 func (m *model) trySendTransportSkip(kind librespot.TUICommandKind) bool {
 	return m.trySendTUICommand(librespot.TUICommand{Kind: kind})
 }
@@ -402,7 +350,7 @@ func clampQueueCursor(cursor int, visible []spotify.QueueItem) int {
 }
 
 func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool, updateStable bool, updateHasMore bool) {
-	m.transport.queue = mergeQueueNames(m.transport.queue, incoming, m.browse.trackCache)
+	m.transport.queue = mergeQueueNames(m.transport.queue, incoming)
 	m.transport.queueCursor = clampQueueCursor(m.transport.queueCursor, m.visibleQueue())
 	if updateStable {
 		m.transport.stableQueueLen = len(m.transport.queue)
@@ -413,7 +361,6 @@ func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool
 	fingerprint := queueFingerprint(m.transport.queue)
 	if fingerprint != m.transport.queueFingerprint {
 		m.transport.queueFingerprint = fingerprint
-		m.rebuildPreloadedFromQueue()
 	}
 }
 
@@ -431,7 +378,7 @@ func queueFingerprint(queue []spotify.QueueItem) uint64 {
 	return h.Sum64()
 }
 
-func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.QueueItem, next *spotify.PlaybackStatus, trackCache *cache.TTL[string, spotify.QueueItem]) *spotify.PlaybackStatus {
+func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.QueueItem, next *spotify.PlaybackStatus) *spotify.PlaybackStatus {
 	if next == nil {
 		return next
 	}
@@ -493,23 +440,10 @@ func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.Queue
 		}
 		break
 	}
-	if trackCache != nil && nextID != "" && (out.TrackName == "" || out.ArtistName == "" || out.DurationMS <= 0) {
-		if c, ok := trackCache.Peek(nextID); ok {
-			if out.TrackName == "" && c.Name != "" {
-				out.TrackName = c.Name
-			}
-			if out.ArtistName == "" && c.Artist != "" && c.Artist != "-" {
-				out.ArtistName = c.Artist
-			}
-			if out.DurationMS <= 0 && c.DurationMS > 0 {
-				out.DurationMS = c.DurationMS
-			}
-		}
-	}
 	return &out
 }
 
-func mergeQueueNames(prev, next []spotify.QueueItem, cache *cache.TTL[string, spotify.QueueItem]) []spotify.QueueItem {
+func mergeQueueNames(prev, next []spotify.QueueItem) []spotify.QueueItem {
 	if len(next) == 0 {
 		return next
 	}
@@ -535,39 +469,6 @@ func mergeQueueNames(prev, next []spotify.QueueItem, cache *cache.TTL[string, sp
 				out[i].DurationMS = p.DurationMS
 			}
 		}
-		if (out[i].Name == "" || out[i].Artist == "") && cache != nil {
-			if c, ok := cache.Peek(key); ok {
-				if out[i].Name == "" && c.Name != "" {
-					out[i].Name = c.Name
-				}
-				if out[i].Artist == "" && c.Artist != "" {
-					out[i].Artist = c.Artist
-				}
-				if out[i].DurationMS <= 0 && c.DurationMS > 0 {
-					out[i].DurationMS = c.DurationMS
-				}
-			}
-		}
 	}
 	return out
-}
-
-func (m *model) rebuildPreloadedFromQueue() {
-	if m.browse.preloadedItemIDs == nil {
-		m.browse.preloadedItemIDs = make(map[string]struct{}, len(m.transport.queue))
-	}
-	newIDs := make(map[string]struct{}, len(m.transport.queue))
-	for _, q := range m.transport.queue {
-		if q.ID != "" {
-			newIDs[golibrespot.NormalizeSpotifyId(q.ID)] = struct{}{}
-		}
-	}
-	for k := range m.browse.preloadedItemIDs {
-		if _, ok := newIDs[k]; !ok {
-			delete(m.browse.preloadedItemIDs, k)
-		}
-	}
-	for k := range newIDs {
-		m.browse.preloadedItemIDs[k] = struct{}{}
-	}
 }

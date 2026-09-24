@@ -40,7 +40,7 @@
 | Select / play | enter a playlist or play the selection | `enter` |
 | Refresh library | reload playlists / albums | `r` |
 | **Queue** | | |
-| Queue panel | upcoming tracks with durations and the now-playing marker | `↑` / `↓` to browse |
+| Queue panel | upcoming tracks with index, artist and duration | `↑` / `↓` to browse |
 | Play from queue | start any row | `enter` |
 | Remove row | drop a track from the queue | `x` |
 | Reorder | move a row up / down | `[` / `]` |

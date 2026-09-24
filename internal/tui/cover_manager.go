@@ -18,6 +18,10 @@ type coverManager struct {
 	queued                map[string]int
 	playerCoverFailStreak int
 	kittyRecoveryStreak   int
+	// kittyFellBack records that kitty was disabled by the failure
+	// fallback, as opposed to never having been detected. Recovery must
+	// only re-enable a protocol that actually worked before.
+	kittyFellBack bool
 }
 
 func newCoverManager() coverManager {
@@ -242,13 +246,16 @@ func (m *model) maybeRecoverKittyProtocol() {
 	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() == imageProtocolKitty {
 		return
 	}
-	// Recovery: after a healthy streak of successful loads while kitty is
-	// disabled, give it another chance instead of staying in half-block mode
-	// for the whole session.
+	if !m.ui.cover.kittyFellBack {
+		return
+	}
+	// Recovery: after a healthy streak of successful loads, give kitty
+	// another chance instead of staying in half-block mode for the whole session.
 	m.ui.cover.kittyRecoveryStreak++
 	if m.ui.cover.kittyRecoveryStreak >= kittyProtocolRecoveryStreak {
 		m.ui.imgs.setProtocol(imageProtocolKitty)
 		m.ui.cover.kittyRecoveryStreak = 0
+		m.ui.cover.kittyFellBack = false
 		slog.Info("re-enabling kitty image protocol after recovery streak")
 	}
 }
@@ -269,6 +276,7 @@ func (m *model) maybeFallbackFromKittyOnPlayerFailures(url string) {
 	m.ui.imgs.setProtocol(imageProtocolNone)
 	m.ui.cover.playerCoverFailStreak = 0
 	m.ui.cover.kittyRecoveryStreak = 0
+	m.ui.cover.kittyFellBack = true
 	slog.Warn("disabling kitty image protocol after repeated player cover failures", "url", url)
 }
 

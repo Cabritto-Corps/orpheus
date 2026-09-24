@@ -17,9 +17,7 @@ import (
 )
 
 var (
-	ErrDeviceNotFound    = errors.New("spotify target device not found")
-	ErrNoActiveTrack     = errors.New("no active track")
-	ErrNoPlaybackContext = errors.New("no playback context available; pick a playlist first")
+	ErrNoActiveTrack = errors.New("no active track")
 )
 
 type ErrorDiagnosis struct {
@@ -30,46 +28,22 @@ type ErrorDiagnosis struct {
 }
 
 type API interface {
-	PlayerDevices(ctx context.Context) ([]spotifyapi.PlayerDevice, error)
 	PlayerState(ctx context.Context, opts ...spotifyapi.RequestOption) (*spotifyapi.PlayerState, error)
 	CurrentUser(ctx context.Context) (*spotifyapi.PrivateUser, error)
 	CurrentUsersAlbums(ctx context.Context, opts ...spotifyapi.RequestOption) (*spotifyapi.SavedAlbumPage, error)
 	GetQueue(ctx context.Context) (*spotifyapi.Queue, error)
-	TransferPlayback(ctx context.Context, deviceID spotifyapi.ID, play bool) error
-	PlayOpt(ctx context.Context, opt *spotifyapi.PlayOptions) error
-	PauseOpt(ctx context.Context, opt *spotifyapi.PlayOptions) error
-	NextOpt(ctx context.Context, opt *spotifyapi.PlayOptions) error
-	PreviousOpt(ctx context.Context, opt *spotifyapi.PlayOptions) error
-	QueueSongOpt(ctx context.Context, trackID spotifyapi.ID, opt *spotifyapi.PlayOptions) error
-	VolumeOpt(ctx context.Context, percent int, opt *spotifyapi.PlayOptions) error
-	SeekOpt(ctx context.Context, position int, opt *spotifyapi.PlayOptions) error
-	ShuffleOpt(ctx context.Context, shuffle bool, opt *spotifyapi.PlayOptions) error
-	RepeatOpt(ctx context.Context, state string, opt *spotifyapi.PlayOptions) error
 }
 
-type DeviceMode string
-
 const (
-	DeviceModeStrict             DeviceMode = "strict"
-	DeviceModeRelaxed            DeviceMode = "relaxed"
-	deviceLookupCacheTTL                    = 1 * time.Second
-	deviceLookupRetryDelay                  = 150 * time.Millisecond
-	deviceLookupRetryWindow                 = 900 * time.Millisecond
-	deviceActivationPollInterval            = 150 * time.Millisecond
-	deviceActivationWaitTimeout             = 2 * time.Second
-	transferInitialRetryDelay               = 150 * time.Millisecond
-	transferMaxAttempts                     = 3
-	apiRetryInitialDelay                    = 250 * time.Millisecond
-	apiRetryMaxDelay                        = 8 * time.Second
-	apiRetryMaxAttempts                     = 4
-	apiRetryExponentCap                     = 5
-	rateLimitRetryDelay                     = 5 * time.Second
+	apiRetryInitialDelay = 250 * time.Millisecond
+	apiRetryMaxDelay     = 8 * time.Second
+	apiRetryMaxAttempts  = 4
+	apiRetryExponentCap  = 5
+	rateLimitRetryDelay  = 5 * time.Second
 )
 
 type Options struct {
-	Mode                DeviceMode
-	AllowActiveFallback bool
-	ItemsHTTPClient     *http.Client
+	ItemsHTTPClient *http.Client
 }
 
 type httpStatusError struct {
@@ -81,18 +55,11 @@ func (e *httpStatusError) Error() string { return e.err.Error() }
 func (e *httpStatusError) Unwrap() error { return e.err }
 
 type Service struct {
-	client              API
-	itemsHTTPClient     *http.Client
-	mode                DeviceMode
-	allowActiveFallback bool
-	deviceCacheTTL      time.Duration
-	deviceCacheMu       sync.RWMutex
-	deviceCacheDevices  []spotifyapi.PlayerDevice
-	deviceCacheExpiry   time.Time
-	deviceCacheSet      bool
-	currentUserIDMu     sync.RWMutex
-	currentUserID       string
-	currentUserIDSet    bool
+	client           API
+	itemsHTTPClient  *http.Client
+	currentUserIDMu  sync.RWMutex
+	currentUserID    string
+	currentUserIDSet bool
 }
 
 type PlaybackStatus struct {
@@ -155,7 +122,6 @@ type PlaylistCatalog interface {
 	ListPlaylistItemsPage(ctx context.Context, playlistID string, offset, limit int) (*PlaylistItemsPage, error)
 	ListAlbumTracksPage(ctx context.Context, albumID string, offset, limit int) (*PlaylistItemsPage, error)
 	ResolveContextImageURL(ctx context.Context, kind, id string) (string, error)
-	CurrentUserID(ctx context.Context) (string, error)
 }
 
 const (
@@ -171,19 +137,9 @@ func DiagnoseError(err error) ErrorDiagnosis {
 	msg := strings.ToLower(err.Error())
 
 	switch {
-	case errors.Is(err, ErrDeviceNotFound):
-		return ErrorDiagnosis{
-			Category: "device-not-found",
-			NextStep: "ensure the target device is running and visible to Spotify (e.g. restart the player or run orpheus again)",
-		}
 	case errors.Is(err, ErrNoActiveTrack):
 		return ErrorDiagnosis{
 			Category: "no-active-track",
-		}
-	case errors.Is(err, ErrNoPlaybackContext):
-		return ErrorDiagnosis{
-			Category: "no-playback-context",
-			NextStep: "select a playlist in TUI",
 		}
 	case errors.Is(err, context.DeadlineExceeded):
 		if strings.Contains(msg, "too many requests") || strings.Contains(msg, "rate limit") {
@@ -272,16 +228,9 @@ func DiagnoseError(err error) ErrorDiagnosis {
 }
 
 func NewService(client API, opts Options) *Service {
-	mode := opts.Mode
-	if mode != DeviceModeRelaxed {
-		mode = DeviceModeStrict
-	}
 	return &Service{
-		client:              client,
-		itemsHTTPClient:     opts.ItemsHTTPClient,
-		mode:                mode,
-		allowActiveFallback: opts.AllowActiveFallback,
-		deviceCacheTTL:      deviceLookupCacheTTL,
+		client:          client,
+		itemsHTTPClient: opts.ItemsHTTPClient,
 	}
 }
 

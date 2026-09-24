@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,7 +18,7 @@ func benchModel(tb testing.TB, queueLen int) model {
 
 func benchModelTab(tb testing.TB, queueLen int, benchTab tab) model {
 	tb.Helper()
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, nil)
+	m := newModel(context.Background(), nil, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
 	m.ui.width = 120
 	m.ui.height = 40
 	m.ui.nerdFonts = false

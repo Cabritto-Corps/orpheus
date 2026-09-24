@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,7 +26,7 @@ type frameVariant struct {
 
 func guardModel(tb testing.TB, v frameVariant) model {
 	tb.Helper()
-	m := newModel(tb.Context(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, nil)
+	m := newModel(tb.Context(), nil, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
 	m.ui.width = v.width
 	m.ui.height = v.height
 	m.ui.nerdFonts = false
@@ -48,14 +47,7 @@ func guardModel(tb testing.TB, v frameVariant) model {
 	if v.hasQueue {
 		m.transport.queue = make([]spotify.QueueItem, 30)
 		for i := range m.transport.queue {
-			// Row 7 carries the playing track's ID when playing, so the ♪
-			// marker path and the selected+playing combination are exercised.
-			id := fmt.Sprintf("spotify:track:%011d", i)
-			if i == 7 && v.playing {
-				id = "spotify:track:7GhIk7Il098yCjg4BQjzvb"
-			}
 			m.transport.queue[i] = spotify.QueueItem{
-				ID:         id,
 				Name:       fmt.Sprintf("Queue Track %d — Extended Remix Featuring A Guest 🎧", i),
 				Artist:     "Some Artist Name",
 				DurationMS: 3721000,
@@ -81,7 +73,7 @@ func guardModel(tb testing.TB, v frameVariant) model {
 	m.browse.albumList.SetItems(items[:20])
 	if v.erroring {
 		m.browse.playlistsErr = fmt.Errorf("429 too many requests")
-		m.transport.playbackErr = fmt.Errorf("device not found")
+		m.transport.playbackErr = fmt.Errorf("playback unavailable")
 	}
 	m2, err := m.handleWindowSizeMsg(tea.WindowSizeMsg{Width: v.width, Height: v.height})
 	if err != nil {

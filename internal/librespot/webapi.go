@@ -27,25 +27,6 @@ func (c *playlistCatalog) doWith429Retry(ctx context.Context, method, path strin
 	return c.sess.WebApiWith429Retry(ctx, method, path, q, nil, body)
 }
 
-func (c *playlistCatalog) CurrentUserID(ctx context.Context) (string, error) {
-	resp, err := c.doWith429Retry(ctx, "GET", "v1/me", nil, nil)
-	if err != nil {
-		return "", fmt.Errorf("webapi me: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("webapi me: %d %s", resp.StatusCode, string(body))
-	}
-	var out struct {
-		ID string `json:"id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("decode me: %w", err)
-	}
-	return out.ID, nil
-}
-
 func (c *playlistCatalog) ListUserPlaylistsPage(ctx context.Context, offset, limit int) (*spotify.PlaylistPage, error) {
 	if offset < 0 {
 		return nil, fmt.Errorf("playlist offset must be >= 0")

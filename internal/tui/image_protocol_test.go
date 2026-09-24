@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"orpheus/internal/spotify"
 )
 
 func TestDetectImageProtocol(t *testing.T) {
@@ -71,5 +73,40 @@ func TestRenderKittyImageRawWithIDIncludesImageID(t *testing.T) {
 	out := renderKittyImageRawWithID("ZmFrZQ==", 10, 6, 42)
 	if !strings.Contains(out, "i=42") {
 		t.Fatalf("expected kitty payload to include image id, got %q", out)
+	}
+}
+
+func TestKittyRecoveryNeverFiresWithoutFallback(t *testing.T) {
+	m := model{ui: uiModel{imgs: newImgCache(), cover: newCoverManager()}}
+	m.ui.imgs.setProtocol(imageProtocolNone)
+	for range kittyProtocolRecoveryStreak * 2 {
+		m.maybeRecoverKittyProtocol()
+	}
+	if m.ui.imgs.protocolForRender() != imageProtocolNone {
+		t.Fatal("recovery must not enable kitty on a terminal where it never worked")
+	}
+	if m.ui.cover.kittyRecoveryStreak != 0 {
+		t.Fatalf("recovery streak must not accumulate without a fallback, got %d", m.ui.cover.kittyRecoveryStreak)
+	}
+}
+
+func TestKittyRecoveryFollowsRealFallback(t *testing.T) {
+	const url = "https://img/cover"
+	m := model{ui: uiModel{imgs: newImgCache(), cover: newCoverManager()}}
+	m.ui.imgs.setProtocol(imageProtocolKitty)
+	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: url}
+	m.ui.cover.playerCoverFailStreak = kittyProtocolFallbackFailures
+	m.maybeFallbackFromKittyOnPlayerFailures(url)
+	if m.ui.imgs.protocolForRender() != imageProtocolNone {
+		t.Fatal("expected fallback to disable kitty after repeated player cover failures")
+	}
+	for range kittyProtocolRecoveryStreak {
+		m.maybeRecoverKittyProtocol()
+	}
+	if m.ui.imgs.protocolForRender() != imageProtocolKitty {
+		t.Fatal("expected recovery to re-enable kitty after a healthy streak following a real fallback")
+	}
+	if m.ui.cover.kittyFellBack {
+		t.Fatal("expected the fallback flag to clear once kitty is re-enabled")
 	}
 }

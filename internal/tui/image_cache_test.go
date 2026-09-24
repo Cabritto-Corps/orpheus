@@ -17,7 +17,7 @@ import (
 )
 
 func NewLoaderModel() model {
-	return newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), nil)))
+	return newModel(context.Background(), nil, config.Config{DeviceName: "orpheus"}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), nil)))
 }
 
 func TestHandlePlaylistKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
@@ -198,7 +198,7 @@ func TestHandleImageLoadedMsgExhaustedRetriesQueuesMetadataResolveWhenURLStillRe
 			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 		},
 	}
-	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), catalog)))
+	m := newModel(context.Background(), catalog, config.Config{DeviceName: "orpheus"}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), catalog)))
 	m.browse.playlistsLoading = false
 	m.ui.cover.imageRetryCount["u1"] = imageLoadRetryMax
 	m.browse.playlistList.SetItems([]list.Item{
@@ -224,7 +224,7 @@ func TestHandleImageLoadedMsgExhaustedRetriesSkipsMetadataRefreshWhenURLNotRefer
 			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 		},
 	}
-	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), catalog)))
+	m := newModel(context.Background(), catalog, config.Config{DeviceName: "orpheus"}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), catalog)))
 	m.browse.playlistsLoading = false
 	m.ui.cover.imageRetryCount["u1"] = imageLoadRetryMax
 
@@ -282,7 +282,7 @@ func TestQueueMissingLibraryImageResolvesCmdQueuesEmptyImageEntries(t *testing.T
 			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 		},
 	}
-	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), catalog)))
+	m := newModel(context.Background(), catalog, config.Config{DeviceName: "orpheus"}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), catalog)))
 	m.browse.playlistList.SetItems([]list.Item{
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p1", Name: "one", Kind: spotify.ContextKindPlaylist, ImageURL: ""}},
 		playlistItem{summary: spotify.PlaylistSummary{ID: "p2", Name: "two", Kind: spotify.ContextKindPlaylist, ImageURL: "u2"}},
@@ -387,13 +387,10 @@ func TestHandlePlaylistsMsgQueuesInitialPlaylistAndAlbumPreviewCover(t *testing.
 	m.browse.playlistsLoading = true
 
 	nextModel, _ := m.handlePlaylistsMsg(playlistsMsg{
-		offset: 0,
-		limit:  2,
 		items: []spotify.PlaylistSummary{
 			{ID: "p1", Name: "playlist", Kind: spotify.ContextKindPlaylist, ImageURL: "u-playlist"},
 			{ID: "a1", Name: "album", Kind: spotify.ContextKindAlbum, ImageURL: "u-album"},
 		},
-		hasMore: false,
 	})
 	got := nextModel.(model)
 	if !hasInflightURL(got.ui.imgs, "u-playlist") {

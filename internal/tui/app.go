@@ -10,7 +10,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"orpheus/internal/cache"
 	"orpheus/internal/config"
 	"orpheus/internal/librespot"
 	"orpheus/internal/loader"
@@ -23,11 +22,6 @@ const (
 	tabPlaylists                  tab = "playlists"
 	tabAlbums                     tab = "albums"
 	tabPlayer                     tab = "player"
-	playlistItemPageSize              = 100
-	queuePollEvery                    = 2
-	playlistLoadBatchSize             = 25
-	playlistLoadMax                   = 500
-	playlistItemPreloadMax            = 500
 	coverPreloadWindow                = 20
 	imageLoadRetryMax                 = 4
 	coverRefreshEvery                 = 15
@@ -38,7 +32,6 @@ const (
 	coverQueueDrainBatch              = 20
 	kittyProtocolFallbackFailures     = 8
 	kittyProtocolRecoveryStreak       = 8
-	trackMetadataTTL                  = 2 * time.Hour
 	uiTickInterval                    = 200 * time.Millisecond
 	// 8s at the 200ms tick interval before a pending popup load gives up.
 	trackPopupLoadTimeoutTicks = 40
@@ -46,9 +39,6 @@ const (
 	volSeekDebounceInterval    = 50 * time.Millisecond
 	volSettleWindow            = 3 * time.Second
 	seekSettleWindow           = 1200 * time.Millisecond
-	reconcileActionWindow      = 2 * time.Second
-	actionFastPollWindow       = 3 * time.Second
-	idlePollBackoffMax         = 5 * time.Second
 )
 
 type playlistItem struct {
@@ -128,7 +118,7 @@ func newTrackPopupDelegate() cachedDelegate {
 	return cachedDelegate{DefaultDelegate: d, cache: c}
 }
 
-func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- librespot.ContextTracksResult, ldr *loader.BackgroundLoader) model {
+func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- librespot.ContextTracksResult, ldr *loader.BackgroundLoader) model {
 	state, resolvedPreset := LoadTheme(cfg.Theme, cfg.ThemePath)
 	applyTheme(state)
 	browser := newBrowseList()
@@ -137,7 +127,6 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 	m := model{
 		ctx:             ctx,
 		catalog:         catalog,
-		service:         service,
 		deviceName:      cfg.DeviceName,
 		tuiCmdCh:        tuiCmdCh,
 		contextTracksCh: contextTracksCh,
@@ -151,18 +140,14 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 			songChangeInFlight:  &atomic.Bool{},
 		},
 		browse: browseModel{
-			preloadedItemIDs: make(map[string]struct{}),
-			trackCache:       cache.NewTTL[string, spotify.QueueItem](4096, trackMetadataTTL),
 			playlistList:     browser,
 			albumList:        albums,
 			playlistsLoading: true,
 		},
 		ui: uiModel{
-			pollInterval:           cfg.PollInterval,
 			activeTab:              tabPlaylists,
 			imgs:                   newImgCache(),
 			spinner:                themedSpinner(),
-			statusQueueCache:       newStatusQueueSnapshotCache(),
 			startupCoverBoostTicks: 40,
 			cover:                  newCoverManager(),
 			nerdFonts:              cfg.NerdFonts,
@@ -171,6 +156,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, service *spo
 		},
 	}
 
+	m.syncListFilterBinding()
 	return m
 }
 
@@ -210,10 +196,10 @@ func (m *model) normalizeLibraryPagination() {
 	normalizeListPagination(&m.browse.albumList)
 }
 
-func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.Service, cfg config.Config, tuiCmdCh chan librespot.TUICommand, playbackStateCh <-chan *librespot.PlaybackStateUpdate) error {
+func Run(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.Config, tuiCmdCh chan librespot.TUICommand, playbackStateCh <-chan *librespot.PlaybackStateUpdate) error {
 	contextTracksCh := make(chan librespot.ContextTracksResult, 1)
 	ldr := loader.New(ctx, 128, NewTUIExecutor(ctx, catalog))
-	m := newModel(ctx, catalog, service, cfg, tuiCmdCh, contextTracksCh, ldr)
+	m := newModel(ctx, catalog, cfg, tuiCmdCh, contextTracksCh, ldr)
 	// Match the terminal's own background (the padding around the grid)
 	// to the theme's page color for the session; restore on exit.
 	CaptureTerminalBG()
@@ -233,24 +219,13 @@ func Run(ctx context.Context, catalog spotify.PlaylistCatalog, service *spotify.
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		preloadLikedSongsArtCmd(m),
-		m.getCurrentUserIDCmd(),
-		m.pollCmd(true),
+		m.loadPlaylistsCmd(),
 		m.tickCmd(),
 	)
 }
 
 func keyMatches(msg tea.KeyMsg, b key.Binding) bool {
 	return key.Matches(msg, b)
-}
-
-func repeatModeString(repeatContext, repeatTrack bool) string {
-	if repeatTrack {
-		return "track"
-	}
-	if repeatContext {
-		return "context"
-	}
-	return "off"
 }
 
 func clampInt(v, lo, hi int) int {

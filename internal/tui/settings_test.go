@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -23,7 +22,6 @@ func newSettingsTestModel(t *testing.T) (model, string, string, string) {
 	configPath := filepath.Join(dir, "config.json")
 	cfg := config.Config{
 		DeviceName:        "orpheus",
-		PollInterval:      time.Second,
 		KeysPath:          keysPath,
 		Theme:             "default",
 		ThemePath:         themePath,
@@ -33,7 +31,7 @@ func newSettingsTestModel(t *testing.T) (model, string, string, string) {
 		AudioCacheEnabled: false,
 		AudioCacheSizeMB:  1024,
 	}
-	return newModel(context.Background(), nil, nil, cfg, nil, make(chan librespot.ContextTracksResult, 1), nil), keysPath, themePath, configPath
+	return newModel(context.Background(), nil, cfg, nil, make(chan librespot.ContextTracksResult, 1), nil), keysPath, themePath, configPath
 }
 
 func send(m model, msg tea.KeyMsg) model {

@@ -7,7 +7,6 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
-	"log/slog"
 	"strings"
 	"sync"
 
@@ -19,124 +18,87 @@ import (
 
 const playlistAPIPageSize = 50
 
-func (m model) loadPlaylistsCmd(offset, limit int) tea.Cmd {
+func (m model) loadPlaylistsCmd() tea.Cmd {
 	catalog := m.resolveCatalog()
 	if catalog == nil {
 		return nil
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	if limit <= 0 {
-		limit = playlistAPIPageSize
 	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, playlistPageRequestTimeout)
 		defer cancel()
-		if offset == 0 {
-			type plResult struct {
-				items []spotify.PlaylistSummary
-				err   error
-			}
-			type alResult struct {
-				items           []spotify.PlaylistSummary
-				albumsForbidden bool
-				err             error
-			}
-			plCh := make(chan plResult, 1)
-			alCh := make(chan alResult, 1)
+		type plResult struct {
+			items []spotify.PlaylistSummary
+			err   error
+		}
+		type alResult struct {
+			items           []spotify.PlaylistSummary
+			albumsForbidden bool
+			err             error
+		}
+		plCh := make(chan plResult, 1)
+		alCh := make(chan alResult, 1)
 
-			go func() {
-				var all []spotify.PlaylistSummary
-				playlistOffset := 0
-				playlistMore := true
-				for playlistMore {
-					page, err := catalog.ListUserPlaylistsPage(ctx, playlistOffset, playlistAPIPageSize)
-					if err != nil {
-						plCh <- plResult{err: err}
+		go func() {
+			var all []spotify.PlaylistSummary
+			playlistOffset := 0
+			playlistMore := true
+			for playlistMore {
+				page, err := catalog.ListUserPlaylistsPage(ctx, playlistOffset, playlistAPIPageSize)
+				if err != nil {
+					plCh <- plResult{err: err}
+					return
+				}
+				if len(page.Items) > 0 {
+					all = append(all, page.Items...)
+				}
+				playlistMore = page.HasMore && len(page.Items) > 0
+				playlistOffset = page.NextOffset
+			}
+			plCh <- plResult{items: all}
+		}()
+
+		go func() {
+			var all []spotify.PlaylistSummary
+			albumOffset := 0
+			albumMore := true
+			albumsForbidden := false
+			for albumMore {
+				page, err := catalog.ListSavedAlbumsPage(ctx, albumOffset, playlistAPIPageSize)
+				if err != nil {
+					if spotify.IsForbidden(err) {
+						albumsForbidden = true
+						albumMore = false
+					} else {
+						alCh <- alResult{err: err}
 						return
 					}
+				} else {
 					if len(page.Items) > 0 {
 						all = append(all, page.Items...)
 					}
-					playlistMore = page.HasMore && len(page.Items) > 0
-					playlistOffset = page.NextOffset
+					albumMore = page.HasMore && len(page.Items) > 0
+					albumOffset = page.NextOffset
 				}
-				plCh <- plResult{items: all}
-			}()
-
-			go func() {
-				var all []spotify.PlaylistSummary
-				albumOffset := 0
-				albumMore := true
-				albumsForbidden := false
-				for albumMore {
-					page, err := catalog.ListSavedAlbumsPage(ctx, albumOffset, playlistAPIPageSize)
-					if err != nil {
-						if spotify.IsForbidden(err) {
-							albumsForbidden = true
-							albumMore = false
-						} else {
-							alCh <- alResult{err: err}
-							return
-						}
-					} else {
-						if len(page.Items) > 0 {
-							all = append(all, page.Items...)
-						}
-						albumMore = page.HasMore && len(page.Items) > 0
-						albumOffset = page.NextOffset
-					}
-				}
-				alCh <- alResult{items: all, albumsForbidden: albumsForbidden}
-			}()
-
-			pr := <-plCh
-			if pr.err != nil {
-				return playlistsMsg{offset: 0, limit: limit, err: pr.err}
 			}
-			ar := <-alCh
-			if ar.err != nil {
-				return playlistsMsg{offset: 0, limit: limit, err: ar.err}
-			}
+			alCh <- alResult{items: all, albumsForbidden: albumsForbidden}
+		}()
 
-			all := make([]spotify.PlaylistSummary, 0, len(pr.items)+len(ar.items))
-			all = append(all, pr.items...)
-			all = append(all, ar.items...)
-			return playlistsMsg{
-				items:           all,
-				offset:          0,
-				limit:           len(all),
-				hasMore:         false,
-				albumsForbidden: ar.albumsForbidden,
-			}
+		pr := <-plCh
+		if pr.err != nil {
+			return playlistsMsg{err: pr.err}
 		}
-		page, err := catalog.ListUserPlaylistsPage(ctx, offset, limit)
-		if err != nil {
-			return playlistsMsg{offset: offset, limit: limit, err: err}
+		ar := <-alCh
+		if ar.err != nil {
+			return playlistsMsg{err: ar.err}
 		}
+
+		all := make([]spotify.PlaylistSummary, 0, len(pr.items)+len(ar.items))
+		all = append(all, pr.items...)
+		all = append(all, ar.items...)
 		return playlistsMsg{
-			items:   page.Items,
-			offset:  offset,
-			limit:   limit,
-			hasMore: page.HasMore,
+			items:           all,
+			albumsForbidden: ar.albumsForbidden,
 		}
-	}
-}
-
-func (m model) getCurrentUserIDCmd() tea.Cmd {
-	catalog := m.resolveCatalog()
-	if catalog == nil {
-		return nil
-	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, catalogRequestTimeout)
-		defer cancel()
-		id, err := catalog.CurrentUserID(ctx)
-		if err != nil {
-			return currentUserIDMsg{err: err}
-		}
-		return currentUserIDMsg{userID: id}
 	}
 }
 
@@ -199,118 +161,6 @@ func (m *model) loadImageCmd(url string, priority bool) tea.Cmd {
 		}
 		cache.preRenderCovers(url, coverSizes)
 		return imageLoadedMsg{url: url}
-	}
-}
-
-func (m model) loadPlaylistItemsCmd(playlistID string, offset int, token int) tea.Cmd {
-	catalog := m.resolveCatalog()
-	if catalog == nil {
-		return nil
-	}
-	if playlistID == "" || offset < 0 {
-		return nil
-	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, playlistItemRequestTimeout)
-		defer cancel()
-		if offset == 0 {
-			first, err := catalog.ListPlaylistItemsPage(ctx, playlistID, 0, playlistItemPageSize)
-			if err != nil {
-				return playlistItemsMsg{playlistID: playlistID, token: token, err: err}
-			}
-			all := append([]string(nil), first.ItemIDs...)
-			allInfos := append([]spotify.QueueItem(nil), first.ItemInfos...)
-
-			if !first.HasMore || first.NextOffset <= 0 || len(all) >= playlistItemPreloadMax {
-				return playlistItemsMsg{
-					playlistID: playlistID,
-					itemIDs:    all,
-					itemInfos:  allInfos,
-					nextOffset: len(all),
-					hasMore:    false,
-					token:      token,
-				}
-			}
-
-			type pageResult struct {
-				idx  int
-				page *spotify.PlaylistItemsPage
-				err  error
-			}
-			pageStart := first.NextOffset
-			var pageOffsets []int
-			for off := pageStart; off < playlistItemPreloadMax; off += playlistItemPageSize {
-				pageOffsets = append(pageOffsets, off)
-			}
-			results := make([]pageResult, len(pageOffsets))
-			resCh := make(chan pageResult, len(pageOffsets))
-			var wg sync.WaitGroup
-			for i, off := range pageOffsets {
-				wg.Add(1)
-				go func(idx, pageOff int) {
-					defer wg.Done()
-					limit := min(playlistItemPageSize, playlistItemPreloadMax-pageOff)
-					pg, pErr := catalog.ListPlaylistItemsPage(ctx, playlistID, pageOff, limit)
-					resCh <- pageResult{idx: idx, page: pg, err: pErr}
-				}(i, off)
-			}
-			wg.Wait()
-			close(resCh)
-			for r := range resCh {
-				results[r.idx] = r
-			}
-
-			lastPageHasMore := false
-			for _, r := range results {
-				if r.err != nil {
-					slog.Warn("playlist preload page failed", "error", r.err)
-					break
-				}
-				if r.page == nil {
-					break
-				}
-				all = append(all, r.page.ItemIDs...)
-				allInfos = append(allInfos, r.page.ItemInfos...)
-				lastPageHasMore = r.page.HasMore
-				if !r.page.HasMore {
-					break
-				}
-			}
-			// The preload cap is not the playlist end: report the truncated
-			// boundary so the incremental loader can continue past it.
-			return playlistItemsMsg{
-				playlistID: playlistID,
-				itemIDs:    all,
-				itemInfos:  allInfos,
-				nextOffset: len(all),
-				hasMore:    lastPageHasMore && len(all) >= playlistItemPreloadMax,
-				token:      token,
-			}
-		}
-		if offset >= playlistItemPreloadMax {
-			return playlistItemsMsg{
-				playlistID: playlistID,
-				itemIDs:    nil,
-				nextOffset: offset,
-				hasMore:    false,
-				token:      token,
-			}
-		}
-		limit := min(playlistItemPageSize, playlistItemPreloadMax-offset)
-		page, err := catalog.ListPlaylistItemsPage(ctx, playlistID, offset, limit)
-		if err != nil {
-			return playlistItemsMsg{playlistID: playlistID, token: token, err: err}
-		}
-		nextOffset := min(page.NextOffset, playlistItemPreloadMax)
-		hasMore := page.HasMore && nextOffset < playlistItemPreloadMax
-		return playlistItemsMsg{
-			playlistID: playlistID,
-			itemIDs:    page.ItemIDs,
-			itemInfos:  page.ItemInfos,
-			nextOffset: nextOffset,
-			hasMore:    hasMore,
-			token:      token,
-		}
 	}
 }
 

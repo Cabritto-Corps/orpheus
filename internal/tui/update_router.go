@@ -16,14 +16,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connectionLostMsg:
 		m.transport.playbackErr = msg.err
 		return m, nil
-	case pollMsg:
-		return m.handlePollMsg(msg)
 	case playlistsMsg:
 		return m.handlePlaylistsMsg(msg)
-	case currentUserIDMsg:
-		return m.handleCurrentUserIDMsg(msg)
-	case playlistItemsMsg:
-		return m.handlePlaylistItemsMsg(msg)
 	case navDebounceMsg:
 		return m.handleNavDebounceMsg(msg)
 	case imageLoadedMsg:
@@ -36,10 +30,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleCoverImageURLsBatchResolvedMsg(msg)
 	case imagesBatchLoadedMsg:
 		return m.handleImagesBatchLoadedMsg(msg)
-	case actionReconcileMsg:
-		return m.handleActionReconcileMsg(msg)
-	case actionMsg:
-		return m.handleActionMsg(msg)
 	case volDebounceMsg:
 		return m.handleVolDebounceMsg(msg)
 	case seekDebounceMsg:

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"errors"
 	"time"
 
@@ -15,6 +14,8 @@ import (
 )
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// See syncListFilterBinding: the key-capture flow replaces m.ui.keys wholesale.
+	m.syncListFilterBinding()
 	k := m.ui.keys
 	filtering := m.isFiltering()
 
@@ -116,18 +117,17 @@ func (m model) handlePlaylistKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case keyMatches(msg, k.Refresh):
 		m.browse.playlistsLoading = true
-		m.browse.playlistsExhausted = false
 		m.browse.albumsForbidden = false
 		m.browse.playlistsErr = nil
 		m.browse.playlistsRetryCount = 0
-		return m, m.loadPlaylistsCmd(0, playlistLoadBatchSize)
+		return m, m.loadPlaylistsCmd()
 
 	case keyMatches(msg, k.Select):
 		sel, ok := m.browse.playlistList.SelectedItem().(playlistItem)
 		if !ok {
 			return m, nil
 		}
-		return m.selectAndPlayPlaylist(sel, "play-from-browser")
+		return m.selectAndPlayPlaylist(sel)
 	}
 
 	prevURL := selectedImageURLFromList(m.browse.playlistList)
@@ -161,12 +161,18 @@ func (m model) handleAlbumKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch {
+	case keyMatches(msg, k.Refresh):
+		m.browse.playlistsLoading = true
+		m.browse.albumsForbidden = false
+		m.browse.playlistsErr = nil
+		m.browse.playlistsRetryCount = 0
+		return m, m.loadPlaylistsCmd()
 	case keyMatches(msg, k.Select):
 		sel, ok := m.browse.albumList.SelectedItem().(playlistItem)
 		if !ok {
 			return m, nil
 		}
-		return m.selectAndPlayPlaylist(sel, "play-from-browser")
+		return m.selectAndPlayPlaylist(sel)
 	}
 
 	prevURL := selectedImageURLFromList(m.browse.albumList)
@@ -197,33 +203,34 @@ func (m *model) handleQueueKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
+	k := m.ui.keys
 	cursor := min(m.transport.queueCursor, len(q)-1)
-	switch msg.String() {
-	case "up":
+	switch {
+	case keyMatches(msg, k.QueueUp):
 		if cursor > 0 {
 			m.transport.queueCursor = cursor - 1
 		}
 		return nil
-	case "down":
+	case keyMatches(msg, k.QueueDown):
 		if cursor < len(q)-1 {
 			m.transport.queueCursor = cursor + 1
 		}
 		return nil
-	case "enter", "return":
+	case keyMatches(msg, k.QueueJump):
 		// Jump loads a track — same class as next/prev, so it must not
 		// fire while a transport transition is mid-flight.
 		if m.transport.transition.Pending() {
 			return nil
 		}
 		return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueJump, QueueIndex: cursor})
-	case "x", "d":
+	case keyMatches(msg, k.QueueRemove):
 		return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueRemove, QueueIndex: cursor})
-	case "[":
+	case keyMatches(msg, k.QueueMoveUp):
 		if cursor > 0 {
 			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueReorder, QueueIndex: cursor, QueueTargetIndex: cursor - 1})
 		}
 		return nil
-	case "]":
+	case keyMatches(msg, k.QueueMoveDown):
 		if cursor < len(q)-1 {
 			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueReorder, QueueIndex: cursor, QueueTargetIndex: cursor + 1})
 		}
@@ -231,6 +238,16 @@ func (m *model) handleQueueKey(msg tea.KeyMsg) tea.Cmd {
 	default:
 		return nil
 	}
+}
+
+// syncListFilterBinding points every list's search binding at the
+// configured filter key. Bubbles dispatches filtering off its own KeyMap,
+// which the repo never otherwise touches, so without this a keys.json
+// rebind of the search action would only change the help text.
+func (m *model) syncListFilterBinding() {
+	m.browse.playlistList.KeyMap.Filter = m.ui.keys.Filter
+	m.browse.albumList.KeyMap.Filter = m.ui.keys.Filter
+	m.ui.trackPopupList.KeyMap.Filter = m.ui.keys.Filter
 }
 
 func (m model) matchGlobalPlaybackKey(msg tea.KeyMsg) playbackInputKind {
@@ -267,8 +284,6 @@ func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	var action playbackInputKind
 	switch {
-	case keyMatches(msg, k.Refresh):
-		action = playbackInputRefresh
 	case keyMatches(msg, k.PlayPause):
 		action = playbackInputPlayPause
 	case keyMatches(msg, k.Next):
@@ -421,29 +436,12 @@ func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 		return m, m.sendTUICommandOrRetry(cmd)
 	}
 
-	cmds := []tea.Cmd{
-		m.actionCmd(func(ctx context.Context) error {
-			return m.service.PlayPlaylist(ctx, m.deviceName, m.ui.trackPopupURI)
-		}, "play-from-track"),
-	}
-	m.ui.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
-	return m, tea.Batch(cmds...)
+	return m, nil
 }
 
-func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model, tea.Cmd) {
+func (m model) selectAndPlayPlaylist(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.ui.activeTab = tabPlayer
 	m.transport.playbackErr = nil
-	isPlaylist := sel.summary.Kind != spotify.ContextKindAlbum
-	canReadTracks := isPlaylist && m.shouldLoadPlaylistItems() && m.canReadPlaylistTracks(sel.summary)
-	activeID := ""
-	ownerID := ""
-	collaborative := false
-	if isPlaylist {
-		activeID = sel.summary.ID
-		ownerID = sel.summary.OwnerID
-		collaborative = sel.summary.Collaborative
-	}
-	m.setActivePlaylist(activeID, canReadTracks, ownerID, collaborative)
 	if m.transport.status != nil {
 		m.transport.pendingContextFrom = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
 		m.transport.pendingContextFromAt = time.Now()
@@ -464,25 +462,11 @@ func (m model) selectAndPlayPlaylist(sel playlistItem, action string) (tea.Model
 			m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandPlayContext, URI: sel.summary.URI}),
 			m.loadImageCmd(sel.summary.ImageURL, true),
 		}
-		if canReadTracks {
-			m.browse.activePlaylistItemLoading = true
-			m.browse.activePlaylistLoadToken++
-			cmds = append(cmds, m.loadPlaylistItemsCmd(sel.summary.ID, 0, m.browse.activePlaylistLoadToken))
-		}
 		return m, tea.Batch(cmds...)
 	}
 	cmds := []tea.Cmd{
-		m.actionCmd(func(ctx context.Context) error {
-			return m.service.PlayPlaylist(ctx, m.deviceName, sel.summary.URI)
-		}, action),
 		m.loadImageCmd(sel.summary.ImageURL, true),
 	}
 	m.beginTransportTransition()
-	m.ui.actionFastPollUntil = time.Now().Add(actionFastPollWindow)
-	if canReadTracks {
-		m.browse.activePlaylistItemLoading = true
-		m.browse.activePlaylistLoadToken++
-		cmds = append(cmds, m.loadPlaylistItemsCmd(sel.summary.ID, 0, m.browse.activePlaylistLoadToken))
-	}
 	return m, tea.Batch(cmds...)
 }

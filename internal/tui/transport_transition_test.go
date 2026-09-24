@@ -12,12 +12,6 @@ func TestTransportTransitionIdleByDefault(t *testing.T) {
 	if tr.Pending() {
 		t.Fatal("expected idle transition to not be pending")
 	}
-	if tr.RecoveryPending() {
-		t.Fatal("expected no recovery pending when idle")
-	}
-	if tr.StuckCount() != 0 {
-		t.Fatalf("expected zero stuck count, got %d", tr.StuckCount())
-	}
 	if tr.FromTrack() != "" {
 		t.Fatalf("expected empty FromTrack, got %q", tr.FromTrack())
 	}
@@ -68,12 +62,6 @@ func TestTransportTransitionMaybeClearTrackChanged(t *testing.T) {
 	if tr.Pending() {
 		t.Fatal("expected pending cleared after TrackChanged")
 	}
-	if tr.RecoveryPending() {
-		t.Fatal("expected no recovery pending after TrackChanged")
-	}
-	if tr.StuckCount() != 0 {
-		t.Fatalf("expected stuck count unchanged, got %d", tr.StuckCount())
-	}
 }
 
 func TestTransportTransitionMaybeClearTrackPlaying(t *testing.T) {
@@ -89,9 +77,6 @@ func TestTransportTransitionMaybeClearTrackPlaying(t *testing.T) {
 	}
 	if tr.Pending() {
 		t.Fatal("expected pending cleared after TrackPlaying")
-	}
-	if tr.RecoveryPending() {
-		t.Fatal("expected no recovery pending after TrackPlaying")
 	}
 }
 
@@ -123,43 +108,20 @@ func TestTransportTransitionMaybeClearStuck(t *testing.T) {
 	if tr.Pending() {
 		t.Fatal("expected pending cleared after Stuck")
 	}
-	if !tr.RecoveryPending() {
-		t.Fatal("expected recovery pending after Stuck")
-	}
-	if tr.StuckCount() != 1 {
-		t.Fatalf("expected stuck count=1, got %d", tr.StuckCount())
-	}
 }
 
-func TestTransportTransitionStuckCountAccumulates(t *testing.T) {
+func TestTransportTransitionStuckLeavesNoRecoveryState(t *testing.T) {
 	var tr transportTransition
-	tr.Begin(time.Now(), "track-a")
-	tr.MaybeClear(&spotify.PlaybackStatus{TrackID: "track-a"},
-		time.Now().Add(transportTransitionStuckTimeout+time.Second))
-	tr.Begin(time.Now(), "track-b")
-	tr.MaybeClear(&spotify.PlaybackStatus{TrackID: "track-b"},
-		time.Now().Add(transportTransitionStuckTimeout+time.Second))
-	if tr.StuckCount() != 2 {
-		t.Fatalf("expected stuck count to accumulate to 2, got %d", tr.StuckCount())
+	start := time.Now()
+	tr.Begin(start, "track-1")
+	tr.MaybeClear(&spotify.PlaybackStatus{TrackID: "track-1", ProgressMS: 500},
+		start.Add(transportTransitionStuckTimeout+time.Second))
+	tr.Begin(time.Now(), "track-2")
+	if !tr.Pending() {
+		t.Fatal("expected pending after re-Begin")
 	}
-}
-
-func TestTransportTransitionConsumeRecoveryDrainsFlag(t *testing.T) {
-	var tr transportTransition
-	tr.Begin(time.Now(), "track-1")
-	tr.MaybeClear(&spotify.PlaybackStatus{TrackID: "track-1"},
-		time.Now().Add(transportTransitionStuckTimeout+time.Second))
-	if !tr.RecoveryPending() {
-		t.Fatal("expected recovery pending after stuck")
-	}
-	if !tr.ConsumeRecovery() {
-		t.Fatal("expected ConsumeRecovery to return true when flag set")
-	}
-	if tr.RecoveryPending() {
-		t.Fatal("expected recovery flag drained after ConsumeRecovery")
-	}
-	if tr.ConsumeRecovery() {
-		t.Fatal("expected ConsumeRecovery to return false when flag already consumed")
+	if tr.FromTrack() != "track-2" {
+		t.Fatalf("expected FromTrack=track-2 after re-Begin, got %q", tr.FromTrack())
 	}
 }
 
@@ -170,9 +132,6 @@ func TestTransportTransitionClearUnconditionallyResetsPending(t *testing.T) {
 	if tr.Pending() {
 		t.Fatal("expected Clear to clear pending state")
 	}
-	if tr.RecoveryPending() {
-		t.Fatal("expected Clear to not affect recovery flag (recovery is separate)")
-	}
 }
 
 func TestTransportTransitionBeginOverwritesPrevious(t *testing.T) {
@@ -180,9 +139,6 @@ func TestTransportTransitionBeginOverwritesPrevious(t *testing.T) {
 	tr.Begin(time.Now(), "track-1")
 	tr.MaybeClear(&spotify.PlaybackStatus{TrackID: "track-1"},
 		time.Now().Add(transportTransitionStuckTimeout+time.Second))
-	if tr.StuckCount() != 1 {
-		t.Fatal("expected one stuck before rebegin")
-	}
 	start2 := time.Now()
 	tr.Begin(start2, "track-2")
 	if !tr.Pending() {
@@ -193,9 +149,6 @@ func TestTransportTransitionBeginOverwritesPrevious(t *testing.T) {
 	}
 	if !tr.StartedAt().Equal(start2) {
 		t.Fatalf("expected StartedAt reset on re-Begin, got %v", tr.StartedAt())
-	}
-	if tr.StuckCount() != 1 {
-		t.Fatalf("expected stuck count preserved across re-Begin, got %d", tr.StuckCount())
 	}
 }
 
