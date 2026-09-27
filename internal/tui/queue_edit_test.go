@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"orpheus/internal/config"
@@ -13,7 +15,7 @@ import (
 )
 
 func newQueueKeyTestModel() model {
-	m := newModel(context.Background(), nil, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, nil)
+	m := newModel(context.Background(), nil, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
 	m.transport.status = &spotify.PlaybackStatus{TrackID: "spotify:track:playing"}
 	m.transport.queue = []spotify.QueueItem{
 		{ID: "spotify:track:a", Name: "A"},
@@ -89,5 +91,58 @@ func TestQueueCursorClampedOnQueueChange(t *testing.T) {
 	m.applyMergedQueue(m.transport.queue[:1], false, false, false)
 	if m.transport.queueCursor != 0 {
 		t.Fatalf("cursor = %d, want 0 after queue shrink", m.transport.queueCursor)
+	}
+}
+
+func TestQueueRemoveFollowsReboundKey(t *testing.T) {
+	m := newQueueKeyTestModel()
+	m.ui.keys.QueueRemove = key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "remove from queue"))
+	cmdCh := make(chan librespot.TUICommand, 2)
+	m.tuiCmdCh = cmdCh
+
+	next, _ := m.handlePlaybackKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("z")})
+	m = next.(model)
+	select {
+	case cmd := <-cmdCh:
+		if cmd.Kind != librespot.TUICommandQueueRemove || cmd.QueueIndex != 0 {
+			t.Fatalf("unexpected command %+v", cmd)
+		}
+	default:
+		t.Fatal("expected a remove command on the rebound key")
+	}
+
+	// The old literal no longer removes: dispatch follows the binding.
+	next, _ = m.handlePlaybackKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = next.(model)
+	select {
+	case cmd := <-cmdCh:
+		t.Fatalf("rebound remove must not fire on the old literal, got %+v", cmd)
+	default:
+	}
+}
+
+func TestFilterFollowsReboundKey(t *testing.T) {
+	m := newQueueKeyTestModel()
+	m.ui.activeTab = tabPlaylists
+	m.browse.playlistList.SetItems([]list.Item{
+		playlistItem{summary: spotify.PlaylistSummary{ID: "pl1", URI: "spotify:playlist:pl1", Name: "One"}},
+	})
+	m.ui.keys.Filter = key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "search"))
+
+	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	m = next.(model)
+	if m.browse.playlistList.FilterState() != list.Filtering {
+		t.Fatal("expected the rebound filter key to start filtering")
+	}
+
+	m2 := newQueueKeyTestModel()
+	m2.ui.activeTab = tabPlaylists
+	m2.browse.playlistList.SetItems([]list.Item{
+		playlistItem{summary: spotify.PlaylistSummary{ID: "pl1", URI: "spotify:playlist:pl1", Name: "One"}},
+	})
+	next, _ = m2.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	m2 = next.(model)
+	if m2.browse.playlistList.FilterState() == list.Filtering {
+		t.Fatal("unbound key must not start filtering with default bindings")
 	}
 }

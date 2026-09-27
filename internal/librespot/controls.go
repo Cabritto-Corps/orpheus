@@ -206,6 +206,9 @@ func (p *AppPlayer) prefetchNext(ctx context.Context) {
 		if p.secondaryStream != nil && p.secondaryStream.Is(id) {
 			continue
 		}
+		if p.isDeadTrack(id.Uri()) {
+			continue
+		}
 		if p.hasTransitionCachedStream(id) {
 			continue
 		}
@@ -493,15 +496,239 @@ func (p *AppPlayer) handlePlayerEvent(ev *player.Event) {
 			p.state.player.Options.RepeatingTrack
 		_, _ = p.runAdvanceNextTransition("player_not_playing", false, dropTransition)
 	case player.EventTypeStop:
-		p.emitPlaybackStateLight()
+		p.handleUnexpectedStop(ev.Source)
 	default:
 		p.runtime.Log.WithField("event_type", ev.Type).Error("received unhandled player event")
+	}
+}
+
+type stopRecoveryAction int
+
+const (
+	stopActionIgnore stopRecoveryAction = iota
+	stopActionPaused
+	stopActionReload
+	stopActionAdvance
+	stopActionGiveUp
+)
+
+// planStopRecovery decides how to answer a fork output-device Stop. The fork
+// emits Stop both for output failures and for our own Stop() call
+// (stopPlayback, which nils the primary first), so only a live, unpaused
+// primary means something broke mid-track. It records the attempt: each
+// reload/advance it returns counts toward the give-up cap. A committed load
+// of a different track clears the guard; a same-track commit keeps it, so
+// repeated failures on one track accumulate instead of looping reloads.
+func (p *AppPlayer) planStopRecovery() (stopRecoveryAction, string) {
+	if p.state == nil || p.state.player == nil || p.primaryStream == nil {
+		return stopActionIgnore, ""
+	}
+	if !p.state.player.IsPlaying && !p.state.player.IsPaused {
+		return stopActionIgnore, ""
+	}
+	if p.state.player.IsPaused {
+		return stopActionPaused, ""
+	}
+	uri := ""
+	if p.state.player.Track != nil {
+		uri = p.state.player.Track.Uri
+	}
+	if uri == "" {
+		return stopActionIgnore, ""
+	}
+	if p.stopRecoveryFailures >= endGuardMaxFailures {
+		return stopActionGiveUp, uri
+	}
+	if p.stopRecoveryURI != "" && p.stopRecoveryURI == uri {
+		p.stopRecoveryFailures++
+		return stopActionAdvance, uri
+	}
+	p.stopRecoveryURI = uri
+	p.stopRecoveryFailures++
+	return stopActionReload, uri
+}
+
+// resetStopRecoveryGuard clears the stop-recovery episode. Fresh,
+// user-driven loads (new contexts) call this directly; recovery and
+// advance loads go through maybeResetStopRecoveryGuard so failures on one
+// track accumulate toward the give-up cap.
+func (p *AppPlayer) resetStopRecoveryGuard() {
+	p.stopRecoveryURI = ""
+	p.stopRecoveryFailures = 0
+}
+
+// maybeResetStopRecoveryGuard clears the guard when the committed track
+// differs from the armed one. A same-track commit is the recovery's own
+// reload (or an advance that wrapped back to it) and must keep the guard,
+// or the cap resets on every success and one persistently failing track
+// reloads forever.
+func (p *AppPlayer) maybeResetStopRecoveryGuard(committedURI string) {
+	if p.stopRecoveryURI == "" || committedURI != p.stopRecoveryURI {
+		p.resetStopRecoveryGuard()
+	}
+}
+
+// isStaleStopSource reports whether a fork Stop names a source that is no
+// longer primary. The output loop reads ahead while the Run goroutine loads
+// the next track synchronously, so a Stop for the previous track can arrive
+// after the new track committed: without this check the recovery would
+// restart a healthy track from zero. A nil source (explicit stops and
+// untagged failures) is never stale.
+func (p *AppPlayer) isStaleStopSource(failedSource golibrespot.AudioSource) bool {
+	if failedSource == nil || p.primaryStream == nil || p.primaryStream.Source == nil {
+		return false
+	}
+	return p.primaryStream.Source != failedSource
+}
+
+// isUnplayableMediaError reports the typed permanent failures: the backend
+// will reject these tracks the same way on every attempt, so they are safe
+// to remember and skip without retry. Everything else (network, deadline,
+// 5xx, undecodable-but-retryable) stays retryable.
+func isUnplayableMediaError(err error) bool {
+	return errors.Is(err, golibrespot.ErrMediaRestricted) ||
+		errors.Is(err, golibrespot.ErrNoSupportedFormats)
+}
+
+// rememberDeadTrack records a permanently unplayable URI for the session.
+// Evicts oldest-first at the cap; duplicates and empty URIs are no-ops so
+// the order slice stays a set in insertion order.
+func (p *AppPlayer) rememberDeadTrack(uri string) {
+	if uri == "" {
+		return
+	}
+	if p.deadTracks == nil {
+		p.deadTracks = make(map[string]struct{})
+	}
+	if _, ok := p.deadTracks[uri]; ok {
+		return
+	}
+	if len(p.deadTrackOrder) >= deadTrackMemoryCap {
+		delete(p.deadTracks, p.deadTrackOrder[0])
+		p.deadTrackOrder = p.deadTrackOrder[1:]
+	}
+	p.deadTracks[uri] = struct{}{}
+	p.deadTrackOrder = append(p.deadTrackOrder, uri)
+}
+
+func (p *AppPlayer) isDeadTrack(uri string) bool {
+	if uri == "" {
+		return false
+	}
+	_, ok := p.deadTracks[uri]
+	return ok
+}
+
+func (p *AppPlayer) clearDeadTracks() {
+	p.deadTracks = nil
+	p.deadTrackOrder = nil
+}
+
+// handleUnexpectedStop answers a fork output-device Stop with a bounded,
+// visible recovery. Stop (unlike NotPlaying) advances nothing and surfaces
+// nothing, so without this the player sits silent until restart.
+//
+// Every path sends state before the error-only push: a state push resets the
+// TUI's playback error, while the error-only push sets it, so the error must
+// be the final send to survive.
+func (p *AppPlayer) handleUnexpectedStop(failedSource golibrespot.AudioSource) {
+	if p.isStaleStopSource(failedSource) {
+		p.runtime.Log.Debug("ignoring stale stop for a superseded source")
+		p.emitPlaybackStateLight()
+		return
+	}
+	action, uri := p.planStopRecovery()
+	switch action {
+	case stopActionPaused:
+		p.runtime.Log.Warn("output stopped while paused")
+		// Stay paused but mark the transport dead: the TUI derives its
+		// play/pause toggle from Playing, and only a not-playing state
+		// routes the next press to Resume instead of Pause. The output
+		// itself is gone (the fork closed it), so that play recreates
+		// it — see outputRecreateOnPlay.
+		p.outputRecreateOnPlay = true
+		p.setPlayerTransportState(false, false, true)
+		p.emitPlaybackStateLight()
+		p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "playback stopped — press play to retry"})
+	case stopActionReload:
+		p.reloadAfterOutputFailure(uri)
+	case stopActionAdvance:
+		p.advanceAfterOutputFailure()
+	case stopActionGiveUp:
+		p.runtime.Log.WithField("uri", uri).Error("giving up output-error recovery after repeated failures")
+		// Same transport-dead reasoning as the paused branch: report
+		// stopped so the toggle reaches Resume, and let play rebuild.
+		p.outputRecreateOnPlay = true
+		p.setPlayerTransportState(false, false, false)
+		p.emitPlaybackStateLight()
+		p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "playback stopped after repeated output errors — press play to retry"})
+	default:
+		p.emitPlaybackStateLight()
+	}
+}
+
+// reloadAfterOutputFailure rebuilds the current track from the last known
+// position after an output failure. One attempt per track; failure falls
+// through to the advance path instead of looping.
+func (p *AppPlayer) reloadAfterOutputFailure(uri string) {
+	p.runtime.Log.WithField("uri", uri).Warn("output device failed, reloading current track")
+	p.dropSuspectCachedStream(uri)
+	p.setPlayerPositionAtNow(p.currentPositionMs())
+	stopCtx, stopCancel := context.WithTimeout(p.ownerContext(), trackTransitionTimeout)
+	defer stopCancel()
+	if err := p.loadCurrentTrack(stopCtx, false, true); err != nil {
+		p.runtime.Log.WithError(err).Error("output-error reload failed, advancing to next track")
+		p.advanceAfterOutputFailure()
+		return
+	}
+	p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "output error — playback recovered"})
+}
+
+// advanceAfterOutputFailure skips past a track the output cannot play, using
+// the same force-next transition as a manual skip.
+func (p *AppPlayer) advanceAfterOutputFailure() {
+	advanced, err := p.runAdvanceNextTransition("output_error_recovery", true, true)
+	msg := "output error — skipped to next track"
+	switch {
+	case err != nil:
+		p.runtime.Log.WithError(err).Error("output-error advance failed")
+		msg = "output error — could not advance, press next to continue"
+	case !advanced:
+		// Contention and an exhausted queue are indistinguishable here;
+		// either way only a manual next helps.
+		msg = "output error — press next to continue"
+	}
+	p.emitPlaybackStateLight()
+	p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: msg})
+}
+
+// dropSuspectCachedStream discards the pre-failure cached copy of the track
+// being reloaded so recovery always builds a fresh stream. The cached copy
+// predates the output failure that just killed playback; re-promoting it
+// risks replaying the same failure instead of recovering.
+func (p *AppPlayer) dropSuspectCachedStream(uri string) {
+	if p.transitionCache == nil || uri == "" {
+		return
+	}
+	id, err := golibrespot.SpotifyIdFromUri(uri)
+	if err != nil {
+		return
+	}
+	if cached := p.takeTransitionCachedStream(*id); cached != nil {
+		p.runtime.Log.WithField("uri", uri).Debug("dropping pre-failure cached stream before reload")
+		closeStreamAsync(cached)
 	}
 }
 
 type skipToFunc func(*connectpb.ContextTrack) bool
 
 func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context, skipTo skipToFunc, paused, drop bool) error {
+	// A user-driven context load abandons any stop-recovery episode on the
+	// old context: the guard tracks consecutive failures on one track.
+	// Dead-track memory is context-scoped the same way: a new context has
+	// a new track set, so past restrictions must be re-proven there.
+	p.resetStopRecoveryGuard()
+	p.clearDeadTracks()
 	ctxTracks, err := tracks.NewTrackListFromContext(ctx, p.runtime.Log, p.sess.Spclient(), spotCtx, 0)
 	if err != nil {
 		return fmt.Errorf("failed creating track list: %w", err)
@@ -560,7 +787,7 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 		p.resolveContextQueueMetadata(metaCtx, allTracks)
 	}()
 	if err := p.loadCurrentTrack(ctx, paused, drop); err != nil {
-		if errors.Is(err, golibrespot.ErrMediaRestricted) || errors.Is(err, golibrespot.ErrNoSupportedFormats) {
+		if isUnplayableMediaError(err) {
 			p.runtime.Log.WithError(err).Info("first track unplayable, skipping to next")
 			if _, advErr := p.advanceNext(ctx, true, drop); advErr != nil {
 				return fmt.Errorf("failed loading current track (load context): %w", advErr)
@@ -648,6 +875,11 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 		return fmt.Errorf("failed setting stream for %s: %w", spotId, err)
 	}
 	setPrimaryDone = true
+	// The output is alive again on any committed load; a same-track
+	// commit keeps the stop-recovery guard so one failing track cannot
+	// loop reloads (see maybeResetStopRecoveryGuard).
+	p.outputRecreateOnPlay = false
+	p.maybeResetStopRecoveryGuard(spotId.Uri())
 	if err := p.player.SeekMs(trackPosition); err != nil {
 		p.runtime.Log.WithError(err).WithField("position_ms", trackPosition).Warn("seek after load failed")
 	}
@@ -805,6 +1037,12 @@ func (p *AppPlayer) play(ctx context.Context) error {
 	if p.primaryStream == nil {
 		return fmt.Errorf("no primary stream")
 	}
+	if p.outputRecreateOnPlay {
+		// The last stop closed the output device, and the fork answers
+		// Play with silent success when out == nil — a plain Play would
+		// report playing with no audio. Rebuild the output instead.
+		return p.retryPlaybackAfterOutputFailure()
+	}
 	seekPos := golibrespot.TrackPosition(p.state.player, 0)
 	seekPos = max(0, min(seekPos, int64(p.primaryStream.Media.Duration())))
 	if err := p.player.SeekMs(seekPos); err != nil {
@@ -819,6 +1057,29 @@ func (p *AppPlayer) play(ctx context.Context) error {
 	p.updateState()
 	p.schedulePrefetchNext()
 	p.emitPlaybackStateLight()
+	return nil
+}
+
+// retryPlaybackAfterOutputFailure rebuilds the output for an explicit play
+// press after an output failure. Unlike the automatic reload it never
+// advances on failure: the user asked for this track, so a failure stays
+// put and says so.
+func (p *AppPlayer) retryPlaybackAfterOutputFailure() error {
+	uri := ""
+	if p.state.player.Track != nil {
+		uri = p.state.player.Track.Uri
+	}
+	p.runtime.Log.WithField("uri", uri).Warn("recreating dead output for manual play retry")
+	p.dropSuspectCachedStream(uri)
+	p.setPlayerPositionAtNow(p.currentPositionMs())
+	retryCtx, retryCancel := context.WithTimeout(p.ownerContext(), trackTransitionTimeout)
+	defer retryCancel()
+	if err := p.loadCurrentTrack(retryCtx, false, true); err != nil {
+		p.runtime.Log.WithError(err).Error("manual play retry failed")
+		p.emitPlaybackStateLight()
+		p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "could not restart playback — press next to continue"})
+		return fmt.Errorf("failed restarting playback after output failure: %w", err)
+	}
 	return nil
 }
 
@@ -1025,23 +1286,36 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 	}
 	p.logAdvanceInvariants(forceNext, selection, beforeTrackID)
 
+	// Only real load attempts count toward the cap: tracks already proven
+	// dead this session are stepped over without a load and without
+	// burning an attempt, so a context with more dead tracks than the cap
+	// still reaches the live ones.
 	maxRetries := 10
-	for attempt := range maxRetries {
+	attempts := 0
+	for {
+		if p.isDeadTrack(uri) {
+			p.runtime.Log.WithField("uri", uri).Info("skipping known-dead track (no retry)")
+			uri, hasNextTrack = p.advanceToNextCandidate(ctx)
+			if !hasNextTrack {
+				return false, nil
+			}
+			continue
+		}
 		if err := p.loadCurrentTrackFromTransition(ctx, !hasNextTrack, drop, "advance next"); err != nil {
-			if errors.Is(err, golibrespot.ErrMediaRestricted) || errors.Is(err, golibrespot.ErrNoSupportedFormats) {
-				p.runtime.Log.WithError(err).Infof("skipping unplayable media (attempt %d/%d): %s", attempt+1, maxRetries, uri)
-				selection = p.selectAdvanceNextTarget(ctx, true)
-				if !selection.hasNextTrack {
-					p.runtime.Log.Warnf("no more tracks after skipping unplayable media")
+			if isUnplayableMediaError(err) {
+				p.rememberDeadTrack(uri)
+				attempts++
+				p.runtime.Log.WithError(err).Infof("skipping unplayable media (attempt %d/%d): %s", attempts, maxRetries, uri)
+				if attempts >= maxRetries {
+					p.runtime.Log.Warnf("gave up advancing after %d unplayable tracks", maxRetries)
 					p.state.player.IsPlaying = false
 					p.state.player.IsPaused = false
 					p.state.player.IsBuffering = false
 					return false, nil
 				}
-				p.applyAdvanceNextSelection(ctx, selection, true)
-				hasNextTrack = selection.hasNextTrack
-				if p.state.player.Track != nil {
-					uri = p.state.player.Track.Uri
+				uri, hasNextTrack = p.advanceToNextCandidate(ctx)
+				if !hasNextTrack {
+					return false, nil
 				}
 				continue
 			}
@@ -1049,11 +1323,30 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 		}
 		return hasNextTrack, nil
 	}
-	p.runtime.Log.Warnf("gave up advancing after %d unplayable tracks", maxRetries)
-	p.state.player.IsPlaying = false
-	p.state.player.IsPaused = false
-	p.state.player.IsBuffering = false
-	return false, nil
+}
+
+// advanceToNextCandidate moves the selection past the current track and
+// applies it, returning the new current URI. It is the single shared step
+// for skipping dead and unplayable tracks so neither duplicates the
+// queue-exhaustion handling. A false return means the queue is exhausted
+// (the transport is already marked stopped); the attempt counter is
+// untouched, so callers decide separately what a skip costs.
+func (p *AppPlayer) advanceToNextCandidate(ctx context.Context) (string, bool) {
+	selection := p.selectAdvanceNextTarget(ctx, true)
+	if !selection.hasNextTrack {
+		p.runtime.Log.Warnf("no more tracks after skipping unplayable media")
+		p.state.player.IsPlaying = false
+		p.state.player.IsPaused = false
+		p.state.player.IsBuffering = false
+		return "", false
+	}
+	p.applyAdvanceNextSelection(ctx, selection, true)
+	hasNextTrack := selection.hasNextTrack
+	uri := ""
+	if p.state.player.Track != nil {
+		uri = p.state.player.Track.Uri
+	}
+	return uri, hasNextTrack
 }
 
 func (p *AppPlayer) apiVolume() uint32 {

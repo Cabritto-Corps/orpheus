@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"orpheus/internal/config"
 	"orpheus/internal/spotify"
@@ -36,7 +37,34 @@ func (f fakeCatalog) ResolveContextImageURL(_ context.Context, _ string, _ strin
 	return "", nil
 }
 
-func (f fakeCatalog) CurrentUserID(_ context.Context) (string, error) { return "u", nil }
+func TestInitBootstrapsLibraryLoad(t *testing.T) {
+	catalog := fakeCatalog{
+		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Items: nil, Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+		},
+		albums: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Items: nil, Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+		},
+	}
+	m := newModel(context.Background(), catalog, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
+	msg := m.Init()()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected Init to return a batch, got %T", msg)
+	}
+	found := false
+	for _, cmd := range batch {
+		if cmd == nil {
+			continue
+		}
+		if _, ok := cmd().(playlistsMsg); ok {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected Init to bootstrap a library load")
+	}
+}
 
 func TestLoadPlaylistsCmdInitialInterleavesAlbums(t *testing.T) {
 	const totalPerKind = playlistAPIPageSize + 10
@@ -72,8 +100,8 @@ func TestLoadPlaylistsCmdInitialInterleavesAlbums(t *testing.T) {
 			return &spotify.PlaylistPage{Items: items, Offset: offset, Limit: limit, NextOffset: offset + len(items), HasMore: offset+len(items) < totalPerKind}, nil
 		},
 	}
-	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, nil)
-	msg, ok := m.loadPlaylistsCmd(0, playlistLoadBatchSize)().(playlistsMsg)
+	m := newModel(context.Background(), catalog, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
+	msg, ok := m.loadPlaylistsCmd()().(playlistsMsg)
 	if !ok {
 		t.Fatalf("expected playlistsMsg")
 	}
@@ -109,8 +137,8 @@ func TestLoadPlaylistsCmdInitialAlbumsForbiddenSetsHintFlag(t *testing.T) {
 			return nil, errors.New("forbidden")
 		},
 	}
-	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, nil)
-	msg, ok := m.loadPlaylistsCmd(0, playlistLoadBatchSize)().(playlistsMsg)
+	m := newModel(context.Background(), catalog, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
+	msg, ok := m.loadPlaylistsCmd()().(playlistsMsg)
 	if !ok {
 		t.Fatalf("expected playlistsMsg")
 	}
@@ -122,8 +150,9 @@ func TestLoadPlaylistsCmdInitialAlbumsForbiddenSetsHintFlag(t *testing.T) {
 	}
 }
 
-func TestLoadPlaylistsCmdInitialLoadsBeyondPlaylistLoadMax(t *testing.T) {
-	const totalPlaylists = playlistLoadMax + 25
+func TestLoadPlaylistsCmdInitialLoadIsUncapped(t *testing.T) {
+	// The library loads eagerly in one shot by design; there is no page cap.
+	const totalPlaylists = 525
 	catalog := fakeCatalog{
 		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
 			if offset >= totalPlaylists {
@@ -150,8 +179,8 @@ func TestLoadPlaylistsCmdInitialLoadsBeyondPlaylistLoadMax(t *testing.T) {
 			return &spotify.PlaylistPage{Items: nil, Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 		},
 	}
-	m := newModel(context.Background(), catalog, nil, config.Config{DeviceName: "orpheus", PollInterval: time.Second}, nil, nil, nil)
-	msg, ok := m.loadPlaylistsCmd(0, playlistLoadBatchSize)().(playlistsMsg)
+	m := newModel(context.Background(), catalog, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
+	msg, ok := m.loadPlaylistsCmd()().(playlistsMsg)
 	if !ok {
 		t.Fatalf("expected playlistsMsg")
 	}
@@ -160,5 +189,31 @@ func TestLoadPlaylistsCmdInitialLoadsBeyondPlaylistLoadMax(t *testing.T) {
 	}
 	if len(msg.items) != totalPlaylists {
 		t.Fatalf("expected %d items, got %d", totalPlaylists, len(msg.items))
+	}
+}
+
+func TestAlbumTabRefreshReloadsLibrary(t *testing.T) {
+	catalog := fakeCatalog{
+		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Items: nil, Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+		},
+		albums: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Items: nil, Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+		},
+	}
+	m := newModel(context.Background(), catalog, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
+	m.ui.activeTab = tabAlbums
+	m.browse.playlistsErr = errors.New("boom")
+
+	next, cmd := m.handleAlbumKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m = next.(model)
+	if !m.browse.playlistsLoading {
+		t.Fatal("expected refresh to restart the library load")
+	}
+	if m.browse.playlistsErr != nil {
+		t.Fatal("expected refresh to clear the library error")
+	}
+	if cmd == nil {
+		t.Fatal("expected refresh to issue a library load command")
 	}
 }

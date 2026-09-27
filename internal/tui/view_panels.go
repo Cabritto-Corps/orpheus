@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	golibrespot "github.com/elxgy/go-librespot"
 
 	"orpheus/internal/spotify"
 )
@@ -213,10 +212,6 @@ func (m model) queuePanel(w, h int) string {
 	lines := []string{label, divLine, colHeader, colDivider}
 
 	displayQueue := m.visibleQueue()
-	currentID := ""
-	if m.transport.status != nil {
-		currentID = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
-	}
 
 	if m.transport.status == nil {
 		lines = append(lines, styleDimmed.Render("  nothing playing"))
@@ -237,7 +232,7 @@ func (m model) queuePanel(w, h int) string {
 		for i := range window {
 			qi := start + i
 			q := displayQueue[qi]
-			row := grid.row(w, qi+1, q.Name, q.Artist, q.DurationMS, currentID != "" && golibrespot.NormalizeSpotifyId(q.ID) == currentID, qi == cursor)
+			row := grid.row(w, qi+1, q.Name, q.Artist, q.DurationMS, qi == cursor)
 			lines = append(lines, row)
 		}
 
@@ -354,33 +349,29 @@ func (m model) placeholderArt(cols, rows int) string {
 }
 
 // queueGrid is the shared column layout for the up-next panel's header and
-// rows: one reserved marker gutter, a right-aligned index, flexible
-// title/artist columns and a right-aligned duration, all inside the panel
-// width. Header and rows come from the same constants so the grid aligns.
+// rows: a right-aligned index, flexible title/artist columns and a
+// right-aligned duration, all inside the panel width. Header and rows come
+// from the same constants so the grid aligns.
 type queueGrid struct {
 	lead    int
 	idxW    int
 	titleW  int
 	artistW int
 	durW    int
-	markerW int
 }
 
 func queueGridFor(w int) queueGrid {
 	g := queueGrid{lead: 1, idxW: 4, durW: 8}
-	// A reserved marker column keeps the now-playing glyph from overflowing
-	// the padded row and pushing sibling content off-panel.
-	g.markerW = 3
-	g.durW = min(g.durW, max(4, (w-9-g.markerW)/6))
-	budget := w - g.lead - g.idxW - 1 - 2 - 1 - g.durW - g.markerW // title+artist
+	g.durW = min(g.durW, max(4, (w-9)/6))
+	budget := w - g.lead - g.idxW - 1 - 2 - 1 - g.durW // title+artist
 	g.artistW = min(min(20, max(6, budget*2/5)), max(0, budget-4))
 	g.titleW = max(4, budget-g.artistW)
 	if budget < 8 {
 		g.titleW = max(4, budget)
 		g.artistW = 0
 	}
-	if g.lead+g.idxW+1+g.titleW+2+g.artistW+1+g.durW+g.markerW > w {
-		g.titleW = max(4, g.titleW-(g.lead+g.idxW+1+g.titleW+2+g.artistW+1+g.durW+g.markerW-w))
+	if g.lead+g.idxW+1+g.titleW+2+g.artistW+1+g.durW > w {
+		g.titleW = max(4, g.titleW-(g.lead+g.idxW+1+g.titleW+2+g.artistW+1+g.durW-w))
 	}
 	return g
 }
@@ -392,13 +383,12 @@ func (g queueGrid) header() string {
 		b.WriteString("  " + styleQueueHeader.Render(padCell("Artist", g.artistW)))
 	}
 	b.WriteString(" " + styleQueueHeader.Render(alignRight("Len", g.durW)))
-	b.WriteString(strings.Repeat(" ", g.markerW))
 	return b.String()
 }
 
 // row renders one queue row: unstyled cells padded to the grid, then exactly
 // one style applied over the whole padded row (single-owner selection).
-func (g queueGrid) row(w, num int, title, artist string, durMS int, playing, selected bool) string {
+func (g queueGrid) row(w, num int, title, artist string, durMS int, selected bool) string {
 	name := truncate(title, g.titleW)
 	artist = truncate(artist, g.artistW)
 	dur := ""
@@ -417,17 +407,6 @@ func (g queueGrid) row(w, num int, title, artist string, durMS int, playing, sel
 	}
 	b.WriteString(" ")
 	b.WriteString(alignRight(dur, g.durW))
-	if g.markerW > 0 {
-		if playing {
-			if glyph := themeNowPlayingGlyph(); glyph != "" {
-				b.WriteString(" " + glyph + " ")
-			} else {
-				b.WriteString("   ")
-			}
-		} else {
-			b.WriteString("   ")
-		}
-	}
 
 	row := b.String()
 	if pad := w - lipgloss.Width(row); pad > 0 {
@@ -436,10 +415,9 @@ func (g queueGrid) row(w, num int, title, artist string, durMS int, playing, sel
 	switch {
 	case selected && w >= 40:
 		return styleQueueSelected.Render(row)
-	case playing:
-		return styleQueuePlaying.Render(row)
 	case selected:
-		return styleQueueCursor.Render(strings.TrimRight(row, " ") + " > ")
+		content := truncate(strings.TrimRight(row, " "), max(1, w-3))
+		return styleQueueCursor.Render(content + " > ")
 	default:
 		return styleQueueTrack.Render(row)
 	}

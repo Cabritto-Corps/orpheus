@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"log/slog"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,7 +13,6 @@ type commandExecutorState string
 
 const (
 	executorStateIdle              commandExecutorState = "idle"
-	executorStateAwaitingAction    commandExecutorState = "awaiting-action"
 	executorStateAwaitingTransport commandExecutorState = "awaiting-transport"
 	maxInputQueueSize                                   = 96
 	seekStepMS                                          = 5000
@@ -32,7 +30,6 @@ type playbackInput struct {
 }
 
 const (
-	playbackInputRefresh   playbackInputKind = "refresh"
 	playbackInputPlayPause playbackInputKind = "play-pause"
 	playbackInputNext      playbackInputKind = "next"
 	playbackInputPrev      playbackInputKind = "prev"
@@ -51,8 +48,6 @@ const (
 
 func (m *model) syncExecutorState() {
 	switch {
-	case m.transport.actionInFlight:
-		m.transport.executorState = executorStateAwaitingAction
 	case m.transport.transition.Pending():
 		m.transport.executorState = executorStateAwaitingTransport
 	default:
@@ -71,12 +66,6 @@ func (m *model) enqueuePlaybackInput(action playbackInputKind) {
 		m.dropQueuedByPredicate(isSeekAction)
 	}
 	if shouldDedupQueuedAction(action) && m.hasQueuedAction(action) {
-		return
-	}
-	if action == playbackInputRefresh && m.hasQueuedAction(action) {
-		return
-	}
-	if action == playbackInputRefresh && m.transport.executorState != executorStateIdle {
 		return
 	}
 	m.transport.inputQueue = append(m.transport.inputQueue, playbackInput{
@@ -119,26 +108,8 @@ func (m *model) pumpInputExecutor() tea.Cmd {
 	return nil
 }
 
-func (m *model) consumeTransportRecoveryCmd() tea.Cmd {
-	if m.transport.actionInFlight || !m.transport.transition.RecoveryPending() {
-		return nil
-	}
-	if !m.transport.transition.ConsumeRecovery() {
-		return nil
-	}
-	if m.tuiCmdCh != nil || m.service == nil {
-		return nil
-	}
-	return m.pollCmd(true)
-}
-
 func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) tea.Cmd {
 	switch action {
-	case playbackInputRefresh:
-		if m.tuiCmdCh != nil {
-			return nil
-		}
-		return m.pollCmd(true)
 	case playbackInputPlayPause:
 		if m.tuiCmdCh != nil {
 			kind := librespot.TUICommandResume
@@ -153,18 +124,7 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 				return nil
 			}
 		}
-		rollback := cloneStatus(m.transport.status)
-		shouldPlay := rollback == nil || !rollback.Playing
-		if m.transport.status != nil {
-			m.transport.status.Playing = shouldPlay
-		}
-		m.beginReconcileAction(reconcileActionWindow)
-		return m.actionWithReconcileCmd(func(ctx context.Context) error {
-			if shouldPlay {
-				return m.service.Play(ctx, m.deviceName)
-			}
-			return m.service.Pause(ctx, m.deviceName)
-		}, rollback)
+		return nil
 	case playbackInputNext:
 		if m.tuiCmdCh != nil {
 			if !m.trySendTransportSkip(librespot.TUICommandSkipNext) {
@@ -175,13 +135,7 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 			m.beginTransportTransition()
 			return nil
 		}
-		rollback := cloneStatus(m.transport.status)
-		m.applyOptimisticSkip(true)
-		m.beginTransportTransition()
-		m.beginReconcileAction(reconcileActionWindow)
-		return m.actionWithReconcileCmd(func(ctx context.Context) error {
-			return m.service.Next(ctx, m.deviceName)
-		}, rollback)
+		return nil
 	case playbackInputPrev:
 		if m.tuiCmdCh != nil {
 			if !m.trySendTransportSkip(librespot.TUICommandSkipPrev) {
@@ -192,13 +146,7 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 			m.beginTransportTransition()
 			return nil
 		}
-		rollback := cloneStatus(m.transport.status)
-		m.applyOptimisticSkip(false)
-		m.beginTransportTransition()
-		m.beginReconcileAction(reconcileActionWindow)
-		return m.actionWithReconcileCmd(func(ctx context.Context) error {
-			return m.service.Previous(ctx, m.deviceName)
-		}, rollback)
+		return nil
 	case playbackInputShuffle:
 		if m.tuiCmdCh != nil {
 			select {
@@ -207,21 +155,9 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 				m.requeueFront(action, retryCount)
 				return nil
 			}
-			m.clearPreloadedTracks()
 			return nil
 		}
-		rollback := cloneStatus(m.transport.status)
-		nextShuffle := true
-		if m.transport.status != nil {
-			nextShuffle = !m.transport.status.ShuffleState
-			m.transport.status.ShuffleState = nextShuffle
-		}
-		m.clearPreloadedTracks()
-		m.transport.stableQueueLen = len(m.transport.queue)
-		m.beginReconcileAction(0)
-		return m.actionWithReconcileCmd(func(ctx context.Context) error {
-			return m.service.Shuffle(ctx, m.deviceName, nextShuffle)
-		}, rollback)
+		return nil
 	case playbackInputLoop:
 		if m.transport.status == nil {
 			return nil
@@ -237,18 +173,7 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 			}
 			return nil
 		}
-		if m.service == nil {
-			return nil
-		}
-		rollback := cloneStatus(m.transport.status)
-		next := playbackdomain.NextRepeatTraversalOptions(playbackdomain.TraversalOptions{RepeatContext: m.transport.status.RepeatContext, RepeatTrack: m.transport.status.RepeatTrack})
-		m.transport.status.RepeatContext = next.RepeatContext
-		m.transport.status.RepeatTrack = next.RepeatTrack
-		m.beginReconcileAction(reconcileActionWindow)
-		state := repeatModeString(m.transport.status.RepeatContext, m.transport.status.RepeatTrack)
-		return m.actionWithReconcileCmd(func(ctx context.Context) error {
-			return m.service.SetRepeat(ctx, m.deviceName, state)
-		}, rollback)
+		return nil
 	case playbackInputVolUp:
 		if m.transport.status == nil {
 			return nil

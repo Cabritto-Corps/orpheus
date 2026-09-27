@@ -79,10 +79,6 @@ func (m model) View() string {
 		body = m.playbackScreenView()
 	}
 
-	// Three panels on the existing line divisions: the header band ends
-	// exactly at the tab underline, the middle and the footer share the
-	// page tone. Solid mode drops the band so the frame is one surface.
-	// paintPage assigns each line its background in a single pass.
 	parts := []string{header, tabBar, body, m.playerBarView()}
 	return paintPage(lipgloss.JoinVertical(lipgloss.Left, parts...), m.ui.width) + m.kittyOverlay()
 }

@@ -501,26 +501,27 @@ func (m model) settingsModalView() string {
 			modalRow("Crossfade", settingsCrossfadeLabel(&s)+crossfadeGauge, s.cursor == 3, modalW),
 			modalRow("Audio cache", settingsCacheLabel(&s)+cacheGauge, s.cursor == 4, modalW),
 		}
-		body := "\n" + lipgloss.JoinVertical(lipgloss.Left, rows...) + "\n"
-		body += "\n" + styleModalHint.Render(hintLine([]key.Binding{withDesc(m.ui.keys.Select, "change"), m.ui.keys.VolUp, m.ui.keys.VolDown}, modalW-modalContentInset)) + "\n"
+		var body strings.Builder
+		body.WriteString("\n" + lipgloss.JoinVertical(lipgloss.Left, rows...) + "\n")
+		body.WriteString("\n" + styleModalHint.Render(hintLine([]key.Binding{withDesc(m.ui.keys.Select, "change"), m.ui.keys.VolUp, m.ui.keys.VolDown}, modalW-modalContentInset)) + "\n")
 		if s.restartRequiredCrossfade {
-			body += styleError.Render("  crossfade applies on restart") + "\n"
+			body.WriteString(styleError.Render("  crossfade applies on restart") + "\n")
 		}
 		if s.restartRequiredCache {
-			body += styleError.Render("  cache applies on restart") + "\n"
+			body.WriteString(styleError.Render("  cache applies on restart") + "\n")
 		}
 		if s.saveErr != "" {
-			body += styleError.Render("  ⚠ "+truncate(s.saveErr, modalW-modalContentInset-2)) + "\n"
+			body.WriteString(styleError.Render("  ⚠ "+truncate(s.saveErr, modalW-modalContentInset-2)) + "\n")
 		}
 		for i, w := range config.Warnings() {
 			if i == 2 {
-				body += styleError.Render("  ⚠ more config warnings…") + "\n"
+				body.WriteString(styleError.Render("  ⚠ more config warnings…") + "\n")
 				break
 			}
-			body += styleError.Render("  ⚠ "+truncate(w, modalW-modalContentInset-2)) + "\n"
+			body.WriteString(styleError.Render("  ⚠ "+truncate(w, modalW-modalContentInset-2)) + "\n")
 		}
 		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"),
-			styleModalHint.Render(hintLine([]key.Binding{m.ui.keys.CloseModal}, modalW-modalContentInset)), body, modalW, innerH)
+			styleModalHint.Render(hintLine([]key.Binding{m.ui.keys.CloseModal}, modalW-modalContentInset)), body.String(), modalW, innerH)
 	}
 }
 

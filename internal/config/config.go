@@ -9,33 +9,29 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	SpotifyClientID      string
-	RedirectURI          string
-	Scopes               []string
-	DeviceName           string
-	DeviceResolutionMode string
-	AllowActiveFallback  bool
-	TokenPath            string
-	SettingsPath         string
-	KeysPath             string
-	Theme                string
-	ThemePath            string
-	EnvPath              string
-	PollInterval         time.Duration
-	NerdFonts            bool
-	OnSongChange         string
-	LogFile              string
-	AudioCacheEnabled    bool
-	AudioCacheSizeMB     int64
-	AudioCacheDir        string
-	Crossfade            bool
-	CrossfadeSeconds     float64
+	SpotifyClientID   string
+	RedirectURI       string
+	Scopes            []string
+	DeviceName        string
+	TokenPath         string
+	SettingsPath      string
+	KeysPath          string
+	Theme             string
+	ThemePath         string
+	EnvPath           string
+	NerdFonts         bool
+	OnSongChange      string
+	LogFile           string
+	AudioCacheEnabled bool
+	AudioCacheSizeMB  int64
+	AudioCacheDir     string
+	Crossfade         bool
+	CrossfadeSeconds  float64
 }
 
 func LoadFromEnv() (Config, error) {
@@ -43,27 +39,24 @@ func LoadFromEnv() (Config, error) {
 	loadEnvFile()
 
 	cfg := Config{
-		SpotifyClientID:      envAny("spotify_client_id", "SPOTIFY_CLIENT_ID"),
-		RedirectURI:          envDefault("spotify_redirect_uri", "http://127.0.0.1:8989/callback"),
-		Scopes:               splitCSV(envDefault("spotify_scopes", "streaming,user-read-playback-state,user-modify-playback-state,user-read-currently-playing,playlist-read-private,playlist-read-collaborative,user-library-read")),
-		DeviceName:           envDefault("spotify_device_name", "orpheus"),
-		DeviceResolutionMode: envDefault("orpheus_device_resolution_mode", "strict"),
-		AllowActiveFallback:  envBool("orpheus_allow_active_fallback", false),
-		TokenPath:            envDefault("orpheus_token_path", defaultTokenPath()),
-		SettingsPath:         envDefault("orpheus_config_file", defaultSettingsPath()),
-		KeysPath:             envDefault("orpheus_keys_file", defaultKeysPath()),
-		Theme:                envDefault("orpheus_theme", "default"),
-		ThemePath:            envDefault("orpheus_theme_file", defaultThemePath()),
-		EnvPath:              resolveEnvFilePath(),
-		PollInterval:         envDuration("orpheus_poll_interval", 1500*time.Millisecond),
-		NerdFonts:            resolveNerdFonts(os.Getenv("orpheus_nerd_fonts")),
-		OnSongChange:         envDefault("orpheus_on_song_change", ""),
-		LogFile:              envDefault("orpheus_log_file", defaultLogPath()),
-		AudioCacheEnabled:    envBool("orpheus_audio_cache_enabled", false),
-		AudioCacheSizeMB:     envInt64("orpheus_audio_cache_size_mb", 1024),
-		AudioCacheDir:        envDefault("orpheus_audio_cache_dir", ""),
-		Crossfade:            envBool("orpheus_crossfade", false),
-		CrossfadeSeconds:     envFloat64("orpheus_crossfade_seconds", 3),
+		SpotifyClientID:   envAny("spotify_client_id", "SPOTIFY_CLIENT_ID"),
+		RedirectURI:       envDefault("spotify_redirect_uri", "http://127.0.0.1:8989/callback"),
+		Scopes:            splitCSV(envDefault("spotify_scopes", "streaming,user-read-playback-state,user-modify-playback-state,user-read-currently-playing,playlist-read-private,playlist-read-collaborative,user-library-read")),
+		DeviceName:        envDefault("spotify_device_name", "orpheus"),
+		TokenPath:         envDefault("orpheus_token_path", defaultTokenPath()),
+		SettingsPath:      envDefault("orpheus_config_file", defaultSettingsPath()),
+		KeysPath:          envDefault("orpheus_keys_file", defaultKeysPath()),
+		Theme:             envDefault("orpheus_theme", "default"),
+		ThemePath:         envDefault("orpheus_theme_file", defaultThemePath()),
+		EnvPath:           resolveEnvFilePath(),
+		NerdFonts:         resolveNerdFonts(os.Getenv("orpheus_nerd_fonts")),
+		OnSongChange:      envDefault("orpheus_on_song_change", ""),
+		LogFile:           envDefault("orpheus_log_file", defaultLogPath()),
+		AudioCacheEnabled: envBool("orpheus_audio_cache_enabled", false),
+		AudioCacheSizeMB:  envInt64("orpheus_audio_cache_size_mb", 1024),
+		AudioCacheDir:     envDefault("orpheus_audio_cache_dir", ""),
+		Crossfade:         envBool("orpheus_crossfade", false),
+		CrossfadeSeconds:  envFloat64("orpheus_crossfade_seconds", 3),
 	}
 
 	ApplyAppSettings(&cfg, LoadAppSettings(cfg.SettingsPath))
@@ -91,14 +84,8 @@ func (c Config) Validate() error {
 	if c.DeviceName == "" {
 		errs = append(errs, errors.New("spotify_device_name must not be empty"))
 	}
-	if c.DeviceResolutionMode != "strict" && c.DeviceResolutionMode != "relaxed" {
-		errs = append(errs, errors.New("orpheus_device_resolution_mode must be strict or relaxed"))
-	}
 	if c.TokenPath == "" {
 		errs = append(errs, errors.New("orpheus_token_path must not be empty"))
-	}
-	if c.PollInterval <= 0 {
-		errs = append(errs, errors.New("orpheus_poll_interval must be > 0"))
 	}
 	if len(c.Scopes) == 0 {
 		errs = append(errs, errors.New("spotify_scopes must define at least one scope"))
@@ -192,19 +179,6 @@ func envInt64(key string, fallback int64) int64 {
 	if err != nil || v <= 0 {
 		warnConfigValue(key, raw)
 		slog.Warn("invalid integer value, using default", "key", key, "value", raw, "default", fallback)
-		return fallback
-	}
-	return v
-}
-
-func envDuration(key string, fallback time.Duration) time.Duration {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
-	}
-	v, err := time.ParseDuration(raw)
-	if err != nil {
-		slog.Warn("invalid duration value, using default", "key", key, "value", raw, "default", fallback)
 		return fallback
 	}
 	return v

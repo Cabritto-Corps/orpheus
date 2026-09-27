@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -117,10 +116,6 @@ func (m model) hasMissingLibraryImageURLs() bool {
 	return false
 }
 
-func (m model) isStaleStateFetchToken(token uint64) bool {
-	return token > 0 && token != m.ui.stateFetchToken
-}
-
 func (m *model) acceptPlaybackStateSeq(seq uint64) bool {
 	if seq == 0 {
 		return true
@@ -130,36 +125,6 @@ func (m *model) acceptPlaybackStateSeq(seq uint64) bool {
 	}
 	m.ui.lastPlaybackStateSeq = seq
 	return true
-}
-
-func (m *model) clearQueueOnTrackBoundary(prevTrackID, incomingTrackID string, queueFetched bool) {
-	if queueFetched {
-		return
-	}
-	if prevTrackID == "" || incomingTrackID == "" || incomingTrackID == prevTrackID {
-		return
-	}
-	m.transport.queue = nil
-	m.transport.queueHasMore = false
-	m.transport.stableQueueLen = 0
-}
-
-func (m *model) applyFetchedStatusAndQueue(prevTrackID string, status *spotify.PlaybackStatus, queue []spotify.QueueItem, queueFetched bool, queueHasMore bool, observedVol int) {
-	m.applyStatusSettleOverrides(status, observedVol)
-	incomingTrack := ""
-	if status != nil {
-		incomingTrack = golibrespot.NormalizeSpotifyId(status.TrackID)
-		if prevTrackID != "" && incomingTrack != "" && incomingTrack != prevTrackID {
-			m.transport.seekDebouncePending = -1
-			m.transport.seekSentTarget = -1
-		}
-	}
-	m.transport.status = status
-	m.maybeClearTransportTransition(m.transport.status)
-	m.clearQueueOnTrackBoundary(prevTrackID, incomingTrack, queueFetched)
-	if queueFetched && m.shouldApplyIncomingQueue(incomingTrack) {
-		m.applyMergedQueue(queue, queueHasMore, true, true)
-	}
 }
 
 func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd) {
@@ -212,144 +177,17 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	if msg.queueIncluded && m.shouldApplyIncomingQueue(nextTrackID) {
 		m.applyMergedQueue(msg.queue, msg.queueHasMore, true, true)
 	}
-	m.transport.status = mergeStatusFromPrevious(prevStatus, m.transport.queue, msg.status, m.browse.trackCache)
+	m.transport.status = mergeStatusFromPrevious(prevStatus, m.transport.queue, msg.status)
 	if m.transport.status != nil {
 		m.smoothApplyProgress(m.transport.status.ProgressMS)
 	}
 	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.transport.status, prevQueueHead, queueHeadTrackID(m.transport.queue))
-	m.maybeClearTransportTransition(m.transport.status)
 	m.transport.playbackErr = nil
+	m.maybeClearTransportTransition(m.transport.status)
 	m.fireOnSongChange(prevStatus, m.transport.status)
 	cmds := []tea.Cmd{}
 	if m.shouldEnsureAlbumImageLoad(prevStatus, m.transport.status) {
 		cmds = append(cmds, m.loadImageCmd(m.transport.status.AlbumImageURL, true))
-	}
-	if cmd := m.consumeTransportRecoveryCmd(); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-	if cmd := m.pumpInputExecutor(); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-	return m, tea.Batch(cmds...)
-}
-
-func (m model) handlePollMsg(msg pollMsg) (tea.Model, tea.Cmd) {
-	if m.isStaleStateFetchToken(msg.token) {
-		return m, nil
-	}
-	if msg.err != nil {
-		if errors.Is(msg.err, spotify.ErrNoActiveTrack) {
-			m.transport.status = nil
-			m.transport.interpolationSyncAt = time.Time{}
-			m.transport.interpolationProgressMS = 0
-			m.transport.queue = nil
-			m.transport.queueHasMore = false
-			m.transport.stableQueueLen = 0
-			m.transport.playbackErr = nil
-		} else {
-			m.transport.playbackErr = msg.err
-			slog.Error("poll status failed", "error", msg.err)
-		}
-		m.transport.transition.Clear()
-		m.syncExecutorState()
-		return m, m.pumpInputExecutor()
-	}
-	m.ui.lastPollTime = time.Now()
-	prevStatus := m.transport.status
-	prevQueueHead := queueHeadTrackID(m.transport.queue)
-	prevTrackID := ""
-	if m.transport.status != nil {
-		prevTrackID = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
-	}
-	incomingVol := -1
-	if msg.status != nil {
-		incomingVol = msg.status.Volume
-	}
-	m.applyFetchedStatusAndQueue(prevTrackID, msg.status, msg.queue, msg.queueFetched, false, incomingVol)
-	m.transport.playbackErr = nil
-	if msg.queueErr != nil {
-		m.transport.playbackErr = msg.queueErr
-		slog.Error("fetch queue failed", "error", msg.queueErr)
-	}
-	m.transport.status = mergeStatusFromPrevious(prevStatus, m.transport.queue, m.transport.status, m.browse.trackCache)
-	if m.transport.status != nil {
-		m.smoothApplyProgress(m.transport.status.ProgressMS)
-	}
-	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.transport.status, prevQueueHead, queueHeadTrackID(m.transport.queue))
-	m.fireOnSongChange(prevStatus, m.transport.status)
-
-	cmds := make([]tea.Cmd, 0, 3)
-	if m.shouldEnsureAlbumImageLoad(prevStatus, m.transport.status) {
-		cmds = append(cmds, m.loadImageCmd(m.transport.status.AlbumImageURL, true))
-	}
-	if msg.queueFetched {
-		if cmd := m.maybeLoadMorePlaylistItemsCmd(playlistItemPreloadMax); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	}
-	if cmd := m.consumeTransportRecoveryCmd(); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-	if cmd := m.pumpInputExecutor(); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-	return m, tea.Batch(cmds...)
-}
-
-func (m model) handleActionReconcileMsg(msg actionReconcileMsg) (tea.Model, tea.Cmd) {
-	if m.isStaleStateFetchToken(msg.token) {
-		return m, nil
-	}
-	m.transport.actionInFlight = false
-	m.syncExecutorState()
-	if msg.err != nil {
-		m.transport.transition.Clear()
-		m.syncExecutorState()
-		m.transport.playbackErr = msg.err
-		m.transport.seekSentTarget = -1
-		if m.transport.volDebouncePending < 0 {
-			m.transport.volSentTarget = -1
-		}
-		if msg.rollback != nil {
-			m.transport.status = msg.rollback
-			slog.Error("playback action failed", "error", msg.err)
-		} else {
-			slog.Info("reconcile failed", "error", msg.err)
-		}
-		return m, m.pumpInputExecutor()
-	}
-	if msg.status == nil {
-		return m, m.reconcileCmd()
-	}
-	m.transport.playbackErr = nil
-	m.ui.lastPollTime = time.Now()
-	prevStatus := m.transport.status
-	prevQueueHead := queueHeadTrackID(m.transport.queue)
-	prevTrackID := ""
-	if m.transport.status != nil {
-		prevTrackID = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
-	}
-	reconciledVol := -1
-	if msg.status != nil {
-		reconciledVol = msg.status.Volume
-	}
-	m.applyFetchedStatusAndQueue(prevTrackID, msg.status, msg.queue, msg.queueFetched, false, reconciledVol)
-	m.transport.status = mergeStatusFromPrevious(prevStatus, m.transport.queue, m.transport.status, m.browse.trackCache)
-	if m.transport.status != nil {
-		m.smoothApplyProgress(m.transport.status.ProgressMS)
-	}
-	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.transport.status, prevQueueHead, queueHeadTrackID(m.transport.queue))
-	cmds := make([]tea.Cmd, 0, 3)
-	if m.shouldEnsureAlbumImageLoad(prevStatus, m.transport.status) {
-		cmds = append(cmds, m.loadImageCmd(m.transport.status.AlbumImageURL, true))
-	}
-	if msg.queueFetched {
-		if cmd := m.maybeLoadMorePlaylistItemsCmd(playlistItemPreloadMax); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	}
-	if cmd := m.consumeTransportRecoveryCmd(); cmd != nil {
-		cmds = append(cmds, cmd)
 	}
 	if cmd := m.pumpInputExecutor(); cmd != nil {
 		cmds = append(cmds, cmd)
@@ -535,99 +373,8 @@ func (m model) visibleAlbumItems() []playlistItem {
 	return out
 }
 
-func (m *model) maybeLoadMorePlaylistsCmd(activeList list.Model) tea.Cmd {
-	if m.browse.playlistsLoading || m.browse.playlistsExhausted {
-		return nil
-	}
-	if activeList.FilterState() != list.Unfiltered {
-		return nil
-	}
-
-	items := m.browse.playlistList.Items()
-	if len(items) == 0 || len(items) >= playlistLoadMax {
-		if len(items) >= playlistLoadMax {
-			m.browse.playlistsExhausted = true
-		}
-		return nil
-	}
-
-	remaining := len(activeList.VisibleItems()) - activeList.Index() - 1
-	threshold := max(12, activeList.Paginator.PerPage)
-	if remaining > threshold {
-		return nil
-	}
-
-	nextOffset := len(items)
-	limit := min(playlistLoadBatchSize, playlistLoadMax-nextOffset)
-	if limit <= 0 {
-		m.browse.playlistsExhausted = true
-		return nil
-	}
-
-	m.browse.playlistsLoading = true
-	return m.loadPlaylistsCmd(nextOffset, limit)
-}
-
-func (m *model) setActivePlaylist(playlistID string, canReadTracks bool, ownerID string, collaborative bool) {
-	m.browse.activePlaylistID = playlistID
-	m.browse.activePlaylistOwnerID = ownerID
-	m.browse.activePlaylistCollaborative = collaborative
-	m.browse.activePlaylistItemIDs = nil
-	m.browse.activePlaylistItemNextOffset = 0
-	m.browse.activePlaylistItemHasMore = playlistID != "" && canReadTracks
-	m.browse.activePlaylistItemLoading = false
-	m.browse.playlistItemRetryCount = 0
-	if m.browse.preloadedItemIDs == nil {
-		m.browse.preloadedItemIDs = make(map[string]struct{})
-	}
-	for id := range m.browse.preloadedItemIDs {
-		delete(m.browse.preloadedItemIDs, id)
-	}
-	m.browse.trackCache.Clear()
-}
-
-func (m *model) maybeLoadMorePlaylistItemsCmd(limit int) tea.Cmd {
-	if !m.shouldLoadPlaylistItems() || limit <= 0 || m.browse.activePlaylistID == "" || !m.browse.activePlaylistItemHasMore || m.browse.activePlaylistItemLoading || m.transport.status == nil || m.transport.status.TrackID == "" {
-		return nil
-	}
-	currentNorm := golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
-	currentIndex := -1
-	for i, trackID := range m.browse.activePlaylistItemIDs {
-		if golibrespot.NormalizeSpotifyId(trackID) == currentNorm {
-			currentIndex = i
-			break
-		}
-	}
-	if currentIndex < 0 {
-		return nil
-	}
-	if currentIndex >= 0 && len(m.browse.activePlaylistItemIDs)-currentIndex-1 >= limit {
-		return nil
-	}
-	m.browse.activePlaylistItemLoading = true
-	m.browse.activePlaylistLoadToken++
-	return m.loadPlaylistItemsCmd(m.browse.activePlaylistID, m.browse.activePlaylistItemNextOffset, m.browse.activePlaylistLoadToken)
-}
-
-func (m model) canReadPlaylistTracks(pl spotify.PlaylistSummary) bool {
-	if m.browse.currentUserID == "" {
-		return false
-	}
-	return pl.OwnerID == m.browse.currentUserID || pl.Collaborative
-}
-
-func (m model) shouldLoadPlaylistItems() bool {
-	return m.service != nil
-}
-
 func (m model) resolveCatalog() spotify.PlaylistCatalog {
-	if m.catalog != nil {
-		return m.catalog
-	}
-	if m.service != nil {
-		return m.service
-	}
-	return nil
+	return m.catalog
 }
 
 func (m *model) fireOnSongChange(prev, next *spotify.PlaybackStatus) {

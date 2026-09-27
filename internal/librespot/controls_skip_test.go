@@ -235,3 +235,118 @@ func TestSkipNextEmitsStateWhenLoadFails(t *testing.T) {
 		t.Fatal("expected a playback state push so the TUI can leave the awaiting-transport state")
 	}
 }
+
+func TestDeadTrackMemoryBound(t *testing.T) {
+	p, _ := newStopRecoveryTestPlayer(t)
+
+	if p.isDeadTrack("spotify:track:0000000000000000000000") {
+		t.Fatal("empty memory must know nothing")
+	}
+	p.rememberDeadTrack("")
+	if p.isDeadTrack("") {
+		t.Fatal("empty URIs must never be recorded")
+	}
+
+	uri := "spotify:track:0000000000000000000000"
+	p.rememberDeadTrack(uri)
+	p.rememberDeadTrack(uri)
+	if !p.isDeadTrack(uri) {
+		t.Fatal("recorded URI must be dead")
+	}
+	if len(p.deadTrackOrder) != 1 {
+		t.Fatalf("duplicate records must not grow the order, got %d", len(p.deadTrackOrder))
+	}
+
+	for i := range deadTrackMemoryCap + 10 {
+		p.rememberDeadTrack("spotify:track:dead" + string(rune('a'+i%26)) + string(rune('a'+i/26)))
+	}
+	if len(p.deadTrackOrder) != deadTrackMemoryCap {
+		t.Fatalf("memory must stay capped at %d, got %d", deadTrackMemoryCap, len(p.deadTrackOrder))
+	}
+	if len(p.deadTracks) != deadTrackMemoryCap {
+		t.Fatalf("map and order must agree, got %d vs %d", len(p.deadTracks), len(p.deadTrackOrder))
+	}
+	if p.isDeadTrack(uri) {
+		t.Fatal("oldest entry must have been evicted past the cap")
+	}
+
+	p.clearDeadTracks()
+	if p.isDeadTrack("spotify:track:deadab") || len(p.deadTrackOrder) != 0 {
+		t.Fatal("clear must empty the memory")
+	}
+}
+
+func TestIsUnplayableMediaError(t *testing.T) {
+	if !isUnplayableMediaError(wrapForTest(t, golibrespot.ErrMediaRestricted)) {
+		t.Fatal("restricted media is permanently unplayable")
+	}
+	if !isUnplayableMediaError(wrapForTest(t, golibrespot.ErrNoSupportedFormats)) {
+		t.Fatal("unsupported formats are permanently unplayable")
+	}
+	if isUnplayableMediaError(context.DeadlineExceeded) {
+		t.Fatal("transient failures must stay retryable")
+	}
+	if isUnplayableMediaError(nil) {
+		t.Fatal("nil is not a failure")
+	}
+}
+
+func wrapForTest(t *testing.T, err error) error {
+	t.Helper()
+	return &testWrappingError{err: err}
+}
+
+type testWrappingError struct{ err error }
+
+func (e *testWrappingError) Error() string { return "wrapped: " + e.err.Error() }
+func (e *testWrappingError) Unwrap() error { return e.err }
+
+// A context with more dead tracks ahead than the skip cap must still reach
+// the live track: known-dead tracks are stepped over without a load attempt
+// and without burning skip attempts. Without the memory the loop gives up
+// after maxRetries and the live track never plays.
+func TestAdvanceNextSkipsKnownDeadWithoutBurningAttempts(t *testing.T) {
+	const liveIdx = 12
+	var uris []string
+	for i := 0; i <= liveIdx; i++ {
+		uris = append(uris, "spotify:track:40000000000000000000"+string([]byte{'0' + byte(i/10), '0' + byte(i%10)}))
+	}
+
+	p, _ := newSkipTestPlayer(t, newPipeBackedPlayer(t), uris)
+	current, _ := newSkipTestStream(t, uris[0], 30_000)
+	p.primaryStream = current
+	for i := 1; i <= liveIdx; i++ {
+		stream, _ := newSkipTestStream(t, uris[i], 30_000)
+		id, err := golibrespot.SpotifyIdFromUri(uris[i])
+		if err != nil {
+			t.Fatalf("parse uri: %v", err)
+		}
+		if !p.putTransitionCachedStream(*id, stream) {
+			t.Fatalf("seed cache for %s", uris[i])
+		}
+	}
+	// Eleven dead tracks ahead with a cap of ten skip attempts: only the
+	// no-burn memory can cross them.
+	for i := 1; i < liveIdx; i++ {
+		p.rememberDeadTrack(uris[i])
+	}
+
+	hasNext, err := p.advanceNext(context.Background(), true, false)
+	if err != nil {
+		t.Fatalf("advanceNext: %v", err)
+	}
+	if !hasNext {
+		t.Fatal("expected to reach the live track, not exhaust the queue")
+	}
+	if !p.state.player.IsPlaying {
+		t.Fatal("expected playback to continue on the live track, not give up")
+	}
+	if got := p.state.player.Track.Uri; got != uris[liveIdx] {
+		t.Fatalf("expected to land on %s, got %s", uris[liveIdx], got)
+	}
+	// The dead tracks were never loaded: their streams sit untouched.
+	id1, _ := golibrespot.SpotifyIdFromUri(uris[1])
+	if !p.hasTransitionCachedStream(*id1) {
+		t.Fatal("known-dead streams must not be promoted")
+	}
+}

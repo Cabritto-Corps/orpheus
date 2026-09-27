@@ -9,7 +9,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	golibrespot "github.com/elxgy/go-librespot"
 
-	"orpheus/internal/cache"
 	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
@@ -34,7 +33,7 @@ func TestMergeStatusFromPreviousUsesPreviousOnSameTrack(t *testing.T) {
 	}
 	next := &spotify.PlaybackStatus{TrackID: "same"}
 
-	merged := mergeStatusFromPrevious(prev, nil, next, nil)
+	merged := mergeStatusFromPrevious(prev, nil, next)
 	if merged.TrackName != "Prev Name" || merged.ArtistName != "Prev Artist" || merged.DurationMS != 12345 {
 		t.Fatalf("expected previous metadata to be reused on same track, got %+v", merged)
 	}
@@ -44,7 +43,7 @@ func TestMergeStatusFromPreviousUsesQueueFallback(t *testing.T) {
 	next := &spotify.PlaybackStatus{TrackID: "track-1"}
 	queue := []spotify.QueueItem{{ID: "track-1", Name: "Queue Name", Artist: "Queue Artist", DurationMS: 456}}
 
-	merged := mergeStatusFromPrevious(nil, queue, next, nil)
+	merged := mergeStatusFromPrevious(nil, queue, next)
 	if merged.TrackName != "Queue Name" || merged.ArtistName != "Queue Artist" || merged.DurationMS != 456 {
 		t.Fatalf("expected queue fallback metadata, got %+v", merged)
 	}
@@ -56,19 +55,9 @@ func TestMergeStatusFromPreviousUsesNonHeadQueueMatch(t *testing.T) {
 		{ID: "track-1", Name: "One", Artist: "A"},
 		{ID: "track-2", Name: "Two", Artist: "B", DurationMS: 789},
 	}
-	merged := mergeStatusFromPrevious(nil, queue, next, nil)
+	merged := mergeStatusFromPrevious(nil, queue, next)
 	if merged.TrackName != "Two" || merged.ArtistName != "B" || merged.DurationMS != 789 {
 		t.Fatalf("expected queue match on track id, got %+v", merged)
-	}
-}
-
-func TestMergeStatusFromPreviousUsesTrackCacheFallback(t *testing.T) {
-	cache := cache.NewTTL[string, spotify.QueueItem](16, time.Hour)
-	cache.Set("cached-track", spotify.QueueItem{Name: "Cached Name", Artist: "Cached Artist", DurationMS: 654})
-	next := &spotify.PlaybackStatus{TrackID: "cached-track"}
-	merged := mergeStatusFromPrevious(nil, nil, next, cache)
-	if merged.TrackName != "Cached Name" || merged.ArtistName != "Cached Artist" || merged.DurationMS != 654 {
-		t.Fatalf("expected cache fallback metadata, got %+v", merged)
 	}
 }
 
@@ -76,7 +65,7 @@ func TestMergeStatusFromPreviousDoesNotCarryAlbumImageURLOnTrackChange(t *testin
 	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "https://album-a.jpg"}
 	next := &spotify.PlaybackStatus{TrackID: "track-2"}
 
-	merged := mergeStatusFromPrevious(prev, nil, next, nil)
+	merged := mergeStatusFromPrevious(prev, nil, next)
 	if merged.AlbumImageURL != "" {
 		t.Fatalf("expected empty AlbumImageURL on track change when next has none, got %q", merged.AlbumImageURL)
 	}
@@ -86,7 +75,7 @@ func TestMergeStatusFromPreviousCarriesAlbumImageURLOnSameTrack(t *testing.T) {
 	prev := &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "https://album-a.jpg"}
 	next := &spotify.PlaybackStatus{TrackID: "track-1"}
 
-	merged := mergeStatusFromPrevious(prev, nil, next, nil)
+	merged := mergeStatusFromPrevious(prev, nil, next)
 	if merged.AlbumImageURL != "https://album-a.jpg" {
 		t.Fatalf("expected prev AlbumImageURL carried on same-track push when next has none, got %q", merged.AlbumImageURL)
 	}
@@ -238,38 +227,31 @@ func TestShouldApplyIncomingQueueTimeoutAllowsApply(t *testing.T) {
 	}
 }
 
-func TestApplyMergedQueueRebuildsPreloadedIDs(t *testing.T) {
+func TestApplyMergedQueueClampsCursorAndTracksStableLen(t *testing.T) {
 	m := model{
 		transport: transportModel{
-			status: &spotify.PlaybackStatus{},
-			queue:  []spotify.QueueItem{{ID: "spotify:track:7GhIk7Il098yCjg4BQjzvb"}},
-		},
-		browse: browseModel{
-			preloadedItemIDs: map[string]struct{}{"7GhIk7Il098yCjg4BQjzvb": {}, "ghost": {}},
-			trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
+			status:      &spotify.PlaybackStatus{},
+			queue:       []spotify.QueueItem{{ID: "old-1"}, {ID: "old-2"}, {ID: "old-3"}},
+			queueCursor: 2,
 		},
 	}
 	m.applyMergedQueue(
 		[]spotify.QueueItem{
-			{ID: "spotify:track:2WfaOiMkCvy7F5fcp2zZ8L", Name: "Track 1", Artist: "Artist 1"},
-			{ID: "plain-2", Name: "Track 2", Artist: "Artist 2"},
+			{ID: "new-1", Name: "Track 1", Artist: "Artist 1"},
 		},
 		false,
 		true,
 		true,
 	)
 
-	if _, ok := m.browse.preloadedItemIDs["2WfaOiMkCvy7F5fcp2zZ8L"]; !ok {
-		t.Fatal("expected normalized spotify id to be preloaded")
+	if len(m.transport.queue) != 1 || m.transport.queue[0].ID != "new-1" {
+		t.Fatalf("expected queue to be replaced by incoming entries, got %+v", m.transport.queue)
 	}
-	if _, ok := m.browse.preloadedItemIDs["plain-2"]; !ok {
-		t.Fatal("expected plain id to be preloaded")
+	if m.transport.queueCursor != 0 {
+		t.Fatalf("expected cursor to clamp to the surviving queue, got %d", m.transport.queueCursor)
 	}
-	if _, ok := m.browse.preloadedItemIDs["7GhIk7Il098yCjg4BQjzvb"]; ok {
-		t.Fatal("expected stale preloaded ids to be removed")
-	}
-	if len(m.browse.preloadedItemIDs) != 2 {
-		t.Fatalf("expected preloaded id set to rebuild from merged queue, got %d entries", len(m.browse.preloadedItemIDs))
+	if m.transport.stableQueueLen != 1 {
+		t.Fatalf("expected stable length to track the merged queue, got %d", m.transport.stableQueueLen)
 	}
 }
 
@@ -286,10 +268,6 @@ func TestApplyMergedQueueReplacesQueueWithoutTailPreservation(t *testing.T) {
 		transport: transportModel{
 			status: &spotify.PlaybackStatus{ShuffleState: false},
 			queue:  prev,
-		},
-		browse: browseModel{
-			preloadedItemIDs: make(map[string]struct{}),
-			trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
 		},
 	}
 	m.applyMergedQueue(next, false, true, true)
@@ -309,10 +287,6 @@ func TestApplyMergedQueueDoesNotPreserveTailWhenShuffleTurnsOff(t *testing.T) {
 			status: &spotify.PlaybackStatus{ShuffleState: true},
 			queue:  prev,
 		},
-		browse: browseModel{
-			preloadedItemIDs: make(map[string]struct{}),
-			trackCache:       cache.NewTTL[string, spotify.QueueItem](16, time.Hour),
-		},
 	}
 	m.applyMergedQueue(next, false, true, true)
 	if len(m.transport.queue) != len(next) {
@@ -331,7 +305,7 @@ func TestMergeQueueNamesDoesNotAppendTailEntries(t *testing.T) {
 		{ID: prev[33].ID},
 	}
 
-	merged := mergeQueueNames(prev, next, nil)
+	merged := mergeQueueNames(prev, next)
 	if len(merged) != len(next) {
 		t.Fatalf("expected merged queue length to match incoming queue, got %d entries", len(merged))
 	}
@@ -445,12 +419,6 @@ func TestExecutorStateTracksInFlightFlags(t *testing.T) {
 	if m.transport.executorState != executorStateIdle {
 		t.Fatalf("expected idle executor, got %s", m.transport.executorState)
 	}
-	m.transport.actionInFlight = true
-	m.syncExecutorState()
-	if m.transport.executorState != executorStateAwaitingAction {
-		t.Fatalf("expected awaiting-action, got %s", m.transport.executorState)
-	}
-	m.transport.actionInFlight = false
 	m.transport.transition.Begin(time.Now(), "")
 	m.syncExecutorState()
 	if m.transport.executorState != executorStateAwaitingTransport {
@@ -493,7 +461,7 @@ func TestInputPriorityPrefersTransport(t *testing.T) {
 	}
 }
 
-func TestStuckTransportTransitionSetsRecovery(t *testing.T) {
+func TestStuckTransportTransitionSetsPlaybackErr(t *testing.T) {
 	m := model{}
 	m.beginTransportTransition()
 	m.transport.transition.startedAt = time.Now().Add(-5 * time.Second)
@@ -501,65 +469,32 @@ func TestStuckTransportTransitionSetsRecovery(t *testing.T) {
 	if m.transport.transition.Pending() {
 		t.Fatal("expected transition to clear on timeout")
 	}
-	if !m.transport.transition.RecoveryPending() {
-		t.Fatal("expected recovery pending after stuck transition")
-	}
-	if m.transport.transition.StuckCount() != 1 {
-		t.Fatalf("expected stuck count to increment, got %d", m.transport.transition.StuckCount())
+	if m.transport.playbackErr == nil {
+		t.Fatal("expected playbackErr to be set after stuck transition")
 	}
 }
 
-func TestHandlePollMsgIgnoresStaleToken(t *testing.T) {
+func TestStuckTransportTransitionErrorSurvivesPlaybackStateMsg(t *testing.T) {
 	m := NewLoaderModel()
-	m.ui.stateFetchToken = 3
-	m.transport.playbackErr = nil
-	msg := pollMsg{
-		token: 2,
-		status: &spotify.PlaybackStatus{
-			TrackID: "stale-track",
-		},
-	}
-	next, _ := m.handlePollMsg(msg)
+	m.beginTransportTransition()
+	m.transport.transition.startedAt = time.Now().Add(-5 * time.Second)
+	next, _ := m.handlePlaybackStateMsg(playbackStateMsg{
+		seq:    1,
+		status: &spotify.PlaybackStatus{TrackID: m.transport.transition.FromTrack()},
+	})
 	got := next.(model)
-	if got.transport.status != nil {
-		t.Fatal("expected stale poll message to be ignored")
+	if got.transport.transition.Pending() {
+		t.Fatal("expected transition to clear on timeout")
 	}
-}
-
-func TestHandleActionReconcileMsgIgnoresStaleToken(t *testing.T) {
-	m := NewLoaderModel()
-	m.ui.stateFetchToken = 5
-	m.transport.status = &spotify.PlaybackStatus{TrackID: "current"}
-	msg := actionReconcileMsg{
-		token: 4,
-		status: &spotify.PlaybackStatus{
-			TrackID: "stale-track",
-		},
+	if got.transport.playbackErr == nil {
+		t.Fatal("expected stuck playbackErr to survive handlePlaybackStateMsg")
 	}
-	next, _ := m.handleActionReconcileMsg(msg)
-	got := next.(model)
-	if got.transport.status == nil || got.transport.status.TrackID != "current" {
-		t.Fatal("expected stale reconcile message to be ignored")
-	}
-}
-
-func TestHandleActionMsgIgnoresStaleToken(t *testing.T) {
-	m := NewLoaderModel()
-	m.ui.stateFetchToken = 7
-	m.transport.status = &spotify.PlaybackStatus{TrackID: "current"}
-	msg := actionMsg{
-		token:    6,
-		action:   "play-from-browser",
-		err:      nil,
-		rollback: &spotify.PlaybackStatus{TrackID: "stale"},
-	}
-	next, _ := m.handleActionMsg(msg)
-	got := next.(model)
-	if got.ui.activeTab == tabPlayer {
-		t.Fatal("expected stale action message to be ignored")
-	}
-	if got.transport.status == nil || got.transport.status.TrackID != "current" {
-		t.Fatal("expected stale action message to leave state untouched")
+	next, _ = got.handlePlaybackStateMsg(playbackStateMsg{
+		seq:    2,
+		status: &spotify.PlaybackStatus{TrackID: "other-track"},
+	})
+	if next.(model).transport.playbackErr != nil {
+		t.Fatal("expected a later healthy push to clear the stuck error")
 	}
 }
 
@@ -577,48 +512,17 @@ func TestHandlePlaybackStateMsgIgnoresOutOfOrderSeq(t *testing.T) {
 	}
 }
 
-func TestHandlePollMsgClearsQueueOnTrackChangeWithoutQueueFetch(t *testing.T) {
-	m := NewLoaderModel()
-	m.ui.stateFetchToken = 1
-	m.transport.status = &spotify.PlaybackStatus{TrackID: "track-a"}
-	m.transport.queue = []spotify.QueueItem{{ID: "track-a"}, {ID: "track-b"}}
-	m.transport.stableQueueLen = len(m.transport.queue)
-	m.transport.queueHasMore = true
-
-	msg := pollMsg{
-		token:        1,
-		status:       &spotify.PlaybackStatus{TrackID: "track-c"},
-		queueFetched: false,
-	}
-	next, _ := m.handlePollMsg(msg)
-	got := next.(model)
-	if got.transport.queue != nil || got.transport.stableQueueLen != 0 || got.transport.queueHasMore {
-		t.Fatalf("expected stale queue to clear on track change without queue fetch, got queue=%v stable=%d hasMore=%t", got.transport.queue, got.transport.stableQueueLen, got.transport.queueHasMore)
-	}
-}
-
-func TestStatusQueueCacheScopedPerModel(t *testing.T) {
-	m1 := NewLoaderModel()
-	m2 := NewLoaderModel()
-	if m1.ui.statusQueueCache == nil || m2.ui.statusQueueCache == nil {
-		t.Fatal("expected status queue cache to be initialized")
-	}
-	if m1.ui.statusQueueCache == m2.ui.statusQueueCache {
-		t.Fatal("expected each model to own an isolated status queue cache")
-	}
-}
-
 func TestMergeStatusFromPreviousUsesQueueImageFallback(t *testing.T) {
 	next := &spotify.PlaybackStatus{TrackID: "track-1", TrackName: "New Track", ArtistName: "A", DurationMS: 100}
 	queue := []spotify.QueueItem{{ID: "track-1", Name: "New Track", ImageURL: "https://img/track-1"}}
 
-	merged := mergeStatusFromPrevious(nil, queue, next, nil)
+	merged := mergeStatusFromPrevious(nil, queue, next)
 	if merged.AlbumImageURL != "https://img/track-1" {
 		t.Fatalf("expected queue image fallback for a track change with empty URL, got %+v", merged)
 	}
 
 	withURL := &spotify.PlaybackStatus{TrackID: "track-1", TrackName: "New Track", AlbumImageURL: "https://img/direct"}
-	merged = mergeStatusFromPrevious(nil, queue, withURL, nil)
+	merged = mergeStatusFromPrevious(nil, queue, withURL)
 	if merged.AlbumImageURL != "https://img/direct" {
 		t.Fatalf("expected direct URL to win over queue fallback, got %+v", merged)
 	}

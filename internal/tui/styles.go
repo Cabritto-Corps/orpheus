@@ -36,8 +36,8 @@ var (
 
 // panelFromPage derives the panel tone from the page when a theme does not
 // set one explicitly: a barely-there lift toward white keeps the frame
-// continuous (the header band is the only differentiated surface, and the
-// modal boxes float) without banded contrast breaks.
+// continuous (the modal boxes are the only differentiated surfaces)
+// without banded contrast breaks.
 func panelFromPage(page string) string {
 	if page == "" {
 		return ""
@@ -198,10 +198,6 @@ func applyTheme(st themeState) {
 		Foreground(colorSelectionFg).
 		Background(colorSelectionBg)
 
-	styleQueuePlaying = lipgloss.NewStyle().
-		Foreground(colorBlue).
-		Bold(true)
-
 	stylePlayerTime = lipgloss.NewStyle().
 		Foreground(colorMutedBlue)
 
@@ -266,7 +262,6 @@ var (
 	styleQueueTrack        lipgloss.Style
 	styleQueueCursor       lipgloss.Style
 	styleQueueSelected     lipgloss.Style
-	styleQueuePlaying      lipgloss.Style
 	stylePlayerTime        lipgloss.Style
 	styleProgressBarEmpty  lipgloss.Style
 	styleTrackPopupTitle   lipgloss.Style

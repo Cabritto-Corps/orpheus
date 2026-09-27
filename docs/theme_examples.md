@@ -6,7 +6,7 @@ See [theming](theming.md) for what every key does.
 
 ## A preset with a solid background
 
-One color everywhere, no header band:
+Modal boxes in the page color instead of the tinted panel color:
 
 ```json
 {
@@ -47,7 +47,7 @@ Thick borders, line progress bars, no marker glyphs:
 
 ## Warm dark page
 
-The page color drives the whole frame, the header band lifts from it automatically:
+The page color drives the whole frame, the modal boxes lift from it automatically:
 
 ```json
 {
@@ -57,7 +57,7 @@ The page color drives the whole frame, the header band lifts from it automatical
 }
 ```
 
-Set `panel` too if you want the header band in a specific color instead of the derived one:
+Set `panel` too if you want modal boxes in a specific color instead of the derived one:
 
 ```json
 {

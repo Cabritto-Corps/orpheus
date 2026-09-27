@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -485,9 +486,7 @@ func SaveThemePreset(path, preset string) error {
 	}
 	name := themePresetName(preset)
 	body := map[string]any{"preset": name}
-	for k, v := range loadThemeOverrides(path) {
-		body[k] = v
-	}
+	maps.Copy(body, loadThemeOverrides(path))
 	marshaled, err := json.MarshalIndent(body, "", "  ")
 	if err != nil {
 		return err

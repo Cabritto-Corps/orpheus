@@ -24,9 +24,9 @@ Press `o` → **Theme options**. Every row cycles with `+`/`-` (or enter) and pr
 - **Base palette** — the preset everything starts from. Changing it resets color changes but keeps your glyph, typography, cover and backgrounds choices
 - **Page tone** — the color of the whole frame. `preset` uses the preset's own
 - **Accent** — sets the accent and derives the light accent from it
-- **Backgrounds** — `divided` lifts the header band over everything else, `solid` makes the whole frame one color
+- **Backgrounds** — `divided` tints modal boxes with the panel color, `solid` flattens them to the page color
 - **Border** — box style of modals and placeholder covers: `rounded`, `thick`, `double`, `ascii`
-- **Now playing** — the marker next to playing tracks: `♪`, `●`, `▶`, `→` or none
+- **Now playing** — the marker next to the playlist/album row currently playing: `♪`, `●`, `▶`, `→` or none
 - **Play/pause** — the transport icons: `▶ ⏸`, `► ⏸`, `▷ ⏸` or `>` `||`
 - **Spinner** — the loading animation style
 - **Progress bar** — block (`█ ░`) or line (`━ ─`) characters
@@ -66,7 +66,7 @@ The file only stores what you changed from the preset. Everything you leave out 
 | `scrim` | the dimmed backdrop behind modals |
 | `selection_fg` / `selection_bg` | selected row colors |
 | `page` | the frame background |
-| `panel` | the header band and menus. Leave it out and it is derived from `page` |
+| `panel` | modal boxes. Leave it out and it is derived from `page` |
 
 Accepted values: hex (`#4A90D9` or `#F00`), ANSI names (`red` up to `bright_white`), or a number from 0 to 15.
 
@@ -110,8 +110,8 @@ If your terminal uses a Nerd Font (`orpheus_nerd_fonts=true` in your `.env`), th
 "backgrounds": { "style": "divided" }
 ```
 
-- `divided`: the header band (title + tabs) is slightly lifted over the rest. Middle and footer are the same color, the division is exactly on the lines you see in the app
-- `solid`: the whole frame is one color — header band, menus, everything
+- `divided`: modal boxes are tinted with the `panel` color so they lift off the page
+- `solid`: modal boxes use the page color — the whole frame is one surface
 
 ## Terminal background
 

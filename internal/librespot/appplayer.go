@@ -35,12 +35,20 @@ const (
 	// iteration as the dealer reply that triggered the emit.
 	queueTopUpDelay = 250 * time.Millisecond
 
-	// endGuardMaxFailures bounds the end-of-track guard's retry loop before
-	// it surfaces the stuck state instead of retrying forever.
+	// endGuardMaxFailures bounds consecutive output-failure recoveries and
+	// the end-of-track guard's retry loop before the player gives up and
+	// surfaces the state instead of retrying forever.
 	endGuardMaxFailures = 3
 
 	// stateReconcileInterval is the push-mode self-heal period.
 	stateReconcileInterval = 30 * time.Second
+
+	// deadTrackMemoryCap bounds the session memory of permanently
+	// unplayable track URIs. A context that accumulates more dead tracks
+	// than this is already pathological; evicting oldest-first keeps the
+	// memory tiny while the common case (a handful of regional blocks)
+	// never evicts.
+	deadTrackMemoryCap = 128
 )
 
 // sessionAPI is the slice of *session.Session the player relies on. It exists
@@ -100,6 +108,23 @@ type AppPlayer struct {
 	advanceInFlight       atomic.Bool
 	connectionLostEmitted atomic.Bool
 	endGuardFailures      int
+
+	stopRecoveryURI      string
+	stopRecoveryFailures int
+	// deadTracks remembers track URIs that failed with a typed permanent
+	// media error (restricted / no supported format) so a later revisit
+	// in the same context skips them instantly instead of burning another
+	// full load and skip attempt. Transient failures are never recorded:
+	// only errors the backend will fail the same way every time. Cleared
+	// on every context load; evicted oldest-first at deadTrackMemoryCap.
+	deadTracks     map[string]struct{}
+	deadTrackOrder []string
+	// outputRecreateOnPlay marks a dead output device: the last stop closed
+	// it, so the next play must rebuild via loadCurrentTrack instead of a
+	// plain fork Play (which answers success with no output). Cleared on
+	// any committed load; while set, the reconcile ticker skips its state
+	// re-push so it cannot wipe the terminal error without recovering.
+	outputRecreateOnPlay bool
 }
 
 func (p *AppPlayer) setRunContext(ctx context.Context) {
@@ -639,7 +664,11 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			// Push-mode backstop: a dropped playbackStateCh send would
 			// otherwise leave the TUI stale until the next event. Cheap:
 			// the light path reads only in-memory state, no network.
-			if p.state != nil && p.state.player != nil && p.state.player.ContextUri != "" {
+			// Skipped while a terminal output error stands: a state
+			// re-push would clear the TUI's playback error without
+			// recovering anything, and the error is the state until
+			// the user retries.
+			if p.state != nil && p.state.player != nil && p.state.player.ContextUri != "" && !p.outputRecreateOnPlay {
 				p.emitPlaybackStateLight()
 			}
 		}

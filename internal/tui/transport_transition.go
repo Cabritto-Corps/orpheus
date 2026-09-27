@@ -30,23 +30,13 @@ const (
 )
 
 type transportTransition struct {
-	state           transportState
-	fromTrack       string
-	startedAt       time.Time
-	recoveryPending bool
-	stuckCount      int
+	state     transportState
+	fromTrack string
+	startedAt time.Time
 }
 
 func (t *transportTransition) Pending() bool {
 	return t.state == transportAwaitingTrack
-}
-
-func (t *transportTransition) RecoveryPending() bool {
-	return t.recoveryPending
-}
-
-func (t *transportTransition) StuckCount() int {
-	return t.stuckCount
 }
 
 func (t *transportTransition) FromTrack() string {
@@ -67,14 +57,6 @@ func (t *transportTransition) Clear() {
 	t.state = transportIdle
 }
 
-func (t *transportTransition) ConsumeRecovery() bool {
-	if !t.recoveryPending {
-		return false
-	}
-	t.recoveryPending = false
-	return true
-}
-
 func (t *transportTransition) MaybeClear(next *spotify.PlaybackStatus, now time.Time) transportEvent {
 	if t.state != transportAwaitingTrack || next == nil {
 		return transportEventNone
@@ -91,8 +73,6 @@ func (t *transportTransition) MaybeClear(next *spotify.PlaybackStatus, now time.
 	}
 	if now.Sub(t.startedAt) > transportTransitionStuckTimeout {
 		t.state = transportIdle
-		t.recoveryPending = true
-		t.stuckCount++
 		return transportEventStuck
 	}
 	return transportEventNone

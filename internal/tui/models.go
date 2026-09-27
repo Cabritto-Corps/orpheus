@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/viewport"
 
-	"orpheus/internal/cache"
 	"orpheus/internal/librespot"
 	"orpheus/internal/loader"
 	"orpheus/internal/spotify"
@@ -28,7 +27,6 @@ type transportModel struct {
 	playerCoverEpoch        uint64
 	inputQueue              []playbackInput
 	executorState           commandExecutorState
-	actionInFlight          bool
 	volDebouncePending      int
 	volDebounceToken        int
 	volSentAt               time.Time
@@ -47,25 +45,12 @@ type transportModel struct {
 }
 
 type browseModel struct {
-	activePlaylistID             string
-	activePlaylistOwnerID        string
-	activePlaylistCollaborative  bool
-	activePlaylistItemIDs        []string
-	activePlaylistItemNextOffset int
-	activePlaylistItemHasMore    bool
-	activePlaylistItemLoading    bool
-	activePlaylistLoadToken      int
-	preloadedItemIDs             map[string]struct{}
-	trackCache                   *cache.TTL[string, spotify.QueueItem]
-	playlistsLoading             bool
-	playlistsExhausted           bool
-	albumsForbidden              bool
-	playlistsErr                 error
-	playlistsRetryCount          int
-	playlistItemRetryCount       int
-	currentUserID                string
-	playlistList                 list.Model
-	albumList                    list.Model
+	playlistsLoading    bool
+	albumsForbidden     bool
+	playlistsErr        error
+	playlistsRetryCount int
+	playlistList        list.Model
+	albumList           list.Model
 }
 
 type uiModel struct {
@@ -88,19 +73,13 @@ type uiModel struct {
 	nerdFonts               bool
 	helpViewport            *viewport.Model
 	keys                    keyMap
-	pollInterval            time.Duration
-	pollTick                int
-	lastPollTime            time.Time
 	coverRefreshTick        int
 	playerCoverRefreshTick  int
 	libraryCoverRefreshTick int
 	libraryMetaRefreshTick  int
-	actionFastPollUntil     time.Time
-	stateFetchToken         uint64
 	lastPlaybackStateSeq    uint64
 	startupCoverBoostTicks  int
 	imgs                    *imgCache
-	statusQueueCache        *statusQueueSnapshotCache
 	cover                   coverManager
 	settings                settingsModel
 }
@@ -108,7 +87,6 @@ type uiModel struct {
 type model struct {
 	ctx             context.Context
 	catalog         spotify.PlaylistCatalog
-	service         *spotify.Service
 	deviceName      string
 	tuiCmdCh        chan librespot.TUICommand
 	contextTracksCh chan<- librespot.ContextTracksResult

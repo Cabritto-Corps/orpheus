@@ -75,9 +75,6 @@ The crossfade and cache variables are fallbacks: once `config.json` defines them
 | `orpheus_audio_cache_enabled` | `false` | on-disk encrypted audio cache |
 | `orpheus_audio_cache_size_mb` | `1024` | cache size cap, 64 to 4096 |
 | `orpheus_audio_cache_dir` | *config dir* | where the cache lives |
-| `orpheus_poll_interval` | `1500ms` | how often the fallback polling checks Spotify |
-| `orpheus_device_resolution_mode` | `strict` | `strict` or `relaxed` device matching |
-| `orpheus_allow_active_fallback` | `false` | fall back to Spotify's active device when ours is missing |
 | `orpheus_on_song_change` | *(empty)* | command to run when the song changes |
 
 ### Look and feel

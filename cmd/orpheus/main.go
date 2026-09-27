@@ -194,9 +194,7 @@ func runCheck(ctx context.Context, authManager *auth.Manager, token *oauth2.Toke
 	)
 	spotifyClient := spotify.NewClient(checkCtx, notifyingSource)
 	svc := spotify.NewService(spotifyClient, spotify.Options{
-		Mode:                spotify.DeviceMode(cfg.DeviceResolutionMode),
-		AllowActiveFallback: cfg.AllowActiveFallback,
-		ItemsHTTPClient:     spotify.NewItemsHTTPClient(notifyingSource),
+		ItemsHTTPClient: spotify.NewItemsHTTPClient(notifyingSource),
 	})
 
 	report := func(name string, err error) {
@@ -351,27 +349,24 @@ func runLibrespotTUI() error {
 	go appPlayer.Run(ctx, tuiCmdCh)
 
 	tuiCfg := config.Config{
-		Theme:                cfg.Theme,
-		SettingsPath:         cfg.SettingsPath,
-		SpotifyClientID:      cfg.SpotifyClientID,
-		RedirectURI:          cfg.RedirectURI,
-		Scopes:               cfg.Scopes,
-		DeviceName:           librespotCfg.DeviceName,
-		DeviceResolutionMode: cfg.DeviceResolutionMode,
-		AllowActiveFallback:  cfg.AllowActiveFallback,
-		TokenPath:            cfg.TokenPath,
-		PollInterval:         cfg.PollInterval,
-		NerdFonts:            cfg.NerdFonts,
-		OnSongChange:         cfg.OnSongChange,
-		LogFile:              cfg.LogFile,
-		ThemePath:            cfg.ThemePath,
-		KeysPath:             cfg.KeysPath,
-		EnvPath:              cfg.EnvPath,
-		Crossfade:            cfg.Crossfade,
-		CrossfadeSeconds:     cfg.CrossfadeSeconds,
-		AudioCacheEnabled:    cfg.AudioCacheEnabled,
-		AudioCacheSizeMB:     cfg.AudioCacheSizeMB,
-		AudioCacheDir:        cfg.AudioCacheDir,
+		Theme:             cfg.Theme,
+		SettingsPath:      cfg.SettingsPath,
+		SpotifyClientID:   cfg.SpotifyClientID,
+		RedirectURI:       cfg.RedirectURI,
+		Scopes:            cfg.Scopes,
+		DeviceName:        librespotCfg.DeviceName,
+		TokenPath:         cfg.TokenPath,
+		NerdFonts:         cfg.NerdFonts,
+		OnSongChange:      cfg.OnSongChange,
+		LogFile:           cfg.LogFile,
+		ThemePath:         cfg.ThemePath,
+		KeysPath:          cfg.KeysPath,
+		EnvPath:           cfg.EnvPath,
+		Crossfade:         cfg.Crossfade,
+		CrossfadeSeconds:  cfg.CrossfadeSeconds,
+		AudioCacheEnabled: cfg.AudioCacheEnabled,
+		AudioCacheSizeMB:  cfg.AudioCacheSizeMB,
+		AudioCacheDir:     cfg.AudioCacheDir,
 	}
 
 	var catalog spotify.PlaylistCatalog
@@ -398,7 +393,7 @@ func runLibrespotTUI() error {
 	if catalog == nil {
 		catalog = librespot.NewPlaylistCatalog(sess)
 	}
-	err = tui.Run(ctx, catalog, nil, tuiCfg, tuiCmdCh, playbackStateCh)
+	err = tui.Run(ctx, catalog, tuiCfg, tuiCmdCh, playbackStateCh)
 	cancel()
 	if err != nil {
 		return err
