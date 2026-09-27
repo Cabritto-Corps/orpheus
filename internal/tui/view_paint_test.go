@@ -124,8 +124,8 @@ func TestSelectedRowKeepsHighlightThroughFragments(t *testing.T) {
 		idx := pos + rel
 		after := out[idx+len(reset):]
 		segment := after
-		if next := strings.Index(after, reset); next >= 0 {
-			segment = after[:next]
+		if before, _, ok := strings.Cut(after, reset); ok {
+			segment = before
 		}
 		if !strings.Contains(segment, selBg) {
 			t.Fatalf("selection bg lost after a fragment reset at %d: %q", idx, out)
