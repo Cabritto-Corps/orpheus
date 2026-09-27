@@ -42,6 +42,13 @@ const (
 
 	// stateReconcileInterval is the push-mode self-heal period.
 	stateReconcileInterval = 30 * time.Second
+
+	// deadTrackMemoryCap bounds the session memory of permanently
+	// unplayable track URIs. A context that accumulates more dead tracks
+	// than this is already pathological; evicting oldest-first keeps the
+	// memory tiny while the common case (a handful of regional blocks)
+	// never evicts.
+	deadTrackMemoryCap = 128
 )
 
 // sessionAPI is the slice of *session.Session the player relies on. It exists
@@ -104,6 +111,14 @@ type AppPlayer struct {
 
 	stopRecoveryURI      string
 	stopRecoveryFailures int
+	// deadTracks remembers track URIs that failed with a typed permanent
+	// media error (restricted / no supported format) so a later revisit
+	// in the same context skips them instantly instead of burning another
+	// full load and skip attempt. Transient failures are never recorded:
+	// only errors the backend will fail the same way every time. Cleared
+	// on every context load; evicted oldest-first at deadTrackMemoryCap.
+	deadTracks     map[string]struct{}
+	deadTrackOrder []string
 	// outputRecreateOnPlay marks a dead output device: the last stop closed
 	// it, so the next play must rebuild via loadCurrentTrack instead of a
 	// plain fork Play (which answers success with no output). Cleared on

@@ -277,3 +277,74 @@ func TestDropSuspectCachedStreamNoop(t *testing.T) {
 	p.transitionCache = newTransitionCache()
 	p.dropSuspectCachedStream("spotify:track:2222222222222222222222")
 }
+
+func TestIsStaleStopSource(t *testing.T) {
+	p, _ := newStopRecoveryTestPlayer(t)
+	current := &mockAudioSource{}
+	other := &mockAudioSource{}
+	p.primaryStream.Source = current
+
+	if p.isStaleStopSource(nil) {
+		t.Fatal("nil source (explicit stops, untagged failures) is never stale")
+	}
+	if p.isStaleStopSource(current) {
+		t.Fatal("a stop for the current primary is live, not stale")
+	}
+	if !p.isStaleStopSource(other) {
+		t.Fatal("a stop for a superseded source must be stale")
+	}
+
+	p.primaryStream.Source = nil
+	if p.isStaleStopSource(other) {
+		t.Fatal("an unknown current source cannot prove staleness")
+	}
+
+	p.primaryStream = nil
+	if p.isStaleStopSource(other) {
+		t.Fatal("no primary cannot prove staleness")
+	}
+}
+
+// A Stop that predates the committed track (the output loop reads ahead
+// while Run loads the next track synchronously) must not restart the
+// healthy current track: the log showed exactly this as a 1s-later reload
+// of a freshly loaded track with its position reset.
+func TestUnexpectedStopIgnoresStaleSource(t *testing.T) {
+	p, ch := newStopRecoveryTestPlayer(t)
+	current := &mockAudioSource{}
+	p.primaryStream.Source = current
+
+	p.handlePlayerEvent(&player.Event{Type: player.EventTypeStop, Source: &mockAudioSource{}})
+
+	if p.state.player.Track.Uri != stopRecoveryTestURI {
+		t.Fatalf("stale stop must not change tracks, got %q", p.state.player.Track.Uri)
+	}
+	if p.stopRecoveryURI != "" || p.stopRecoveryFailures != 0 {
+		t.Fatal("stale stop must not arm the recovery guard")
+	}
+	if p.outputRecreateOnPlay {
+		t.Fatal("stale stop must not arm output recreation")
+	}
+	// Only the light state push goes out; no error may surface for a
+	// failure that predates the current track.
+	if first := drainPlaybackUpdate(t, ch); first.Error != "" {
+		t.Fatalf("stale stop must not push an error, got %q", first.Error)
+	}
+	assertNoPlaybackUpdate(t, ch)
+}
+
+// A Stop tagged with the current primary is live and must reach the
+// normal recovery planning (nil-tagged stops behave exactly as before).
+func TestUnexpectedStopMatchingSourceReachesRecovery(t *testing.T) {
+	p, _ := newStopRecoveryTestPlayer(t)
+	current := &mockAudioSource{}
+	p.primaryStream.Source = current
+	p.stopRecoveryURI = stopRecoveryTestURI
+	p.stopRecoveryFailures = 1
+
+	// Same track failing again must advance, not reload: the tag matched,
+	// so planning ran instead of the stale-ignore path.
+	if action, _ := p.planStopRecovery(); action != stopActionAdvance {
+		t.Fatalf("matching stop must advance on a repeated failure, got %d", action)
+	}
+}
