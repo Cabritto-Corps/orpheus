@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+if [ -z "${BASH_VERSION:-}" ]; then
+	printf 'install.sh: error: this installer requires bash, not sh.\n  run: curl -fsSL https://raw.githubusercontent.com/Cabritto-Corps/orpheus/main/install.sh | bash\n' >&2
+	exit 1
+fi
+
 set -euo pipefail
 
 REPO="Cabritto-Corps/orpheus"
@@ -721,6 +726,6 @@ fi
 	print_summary "$bin_dir/orpheus"
 }
 
-if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]]; then
+if [[ -z "${BASH_SOURCE[0]:-}" || "${BASH_SOURCE[0]:-}" == "${0}" ]]; then
 	main "$@"
 fi
