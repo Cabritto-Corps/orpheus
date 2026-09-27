@@ -4,6 +4,23 @@
 
 - [See tutorial for initial configuration](tutorial.md) and [configuration documentation](docs/config.md) for more details
 
+### Install
+
+Prebuilt binaries are published for Linux (x86_64) and macOS (arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Cabritto-Corps/orpheus/main/install.sh | bash
+```
+
+The installer verifies the release SHA-256 checksum, installs the binary to `~/.local/bin`, adds that directory to your shell startup file when needed, and seeds starter `config.json`, `theme.json`, `keys.json`, and `.env` files under `~/.config/orpheus` without overwriting existing files. Useful options:
+
+- `bash -s -- --bin-dir <dir>` to choose another directory
+- `bash -s -- --version vX.Y.Z` to pin a release
+- `bash -s -- --install-deps` to install missing audio libraries with your distro package manager
+- `bash -s -- --no-config` to skip starter configuration files
+
+On Linux, missing ALSA/FLAC/Ogg/Vorbis libraries are detected with `ldd` and the installer prints the exact distro command (or runs it with explicit consent). macOS needs `brew install libogg libvorbis flac`. Then run `orpheus auth login` (requires Spotify Premium).
+
 ### Notes
 
 **A terminal that supports kitty image protocol is needed to display non pixelated art (prints were taken in [ghostty](https://github.com/ghostty-org/ghostty))**
