@@ -96,7 +96,7 @@ jobs:
             apt) apt-get update && apt-get install -y --no-install-recommends \
               build-essential ca-certificates pkg-config \
               libasound2-dev libflac-dev libogg-dev libvorbis-dev ;;
-            pacman) pacman -Syu --needed --no-confirm \
+            pacman) pacman -Syu --needed --noconfirm \
               ca-certificates go pkgconf flac libogg libvorbis alsa-lib ;;
           esac
 
