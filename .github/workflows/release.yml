@@ -87,15 +87,17 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      # Root inside the container: no sudo.
+      # Root inside the container: no sudo. ca-certificates is load-bearing:
+      # actions/* run on Node's bundled CA store, but Go trusts the system
+      # store — without it every module fetch fails x509 (v0.4.3 hit this).
       - name: Install dependencies
         run: |
           case "${{ matrix.family }}" in
             apt) apt-get update && apt-get install -y --no-install-recommends \
-              build-essential pkg-config libasound2-dev libflac-dev \
-              libogg-dev libvorbis-dev ;;
-            pacman) pacman -Syu --needed --noconfirm \
-              go pkgconf flac libogg libvorbis alsa-lib ;;
+              build-essential ca-certificates pkg-config \
+              libasound2-dev libflac-dev libogg-dev libvorbis-dev ;;
+            pacman) pacman -Syu --needed --no-confirm \
+              ca-certificates go pkgconf flac libogg libvorbis alsa-lib ;;
           esac
 
       # Stamps the tag into the binary so `./orpheus --version` identifies a
