@@ -211,6 +211,7 @@ func (m model) handleSettingsTheme(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		s.saveErr = ""
 		m.ui.settings.themeOverrides = nil
 		s.mode = settingsModeRoot
+		m.refreshLikedSongsArt()
 		return m, nil
 	case keyMatches(msg, k.CloseModal):
 		// Revert to the theme that was active when the picker opened.
@@ -218,7 +219,7 @@ func (m model) handleSettingsTheme(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// copy the model, so the returned copy must already carry it.
 		s.mode = settingsModeRoot
 		s.themePreset = s.themeBackup
-		return m.themePreviewApply(s.themeBackup)
+		return m.themeOptionsApplyAndRefresh(resolveThemeState(s.themeBackup, m.cachedThemeOverrides()))
 	}
 	return m, nil
 }
@@ -421,7 +422,7 @@ func (m model) themePickerView(modalW, innerH int) string {
 		if themePresetName(s.themePreset) == themePresetName(name) {
 			marker = "✓"
 		}
-		bar := swatchBar(themeSwatches(colors), s.themeCursor == i)
+		bar := swatchBar(themeSwatches(colors))
 		row := " " + marker + " " + padCell(name, 14) + " " + bar
 		rows = append(rows, modalRow(row, "", s.themeCursor == i, modalW))
 		if i < len(settingsThemeOrder)-1 {
@@ -495,7 +496,7 @@ func (m model) settingsModalView() string {
 			cacheGauge = " " + gradientBar(float64(s.cacheSizeMB-64)/float64(4096-64), gaugeW)
 		}
 		rows := []string{
-			modalRow("Theme", m.themeValue(s.themePreset, s.cursor == 0), s.cursor == 0, modalW),
+			modalRow("Theme", m.themeValue(s.themePreset), s.cursor == 0, modalW),
 			modalRow("Theme options", "edit...", s.cursor == 1, modalW),
 			modalRow("Keybinds", "edit...", s.cursor == 2, modalW),
 			modalRow("Crossfade", settingsCrossfadeLabel(&s)+crossfadeGauge, s.cursor == 3, modalW),
@@ -525,9 +526,9 @@ func (m model) settingsModalView() string {
 	}
 }
 
-func (m model) themeValue(preset string, selected bool) string {
+func (m model) themeValue(preset string) string {
 	colors := resolveThemeColors(preset, m.cachedThemeOverrides())
-	return preset + "  " + swatchBar(themeSwatches(colors), selected)
+	return preset + "  " + swatchBar(themeSwatches(colors))
 }
 
 func settingsActionLabel(action string) string {

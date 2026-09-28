@@ -157,51 +157,37 @@ func withDesc(b key.Binding, desc string) key.Binding {
 	return key.NewBinding(key.WithKeys(b.Keys()...), key.WithHelp(b.Help().Key, desc))
 }
 
-// themeSwatch is one preview cell: either a background-filled pair of spaces
-// or a foreground-colored full block.
+// themeSwatch is one preview cell of the palette bar.
 type themeSwatch struct {
-	color        lipgloss.Color
-	asBackground bool
+	color lipgloss.Color
 }
 
-// themeSwatches picks the seven representative roles of a palette:
-// scrim and selection as background cells, text/dim/accent roles as
-// foreground blocks.
+// themeSwatches picks the seven representative roles of a palette.
 func themeSwatches(c themeColors) []themeSwatch {
 	return []themeSwatch{
-		{lipgloss.Color(c.Scrim), true},
-		{lipgloss.Color(c.SelectionBg), true},
-		{lipgloss.Color(c.OffWhite), false},
-		{lipgloss.Color(c.Gray), false},
-		{lipgloss.Color(c.Blue), false},
-		{lipgloss.Color(c.BlueLight), false},
-		{lipgloss.Color(c.Error), false},
+		{lipgloss.Color(c.Scrim)},
+		{lipgloss.Color(c.SelectionBg)},
+		{lipgloss.Color(c.OffWhite)},
+		{lipgloss.Color(c.Gray)},
+		{lipgloss.Color(c.Blue)},
+		{lipgloss.Color(c.BlueLight)},
+		{lipgloss.Color(c.Error)},
 	}
 }
 
-// swatchBar renders the palette preview. On a selected row the
-// background-role cells are left out: they would sit as dark notches in
-// the highlight, and their colors are already on display as the row's own
-// background.
-func swatchBar(swatches []themeSwatch, selected bool) string {
+// swatchBar renders the palette preview: every role as a foreground full
+// block, identical on every row — the bar must never reflow when the
+// cursor moves over it.
+func swatchBar(swatches []themeSwatch) string {
 	if lipgloss.DefaultRenderer().ColorProfile() == termenv.Ascii {
 		return ""
 	}
 	var b strings.Builder
-	first := true
-	for _, sw := range swatches {
-		if sw.asBackground && selected {
-			continue
-		}
-		if !first {
+	for i, sw := range swatches {
+		if i > 0 {
 			b.WriteString(" ")
 		}
-		first = false
-		if sw.asBackground {
-			b.WriteString(lipgloss.NewStyle().Background(sw.color).Render("  "))
-		} else {
-			b.WriteString(lipgloss.NewStyle().Foreground(sw.color).Render("██"))
-		}
+		b.WriteString(lipgloss.NewStyle().Foreground(sw.color).Render("██"))
 	}
 	return b.String()
 }

@@ -141,6 +141,32 @@ func TestSettingsThemePickerEscReverts(t *testing.T) {
 	}
 }
 
+func TestSettingsThemePickerDefersArtRegenToSave(t *testing.T) {
+	m, _, _, _ := newSettingsTestModel(t)
+	applyTheme(themePresetState("default"))
+	m.refreshLikedSongsArt()
+	t.Cleanup(func() {
+		applyTheme(themePresetState("default"))
+		m.refreshLikedSongsArt()
+	})
+
+	next := openViaKey(m)
+	next = sendEnter(next) // open picker
+	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	// Live preview moves the styles but must not pay the procedural
+	// cover regen per keypress: the art stays on the old palette.
+	if likedArtPaletteKey() == likedArtKey {
+		t.Fatal("preview must leave the liked-songs art unsynced until save")
+	}
+	next = sendEnter(next) // save: the art syncs once to the picked palette
+	if next.ui.settings.mode != settingsModeRoot {
+		t.Fatal("enter should return to the settings root")
+	}
+	if likedArtPaletteKey() != likedArtKey {
+		t.Fatal("save must sync the liked-songs art to the picked palette")
+	}
+}
+
 func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 	m, keysPath, _, _ := newSettingsTestModel(t)
 

@@ -91,16 +91,27 @@ func (m *model) openThemeOptions() {
 	s.optionsCursor = 0
 }
 
-// themeOptionsApply renders a draft state live: styles, list delegates,
-// spinner and procedural art all follow.
+// themeOptionsApply renders a draft state live: styles, list delegates
+// and spinner follow. The procedural cover stays out of the live path —
+// its regen dominates a keypress — and syncs on save/exit instead.
 func (m model) themeOptionsApply(state themeState) (tea.Model, tea.Cmd) {
 	applyTheme(state)
 	m.rethemeBrowseLists()
 	m.ui.spinner = themedSpinner()
-	m.refreshLikedSongsArt()
 	m.ui.settings.keysTableDirty = true
 	page := lipgloss.Color(state.colors.Page)
 	return m, func() tea.Msg { return TerminalBGSync(page) }
+}
+
+// themeOptionsApplyAndRefresh is the settle path for theme changes: it
+// applies a state and then syncs the procedural cover art, which the
+// live preview deliberately skips. Use it wherever a theme mode closes
+// over a changed palette.
+func (m model) themeOptionsApplyAndRefresh(state themeState) (tea.Model, tea.Cmd) {
+	next, cmd := m.themeOptionsApply(state)
+	applied := next.(model)
+	applied.refreshLikedSongsArt()
+	return applied, cmd
 }
 
 func (m model) themeOptionsCycle(step int) (tea.Model, tea.Cmd) {
@@ -172,7 +183,7 @@ func (m model) themeOptionsRevert() (tea.Model, tea.Cmd) {
 	// must already carry the exit to the root.
 	s.mode = settingsModeRoot
 	s.themePreset = themePresetName(s.themePreset)
-	return m.themeOptionsApply(s.themeStateBackup)
+	return m.themeOptionsApplyAndRefresh(s.themeStateBackup)
 }
 
 func (m model) themeOptionsSave() (tea.Model, tea.Cmd) {
@@ -186,6 +197,7 @@ func (m model) themeOptionsSave() (tea.Model, tea.Cmd) {
 	s.themeOverrides = nil
 	s.themePreset = themePresetName(s.themeOptionsPreset)
 	s.mode = settingsModeRoot
+	m.refreshLikedSongsArt()
 	return m, nil
 }
 
