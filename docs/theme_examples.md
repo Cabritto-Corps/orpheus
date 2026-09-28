@@ -6,12 +6,23 @@ See [theming](theming.md) for what every key does.
 
 ## A preset with a solid background
 
-Modal boxes in the page color instead of the tinted panel color:
+One uniform page surface — no lifted header band, modal boxes flattened into the page color:
 
 ```json
 {
   "preset": "tokyo_night",
   "backgrounds": { "style": "solid" }
+}
+```
+
+## A transparent background
+
+Nothing painted behind the frame — your terminal's own background shows through:
+
+```json
+{
+  "preset": "tokyo_night",
+  "backgrounds": { "style": "transparent" }
 }
 ```
 
@@ -47,13 +58,13 @@ Thick borders, line progress bars, no marker glyphs:
 
 ## Warm dark page
 
-The page color drives the whole frame, the modal boxes lift from it automatically:
+The page color drives the whole frame as one uniform surface:
 
 ```json
 {
   "preset": "kanagawa",
   "page": "#17130E",
-  "backgrounds": { "style": "divided" }
+  "backgrounds": { "style": "solid" }
 }
 ```
 
@@ -95,7 +106,7 @@ A full theme from scratch, no preset dependency left:
   },
   "typography": { "bold_titles": true, "italic_descriptions": true },
   "cover": { "frame": "rounded" },
-  "backgrounds": { "style": "divided" }
+  "backgrounds": { "style": "solid" }
 }
 ```
 

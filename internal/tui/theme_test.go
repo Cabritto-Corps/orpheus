@@ -191,6 +191,65 @@ func TestSaveThemeOptionsDeltasOnly(t *testing.T) {
 	}
 }
 
+func TestSaveThemeOptionsTransparentRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "theme.json")
+	state := themePresetState("default")
+	state.backgrounds.Style = "transparent"
+	if err := SaveThemeOptions(path, "default", state); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _ := LoadTheme("default", path)
+	if loaded.backgrounds.Style != "transparent" {
+		t.Fatalf("transparent style not reloaded: %q", loaded.backgrounds.Style)
+	}
+}
+
+func TestThemeJSONInvalidBackgroundStyleIgnored(t *testing.T) {
+	// Unknown values — including the retired "divided" mode, which still
+	// sits in theme.json files written before its removal — degrade
+	// silently to the default instead of breaking the theme load.
+	for _, style := range []string{"neon", "divided"} {
+		path := filepath.Join(t.TempDir(), "theme.json")
+		if err := os.WriteFile(path, []byte(`{"backgrounds": {"style": "`+style+`"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, _ := LoadTheme("default", path)
+		if loaded.backgrounds.Style != "solid" {
+			t.Fatalf("style %q must fall back to the default, got %q", style, loaded.backgrounds.Style)
+		}
+	}
+}
+
+// TestThemeOptionsBackgroundCycleReachesAllStyles walks the Backgrounds
+// editor row through every choice: each step must live-preview (the
+// package style follows the pending draft) and a full cycle returns to
+// the start.
+func TestThemeOptionsBackgroundCycleReachesAllStyles(t *testing.T) {
+	t.Cleanup(func() { applyTheme(themePresetState("default")) })
+	m, _, _, _ := newSettingsTestModel(t)
+	m.openThemeOptions()
+	m.ui.settings.optionsCursor = 3
+	start := m.ui.settings.themeStatePending.backgrounds.Style
+	seen := map[string]bool{start: true}
+	for range backgroundStyleChoices {
+		next, _ := m.themeOptionsCycle(1)
+		m = next.(model)
+		style := m.ui.settings.themeStatePending.backgrounds.Style
+		seen[style] = true
+		if activeBackgrounds.Style != style {
+			t.Fatalf("preview did not apply cycled style %q", style)
+		}
+	}
+	for _, want := range backgroundStyleChoices {
+		if !seen[want] {
+			t.Fatalf("editor cycle never reached %q (saw %v)", want, seen)
+		}
+	}
+	if got := m.ui.settings.themeStatePending.backgrounds.Style; got != start {
+		t.Fatalf("full cycle did not return to start: %q", got)
+	}
+}
+
 func TestValidColorValue(t *testing.T) {
 	valid := []string{"", "#fff", "#4A90D9", "8", "15", "red", "BRIGHT_WHITE"}
 	for _, v := range valid {

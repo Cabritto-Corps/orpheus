@@ -138,7 +138,11 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	if inVolSettle && msg.status != nil && prevStatus != nil {
 		msg.status.Volume = prevStatus.Volume
 	}
-	if inVolSettle && msg.status != nil && m.transport.volSentTarget >= 0 {
+	// The committed-target pin only applies once the burst is off the wire:
+	// while a new target is still pending the display already holds the
+	// optimistic value, and pinning to the previous commit would yank the
+	// bar backwards on every push.
+	if inVolSettle && m.transport.volDebouncePending < 0 && msg.status != nil && m.transport.volSentTarget >= 0 {
 		msg.status.Volume = m.transport.volSentTarget
 	}
 	if m.transport.volSentTarget >= 0 && time.Since(m.transport.volSentAt) >= volSettleWindow {

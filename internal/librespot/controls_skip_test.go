@@ -350,3 +350,31 @@ func TestAdvanceNextSkipsKnownDeadWithoutBurningAttempts(t *testing.T) {
 		t.Fatal("known-dead streams must not be promoted")
 	}
 }
+
+// A playing state with a slightly stale clock must still take the staged
+// stream on a fresh start. The wall-clock rebase in loadCurrentTrack inflates
+// the position, and deriving "fresh start" from the inflated value cold-loads
+// instead — panicking here on the test session's nil spclient, and in
+// production wasting a double fetch and losing the gapless transition.
+func TestLoadCurrentTrackTakesStagedStreamWithStaleClock(t *testing.T) {
+	uri := "spotify:track:0000000000000000000007"
+	p, _ := newSkipTestPlayer(t, newPipeBackedPlayer(t), []string{uri})
+	staged, _ := newSkipTestStream(t, uri, 30_000)
+	id, err := golibrespot.SpotifyIdFromUri(uri)
+	if err != nil {
+		t.Fatalf("parse uri: %v", err)
+	}
+	if !p.putTransitionCachedStream(*id, staged) {
+		t.Fatal("seed cache")
+	}
+	p.state.player.Timestamp = time.Now().UnixMilli() - 50
+	p.state.player.PlaybackSpeed = 1
+	p.state.player.IsPlaying = true
+
+	if err := p.loadCurrentTrack(context.Background(), false, false); err != nil {
+		t.Fatalf("loadCurrentTrack: %v", err)
+	}
+	if p.primaryStream != staged {
+		t.Fatal("fresh start must take the staged stream, not cold-load")
+	}
+}

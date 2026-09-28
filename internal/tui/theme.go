@@ -47,8 +47,9 @@ type themeTypography struct {
 }
 
 // themeBackgrounds picks how the frame's background zones are painted:
-// "divided" lifts the header band over the shared page tone; "solid" uses
-// one uniform color for the whole frame.
+// "solid" uses one uniform color for the whole frame; "transparent"
+// paints no frame background at all, leaving the terminal's own
+// background visible.
 type themeBackgrounds struct {
 	Style string `json:"style"`
 }
@@ -262,7 +263,7 @@ var (
 var defaultGlyphs = themeGlyphs{Border: "rounded", NowPlaying: "note", PlayPause: "modern", Spinner: "minidot", Bar: "block"}
 var defaultTypography = themeTypography{}
 var defaultCover = themeCover{Frame: "none"}
-var defaultBackgrounds = themeBackgrounds{Style: "divided"}
+var defaultBackgrounds = themeBackgrounds{Style: "solid"}
 
 var validGlyphBorder = stringSet(glyphBorderChoices)
 var validGlyphNowPlaying = stringSet(glyphNowPlayingChoices)
@@ -270,7 +271,7 @@ var validGlyphPlayPause = stringSet(glyphPlayPauseChoices)
 var validGlyphSpinner = stringSet(glyphSpinnerChoices)
 var validGlyphBar = stringSet(glyphBarChoices)
 var coverFrameChoices = []string{"none", "rounded", "thick"}
-var backgroundStyleChoices = []string{"divided", "solid"}
+var backgroundStyleChoices = []string{"solid", "transparent"}
 var validCoverFrame = stringSet(coverFrameChoices)
 var validBackgroundStyle = stringSet(backgroundStyleChoices)
 

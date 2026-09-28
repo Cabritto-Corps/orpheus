@@ -187,7 +187,7 @@ func (p *AppPlayer) handleShuffleCacheRefresh(ctx context.Context) {
 	p.prefetchNext(ctx)
 }
 
-func (p *AppPlayer) prefetchNext(ctx context.Context) {
+func (p *AppPlayer) prefetchNext(_ context.Context) {
 	candidates := p.prefetchCandidateIDs()
 	if len(candidates) == 0 {
 		return
@@ -825,11 +825,21 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	if spotId.Type() != golibrespot.SpotifyIdTypeTrack && spotId.Type() != golibrespot.SpotifyIdTypeEpisode {
 		return fmt.Errorf("unsupported spotify type: %s", spotId.Type())
 	}
+	// The intended start position is read BEFORE the wall-clock rebase below:
+	// UpdateTimestamp inflates PositionAsOfTimestamp by elapsed*speed, and a
+	// "fresh start" inferred from the inflated value missed the transition-
+	// cache promotion on any >=1ms scheduling delay, cold-loading a stream
+	// staged for exactly this moment. Callers encode intent in the pre-rebase
+	// value: 0 on advance/skip/transfer, setPlayerPositionAtNow for output-
+	// failure reloads.
+	trackPosition := p.state.player.PositionAsOfTimestamp
+	if trackPosition < 0 {
+		trackPosition = 0
+	}
 	golibrespot.UpdateTimestamp(p.state.player, 0)
 	if p.state.player.PositionAsOfTimestamp < 0 {
 		p.state.player.PositionAsOfTimestamp = 0
 	}
-	trackPosition := golibrespot.TrackPosition(p.state.player, 0)
 	p.setPlayerTransportState(true, true, paused)
 	p.state.player.PlaybackSpeed = 0
 	var prefetched bool
@@ -880,8 +890,16 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	// loop reloads (see maybeResetStopRecoveryGuard).
 	p.outputRecreateOnPlay = false
 	p.maybeResetStopRecoveryGuard(spotId.Uri())
-	if err := p.player.SeekMs(trackPosition); err != nil {
-		p.runtime.Log.WithError(err).WithField("position_ms", trackPosition).Warn("seek after load failed")
+	// A promoted secondary is already playing when the fork crossfaded into
+	// it ahead of this advance (SetPrimaryStream above only acknowledged the
+	// same source): seeking to 0 would rewind the fade-consumed decoder and
+	// reset the fade, restarting the track the listener already hears. Fresh
+	// decoders start at 0 anyway, so the post-load seek only matters for a
+	// nonzero resume position.
+	if trackPosition != 0 || !promotedSecondary {
+		if err := p.player.SeekMs(trackPosition); err != nil {
+			p.runtime.Log.WithError(err).WithField("position_ms", trackPosition).Warn("seek after load failed")
+		}
 	}
 	p.sess.Events().PostPrimaryStreamLoad(p.primaryStream, paused)
 	p.runtime.Log.WithField("uri", spotId.Uri()).Infof("loaded %s %s (paused: %t, position: %dms, duration: %dms, prefetched: %t)", spotId.Type(), strconv.QuoteToGraphic(p.primaryStream.Media.Name()), paused, trackPosition, p.primaryStream.Media.Duration(), prefetched)
@@ -953,7 +971,7 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 	return nil
 }
 
-func (p *AppPlayer) addToQueue(ctx context.Context, track *connectpb.ContextTrack) {
+func (p *AppPlayer) addToQueue(_ context.Context, track *connectpb.ContextTrack) {
 	if p.state.tracks == nil {
 		p.runtime.Log.Warnf("cannot add to queue without a context")
 		return
@@ -1021,7 +1039,7 @@ func (p *AppPlayer) afterQueueEdit() {
 	p.emitPlaybackState()
 }
 
-func (p *AppPlayer) setQueue(ctx context.Context, prev []*connectpb.ContextTrack, next []*connectpb.ContextTrack) {
+func (p *AppPlayer) setQueue(_ context.Context, prev []*connectpb.ContextTrack, next []*connectpb.ContextTrack) {
 	if p.state.tracks == nil {
 		p.runtime.Log.Warnf("cannot set queue without a context")
 		return
@@ -1033,7 +1051,7 @@ func (p *AppPlayer) setQueue(ctx context.Context, prev []*connectpb.ContextTrack
 	p.emitPlaybackState()
 }
 
-func (p *AppPlayer) play(ctx context.Context) error {
+func (p *AppPlayer) play(_ context.Context) error {
 	if p.primaryStream == nil {
 		return fmt.Errorf("no primary stream")
 	}
@@ -1083,7 +1101,7 @@ func (p *AppPlayer) retryPlaybackAfterOutputFailure() error {
 	return nil
 }
 
-func (p *AppPlayer) pause(ctx context.Context) error {
+func (p *AppPlayer) pause(_ context.Context) error {
 	if p.primaryStream == nil {
 		return fmt.Errorf("no primary stream")
 	}
@@ -1098,7 +1116,7 @@ func (p *AppPlayer) pause(ctx context.Context) error {
 	return nil
 }
 
-func (p *AppPlayer) seek(ctx context.Context, position int64) error {
+func (p *AppPlayer) seek(_ context.Context, position int64) error {
 	if p.primaryStream == nil {
 		return fmt.Errorf("no primary stream")
 	}
@@ -1203,7 +1221,7 @@ func (p *AppPlayer) selectAdvanceNextTarget(ctx context.Context, forceNext bool)
 	return selection
 }
 
-func (p *AppPlayer) applyAdvanceNextSelection(ctx context.Context, selection advanceNextSelection, forceNext bool) {
+func (p *AppPlayer) applyAdvanceNextSelection(_ context.Context, selection advanceNextSelection, forceNext bool) {
 	if p.state == nil || p.state.player == nil {
 		return
 	}

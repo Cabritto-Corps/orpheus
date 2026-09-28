@@ -275,9 +275,18 @@ var (
 	styleModalSelectedRow  lipgloss.Style
 )
 
+// transparentFrame reports whether the frame paints no background of its
+// own: mode checks read this instead of comparing style strings, so a new
+// mode cannot silently inherit painted behavior.
+func transparentFrame() bool {
+	return activeBackgrounds.Style == "transparent"
+}
+
 // modalBoxBackground is the background the modal boxes (and their
 // background re-assertion) use: the panel tone, flattened to the page in
-// solid mode so the whole frame is one surface.
+// solid mode so the whole frame is one surface. Transparent keeps the
+// panel tone — the box is floating chrome, not a frame zone, and an
+// unpainted box would dissolve into the terminal behind it.
 func modalBoxBackground() lipgloss.Color {
 	if activeBackgrounds.Style == "solid" {
 		return colorPage

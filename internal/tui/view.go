@@ -80,7 +80,16 @@ func (m model) View() string {
 	}
 
 	parts := []string{header, tabBar, body, m.playerBarView()}
-	return paintPage(lipgloss.JoinVertical(lipgloss.Left, parts...), m.ui.width) + m.kittyOverlay()
+	switch {
+	case transparentFrame():
+		// No frame paint at all: the terminal's own background shows
+		// through every zone. Selection and modal chrome keep their own
+		// backgrounds (they are overlays, not zones).
+		return lipgloss.JoinVertical(lipgloss.Left, parts...) + m.kittyOverlay()
+	default:
+		// Solid — and anything unexpected: one uniform surface.
+		return paintPage(lipgloss.JoinVertical(lipgloss.Left, parts...), m.ui.width) + m.kittyOverlay()
+	}
 }
 
 // bgSequence returns the terminal SGR that sets c as the background

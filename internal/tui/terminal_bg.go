@@ -34,24 +34,50 @@ func CaptureTerminalBG() {
 	terminalBGLast = ""
 }
 
+// terminalBGTarget is the pure decision behind ApplyTerminalBG: the spec
+// to emit via OSC 11, or "" for silence. Transparent mode hands the
+// background back to the terminal instead of claiming it, so entering it
+// mid-session restores the captured original exactly once (Last clears,
+// making the release idempotent); leaving it re-applies the page because
+// Last no longer matches. Kept pure so the transitions are unit-testable
+// without emitting escape sequences.
+func terminalBGTarget(page lipgloss.Color) string {
+	if terminalBGOriginal == "" {
+		return ""
+	}
+	if lipgloss.DefaultRenderer().ColorProfile() == termenv.Ascii {
+		return ""
+	}
+	if transparentFrame() {
+		if terminalBGLast == "" {
+			return ""
+		}
+		return terminalBGOriginal
+	}
+	hex := string(page)
+	if !validHexColor(hex) || hex == terminalBGLast {
+		return ""
+	}
+	if r, g, b, ok := hexToRGB(hex); ok {
+		return rgbSpec8(r, g, b)
+	}
+	return ""
+}
+
 // ApplyTerminalBG sets the terminal's own background to the theme's page
 // color: the padding around the grid is painted with the terminal
 // background, so matching it makes the page fill read as whole-window.
 // ANSI-name pages (no hex) and ASCII profiles keep the transparent look.
 func ApplyTerminalBG(page lipgloss.Color) {
-	if terminalBGOriginal == "" {
+	spec := terminalBGTarget(page)
+	if spec == "" {
 		return
 	}
-	if lipgloss.DefaultRenderer().ColorProfile() == termenv.Ascii {
-		return
-	}
-	hex := string(page)
-	if !validHexColor(hex) || hex == terminalBGLast {
-		return
-	}
-	if r, g, b, ok := hexToRGB(hex); ok {
-		fmt.Fprintf(os.Stdout, "\x1b]11;%s\x1b\\", rgbSpec8(r, g, b))
-		terminalBGLast = hex
+	fmt.Fprintf(os.Stdout, "\x1b]11;%s\x1b\\", spec)
+	if transparentFrame() {
+		terminalBGLast = ""
+	} else {
+		terminalBGLast = string(page)
 	}
 }
 

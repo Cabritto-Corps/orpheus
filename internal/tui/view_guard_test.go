@@ -179,6 +179,26 @@ func TestViewFrameContractAllThemes(t *testing.T) {
 	}
 }
 
+func TestViewFrameContractBackgroundModes(t *testing.T) {
+	t.Cleanup(func() { applyTheme(themePresetState("default")) })
+	sizes := [][2]int{{60, 20}, {120, 40}}
+	for _, style := range backgroundStyleChoices {
+		for _, size := range sizes {
+			for _, tb := range []tab{tabPlaylists, tabAlbums, tabPlayer} {
+				variant := frameVariant{name: "bg-" + style, width: size[0], height: size[1], tab: tb, hasQueue: true}
+				m := guardModel(t, variant)
+				// The style applies after construction: newModel re-applies
+				// the stored theme, and View reads the package styles live.
+				st := themePresetState("default")
+				st.backgrounds.Style = style
+				applyTheme(st)
+				name := fmt.Sprintf("%dx%d/bg-%s/%s", size[0], size[1], style, tabName(variant.tab))
+				assertFrameContract(t, name, m.View(), variant.width, variant.height)
+			}
+		}
+	}
+}
+
 func TestViewFrameContractModals(t *testing.T) {
 	sizes := [][2]int{{40, 12}, {50, 16}, {80, 24}, {120, 40}}
 	for _, size := range sizes {

@@ -32,6 +32,7 @@ type Config struct {
 	AudioCacheDir     string
 	Crossfade         bool
 	CrossfadeSeconds  float64
+	ImageStyle        string
 }
 
 func LoadFromEnv() (Config, error) {

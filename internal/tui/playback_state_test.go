@@ -527,3 +527,38 @@ func TestMergeStatusFromPreviousUsesQueueImageFallback(t *testing.T) {
 		t.Fatalf("expected direct URL to win over queue fallback, got %+v", merged)
 	}
 }
+
+func volSettleTestModel(vol int) model {
+	m := model{ui: uiModel{keys: newKeys()}}
+	m.transport.status = &spotify.PlaybackStatus{Volume: vol, TrackID: "t1", Playing: true}
+	m.transport.volDebouncePending = -1
+	m.transport.volSentTarget = -1
+	return m
+}
+
+func TestVolumePushDuringPendingBurstKeepsOptimistic(t *testing.T) {
+	m := volSettleTestModel(60)
+	// Previous burst committed 50 a second ago (inside the settle window)
+	// while a new burst is still pending at 65.
+	m.transport.volSentTarget = 50
+	m.transport.volSentAt = time.Now().Add(-1 * time.Second)
+	m.transport.volDebouncePending = 65
+	incoming := &spotify.PlaybackStatus{Volume: 50, TrackID: "t1", Playing: true, DurationMS: 200000, ProgressMS: 1000}
+	out, _ := m.handlePlaybackStateMsg(playbackStateMsg{status: incoming})
+	if got := out.(model).transport.status.Volume; got != 60 {
+		t.Fatalf("push during pending burst snapped the bar to %d, want optimistic 60", got)
+	}
+}
+
+func TestVolumePushAfterCommitPinsToSentTarget(t *testing.T) {
+	m := volSettleTestModel(60)
+	// Burst fully committed a second ago: divergent pushes (e.g. another
+	// client) stay pinned for the settle window, as before.
+	m.transport.volSentTarget = 60
+	m.transport.volSentAt = time.Now().Add(-1 * time.Second)
+	incoming := &spotify.PlaybackStatus{Volume: 55, TrackID: "t1", Playing: true, DurationMS: 200000, ProgressMS: 1000}
+	out, _ := m.handlePlaybackStateMsg(playbackStateMsg{status: incoming})
+	if got := out.(model).transport.status.Volume; got != 60 {
+		t.Fatalf("push after commit did not pin to sent target: %d", got)
+	}
+}

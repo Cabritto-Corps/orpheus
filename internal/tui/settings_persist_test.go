@@ -76,7 +76,7 @@ func TestCrossfadeSaveAndReloadRoundTrip(t *testing.T) {
 	m.ui.settings.configPath = filepath.Join(dir, "config.json")
 
 	next := openSettingsForTest(m)
-	// crossfade row is index 3 in the five-row root
+	// crossfade row is index 3 in the six-row root
 	next = send(next, teaDown())
 	next = send(next, teaDown())
 	next = send(next, teaDown())
