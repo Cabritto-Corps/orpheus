@@ -115,7 +115,7 @@ func TestVolumeLeadingEdgeSendsImmediately(t *testing.T) {
 func TestVolumeBurstKeepsBarCurrent(t *testing.T) {
 	ch := make(chan librespot.TUICommand, 16)
 	m := volTestModel(ch, 50)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		m.enqueuePlaybackInput(playbackInputVolUp)
 		_ = m.pumpInputExecutor()
 	}
