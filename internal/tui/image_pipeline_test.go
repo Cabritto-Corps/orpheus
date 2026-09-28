@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	list "github.com/charmbracelet/bubbles/list"
+	list "charm.land/bubbles/v2/list"
 
 	"orpheus/internal/loader"
 	"orpheus/internal/spotify"

@@ -2,10 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
 	"github.com/muesli/termenv"
 )
 
@@ -41,11 +41,11 @@ func CaptureTerminalBG() {
 // making the release idempotent); leaving it re-applies the page because
 // Last no longer matches. Kept pure so the transitions are unit-testable
 // without emitting escape sequences.
-func terminalBGTarget(page lipgloss.Color) string {
+func terminalBGTarget(page color.Color) string {
 	if terminalBGOriginal == "" {
 		return ""
 	}
-	if lipgloss.DefaultRenderer().ColorProfile() == termenv.Ascii {
+	if !colorEnabled() {
 		return ""
 	}
 	if transparentFrame() {
@@ -54,21 +54,24 @@ func terminalBGTarget(page lipgloss.Color) string {
 		}
 		return terminalBGOriginal
 	}
-	hex := string(page)
-	if !validHexColor(hex) || hex == terminalBGLast {
+	// Only hex-origin (RGB) pages get a spec: ANSI-name pages keep the
+	// transparent look, as before.
+	rgba, ok := page.(color.RGBA)
+	if !ok {
 		return ""
 	}
-	if r, g, b, ok := hexToRGB(hex); ok {
-		return rgbSpec8(r, g, b)
+	spec := rgbSpec8(rgba.R, rgba.G, rgba.B)
+	if spec == terminalBGLast {
+		return ""
 	}
-	return ""
+	return spec
 }
 
 // ApplyTerminalBG sets the terminal's own background to the theme's page
 // color: the padding around the grid is painted with the terminal
 // background, so matching it makes the page fill read as whole-window.
 // ANSI-name pages (no hex) and ASCII profiles keep the transparent look.
-func ApplyTerminalBG(page lipgloss.Color) {
+func ApplyTerminalBG(page color.Color) {
 	spec := terminalBGTarget(page)
 	if spec == "" {
 		return
@@ -77,7 +80,7 @@ func ApplyTerminalBG(page lipgloss.Color) {
 	if transparentFrame() {
 		terminalBGLast = ""
 	} else {
-		terminalBGLast = string(page)
+		terminalBGLast = spec
 	}
 }
 
@@ -95,7 +98,7 @@ func RestoreTerminalBG() {
 // captured at theme-apply time; theme changes return it as a tea.Cmd so
 // the padding follows the live preview without reading theme globals off
 // the event loop.
-func TerminalBGSync(page lipgloss.Color) tea.Msg {
+func TerminalBGSync(page color.Color) tea.Msg {
 	ApplyTerminalBG(page)
 	return nil
 }

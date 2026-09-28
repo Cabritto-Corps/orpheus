@@ -10,9 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
-
 	"orpheus/internal/config"
 	"orpheus/internal/loader"
 )
@@ -119,8 +116,8 @@ func TestStartupImageStylePrecedence(t *testing.T) {
 }
 
 func TestForcedPixelatedNeverUsesKitty(t *testing.T) {
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "0")
 
 	getenv := imageStyleTestEnv(map[string]string{"KITTY_WINDOW_ID": "1"})
 	cache := newImgCacheWithSelection(config.ImageStylePixelated, true, getenv)
@@ -144,8 +141,8 @@ func TestForcedPixelatedNeverUsesKitty(t *testing.T) {
 }
 
 func TestManagedRenderedFallsBackToHalfBlockWithoutKitty(t *testing.T) {
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "0")
 
 	cache := newImgCacheWithSelection(config.ImageStyleRendered, true, imageStyleTestEnv(map[string]string{}))
 	if cache.protocolForRender() != imageProtocolNone {

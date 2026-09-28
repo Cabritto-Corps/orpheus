@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 
 	"orpheus/internal/config"
 	"orpheus/internal/loader"
@@ -29,7 +29,7 @@ func TestHandlePlaylistKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
 	m.browse.playlistList.SetItems(items)
 	m.browse.playlistList.Select(0)
 
-	nextModel, _ := m.handlePlaylistKey(tea.KeyMsg{Type: tea.KeyDown})
+	nextModel, _ := m.handlePlaylistKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	got := nextModel.(model)
 	if sel, ok := got.selectedPlaylist(); !ok || sel.summary.ImageURL != "u2" {
 		t.Fatalf("expected selection to move to u2")
@@ -49,7 +49,7 @@ func TestHandleAlbumKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
 	m.browse.albumList.SetItems(items)
 	m.browse.albumList.Select(0)
 
-	nextModel, _ := m.handleAlbumKey(tea.KeyMsg{Type: tea.KeyDown})
+	nextModel, _ := m.handleAlbumKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	got := nextModel.(model)
 	sel, ok := got.selectedAlbum()
 	if !ok || sel.summary.ImageURL != "u2" {
@@ -81,7 +81,7 @@ func TestTabSwitchClampsTargetPaginationAndQueuesCoverLoad(t *testing.T) {
 	m.browse.albumList.Paginator.Page = 20
 	m.ui.activeTab = tabPlaylists
 
-	nextModel, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	nextModel, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	got := nextModel.(model)
 	if got.ui.activeTab != tabAlbums {
 		t.Fatal("expected tab switch to albums")

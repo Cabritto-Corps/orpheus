@@ -6,13 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
-func teaDown() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyDown} }
+func teaDown() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyDown} }
 
 func isQuitCmd(cmd tea.Cmd) bool {
 	if cmd == nil {
@@ -26,7 +26,7 @@ func sendTop(m model, msg tea.KeyMsg) (model, tea.Cmd) {
 	return next.(model), cmd
 }
 
-func ctrlC() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyCtrlC} }
+func ctrlC() tea.KeyPressMsg { return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl} }
 
 func TestHelpGroupsDerivedFromRegistry(t *testing.T) {
 	if got, want := helpGroupTitles(), []string{"Playback", "Navigation", "Queue"}; !slices.Equal(got, want) {
@@ -54,9 +54,9 @@ func TestHelpGroupsDerivedFromRegistry(t *testing.T) {
 	}
 }
 func TestFocusTrapModalsSwallowGlobalKeys(t *testing.T) {
-	q := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}
-	help := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}}
-	settings := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}}
+	q := tea.KeyPressMsg{Code: 'q', Text: "q"}
+	help := tea.KeyPressMsg{Code: '?', Text: "?"}
+	settings := tea.KeyPressMsg{Code: 'o', Text: "o"}
 
 	// Help open: q must not quit, o must not open settings behind it.
 	m, _, _, _ := newSettingsTestModel(t)
@@ -112,7 +112,7 @@ func TestFocusTrapKeyCapture(t *testing.T) {
 	}
 	// q is an ordinary key inside capture: it arms the pending rebind
 	// and must never quit the app.
-	next, cmd := sendTop(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	next, cmd := sendTop(m, tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if isQuitCmd(cmd) {
 		t.Fatal("q must not quit during key capture")
 	}
@@ -121,14 +121,14 @@ func TestFocusTrapKeyCapture(t *testing.T) {
 			next.ui.settings.mode, next.ui.settings.pendingKey)
 	}
 	// Esc cancels capture back to the keys list.
-	next, _ = sendTop(next, tea.KeyMsg{Type: tea.KeyEscape})
+	next, _ = sendTop(next, tea.KeyPressMsg{Code: tea.KeyEscape})
 	if next.ui.settings.mode != settingsModeKeys || next.ui.settings.captureKey != "" {
 		t.Fatal("esc must cancel capture")
 	}
 }
 
 func openSettingsForTest(m model) model {
-	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	next, _ := m.handleKey(tea.KeyPressMsg{Code: 'o', Text: "o"})
 	return next.(model)
 }
 
@@ -164,9 +164,10 @@ func TestModalFrameTransparentBackdrop(t *testing.T) {
 	st := themePresetState("default")
 	st.backgrounds.Style = "transparent"
 	applyTheme(st)
-	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "0")
 	t.Cleanup(func() {
-		lipgloss.SetColorProfile(termenv.Ascii)
+		t.Setenv("NO_COLOR", "1")
 		applyTheme(themePresetState("default"))
 	})
 	title := styleModalTitle.Render("Settings")
@@ -193,8 +194,11 @@ func TestModalRowSelectedAndFallback(t *testing.T) {
 		t.Fatal("wide selected row must use the highlight, not the marker")
 	}
 	// Same gutter for every row: selection must never shift content (A1).
-	if sel[1:8] != plain[1:8] {
-		t.Fatalf("selected and unselected rows must share the label column: %q vs %q", sel[:10], plain[:10])
+	// Compare stripped content: v2 Render always emits SGR (v1 rendered
+	// styles as identity under the test env's Ascii profile, which made
+	// this byte comparison pass vacuously).
+	if stripped, plainStripped := ansi.Strip(sel), ansi.Strip(plain); stripped[1:8] != plainStripped[1:8] {
+		t.Fatalf("selected and unselected rows must share the label column: %q vs %q", stripped[:10], plainStripped[:10])
 	}
 	if lipgloss.Width(plain) != lipgloss.Width(sel) {
 		t.Fatal("unselected row must be padded to the same width as the highlighted row")
@@ -225,8 +229,8 @@ func TestMiniGaugeBounds(t *testing.T) {
 }
 
 func TestSwatchBarRendersSpacedSwatches(t *testing.T) {
-	t.Cleanup(func() { lipgloss.DefaultRenderer().SetColorProfile(termenv.Ascii) })
-	lipgloss.DefaultRenderer().SetColorProfile(termenv.TrueColor)
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "0")
 
 	swatches := themeSwatches(themePresetState("default").colors)
 	if len(swatches) != 7 {
@@ -246,7 +250,7 @@ func TestSwatchBarRendersSpacedSwatches(t *testing.T) {
 
 	// Ascii profile: color-only output degrades to nothing rather than
 	// blank cells; the picker rows fall back to name + accent hex.
-	lipgloss.DefaultRenderer().SetColorProfile(termenv.Ascii)
+	t.Setenv("NO_COLOR", "1")
 	if got := swatchBar(swatches); got != "" {
 		t.Fatalf("swatch bar should be empty under Ascii profile, got %q", got)
 	}
@@ -321,7 +325,7 @@ func TestHelpViewportScrollKeys(t *testing.T) {
 	next := openViaKey(m)
 	// open help on top of settings is not possible; close settings first
 	next = sendEsc(next)
-	m2, _ := next.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m2, _ := next.handleKey(tea.KeyPressMsg{Code: '?', Text: "?"})
 	next = m2.(model)
 	if !next.ui.helpOpen {
 		t.Fatal("help should be open")
@@ -329,12 +333,12 @@ func TestHelpViewportScrollKeys(t *testing.T) {
 	if next.ui.helpViewport == nil {
 		t.Fatal("overflowing help must have a viewport")
 	}
-	before := next.ui.helpViewport.YOffset
+	before := next.ui.helpViewport.YOffset()
 	// Go through handleKey, not scrollHelp directly: the seam where the
 	// scrolled copy was discarded is exactly what this must cover.
-	m2, _ = next.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	m2, _ = next.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	moved := m2.(model)
-	if moved.ui.helpViewport.YOffset <= before {
-		t.Fatalf("scroll down should advance offset: %d -> %d", before, moved.ui.helpViewport.YOffset)
+	if moved.ui.helpViewport.YOffset() <= before {
+		t.Fatalf("scroll down should advance offset: %d -> %d", before, moved.ui.helpViewport.YOffset())
 	}
 }

@@ -8,9 +8,8 @@ import (
 
 	"orpheus/internal/spotify"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/bubbles/v2/list"
+	"charm.land/lipgloss/v2"
 )
 
 // The view paints backgrounds by re-asserting them after every style reset,
@@ -56,9 +55,10 @@ func withPaintTestModelStyle(t *testing.T, w, h int, style string) model {
 	st := themePresetState("default")
 	st.backgrounds.Style = style
 	applyTheme(st)
-	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "0")
 	t.Cleanup(func() {
-		lipgloss.SetColorProfile(termenv.Ascii)
+		t.Setenv("NO_COLOR", "1")
 		applyTheme(themePresetState("default"))
 	})
 	m.ui.width = w
@@ -118,7 +118,7 @@ func TestFramePaintNeverLosesBackground(t *testing.T) {
 	for _, style := range []string{"solid"} {
 		for _, size := range [][2]int{{100, 40}, {80, 30}, {60, 24}} {
 			m := withPaintTestModelStyle(t, size[0], size[1], style)
-			out := m.View()
+			out := m.View().Content
 			holes, samples := countPaintHoles(out)
 			if holes != 0 {
 				t.Fatalf("%s frame at %dx%d: %d unpainted text runs, samples %q", style, size[0], size[1], holes, samples)
@@ -132,7 +132,7 @@ func TestFramePaintNeverLosesBackground(t *testing.T) {
 // (here: the active-tab highlight) keeps working.
 func TestTransparentFramePaintsNoPageBackground(t *testing.T) {
 	m := withPaintTestModelStyle(t, 100, 40, "transparent")
-	out := m.View()
+	out := m.View().Content
 	pageSeq := bgSequence(colorPage)
 	if pageSeq == "" {
 		t.Fatal("need TrueColor background sequences")
@@ -172,8 +172,8 @@ func TestTransparentModalKeepsChrome(t *testing.T) {
 }
 
 func TestSelectedRowKeepsHighlightThroughFragments(t *testing.T) {
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "0")
 
 	// a styled fragment inside a selected row, like the real gauge bar
 	row := "Crossfade|" + lipgloss.NewStyle().Foreground(colorBlue).Render("██████") + "|end"

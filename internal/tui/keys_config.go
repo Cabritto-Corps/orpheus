@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
+	"charm.land/bubbles/v2/key"
 )
 
 // validKeyActions lists the action names accepted in keys.json, derived from

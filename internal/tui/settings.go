@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/table"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/table"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"orpheus/internal/config"
 )
@@ -387,7 +387,9 @@ func (m *model) applyCapture(action, keyName string) error {
 
 func captureKeyName(msg tea.KeyMsg) string {
 	s := msg.String()
-	if msg.Alt {
+	// tea.KeyMsg is an interface in v2; the alt modifier lives on the
+	// concrete press. (Full key-model redesign is a later slice.)
+	if kp, ok := msg.(tea.KeyPressMsg); ok && kp.Mod&tea.ModAlt != 0 {
 		s = "alt+" + s
 	}
 	switch s {

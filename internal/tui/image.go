@@ -19,8 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
 	_ "golang.org/x/image/webp"
 
 	"orpheus/internal/cache"
@@ -833,7 +831,7 @@ func renderHalfBlock(img image.Image, cols, rows int) string {
 	if cols <= 0 || rows <= 0 || img == nil {
 		return ""
 	}
-	if lipgloss.DefaultRenderer().ColorProfile() == termenv.Ascii {
+	if !colorEnabled() {
 		// NO_COLOR / no-color terminals strip truecolor ANSI, turning the
 		// half-block mosaic into meaningless blank blocks.
 		return ""

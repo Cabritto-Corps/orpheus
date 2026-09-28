@@ -4,9 +4,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	golibrespot "github.com/elxgy/go-librespot"
 
 	"orpheus/internal/librespot"
@@ -338,7 +338,8 @@ func newTrackPopupList(termW, termH int) list.Model {
 	popup.SetShowHelp(false)
 	popup.FilterInput.Prompt = "/ "
 	popup.SetStatusBarItemName("track", "tracks")
-	popup.Styles.FilterPrompt = lipgloss.NewStyle().Foreground(colorMutedBlue)
+	popup.Styles.Filter.Focused.Prompt = lipgloss.NewStyle().Foreground(colorMutedBlue)
+	popup.Styles.Filter.Blurred.Prompt = lipgloss.NewStyle().Foreground(colorMutedBlue)
 	popup.Styles.StatusBar = lipgloss.NewStyle().Foreground(colorOffWhite).PaddingLeft(1)
 	popup.Styles.ActivePaginationDot = lipgloss.NewStyle().Foreground(colorBlue).SetString(" •")
 	popup.Styles.InactivePaginationDot = lipgloss.NewStyle().Foreground(colorDimBlue).SetString(" •")

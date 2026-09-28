@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"orpheus/internal/config"
 	"orpheus/internal/spotify"
@@ -205,7 +205,7 @@ func TestAlbumTabRefreshReloadsLibrary(t *testing.T) {
 	m.ui.activeTab = tabAlbums
 	m.browse.playlistsErr = errors.New("boom")
 
-	next, cmd := m.handleAlbumKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	next, cmd := m.handleAlbumKey(tea.KeyPressMsg{Code: 'r', Text: "r"})
 	m = next.(model)
 	if !m.browse.playlistsLoading {
 		t.Fatal("expected refresh to restart the library load")

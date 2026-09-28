@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 )
 
 func writeKeysFile(t *testing.T, content string) string {
@@ -71,10 +71,10 @@ func TestLoadKeyOverridesEmptyListKeepsDefault(t *testing.T) {
 
 func TestGoldenNextOverrideToJ(t *testing.T) {
 	m := newKeysFromConfig(map[string][]string{"next": {"j"}})
-	if !keyMatches(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}, m.Next) {
+	if !keyMatches(tea.KeyPressMsg{Code: 'j', Text: "j"}, m.Next) {
 		t.Fatal("j must trigger next after override")
 	}
-	if keyMatches(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")}, m.Next) {
+	if keyMatches(tea.KeyPressMsg{Code: 'n', Text: "n"}, m.Next) {
 		t.Fatal("n must no longer trigger next after override")
 	}
 }

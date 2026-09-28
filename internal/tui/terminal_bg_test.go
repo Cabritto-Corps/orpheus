@@ -6,8 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/lipgloss/v2"
 )
 
 // withTerminalBGState pins the terminal-background globals and the style
@@ -18,11 +17,12 @@ func withTerminalBGState(t *testing.T, original, last, style string) {
 	prevOrig, prevLast, prevBg := terminalBGOriginal, terminalBGLast, activeBackgrounds
 	terminalBGOriginal, terminalBGLast = original, last
 	activeBackgrounds = themeBackgrounds{Style: style}
-	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "0")
 	t.Cleanup(func() {
 		terminalBGOriginal, terminalBGLast = prevOrig, prevLast
 		activeBackgrounds = prevBg
-		lipgloss.SetColorProfile(termenv.Ascii)
+		t.Setenv("NO_COLOR", "1")
 	})
 }
 
@@ -37,8 +37,8 @@ func TestTerminalBGTargetDecisions(t *testing.T) {
 		want     string
 	}{
 		{"no capture stays silent", "", "#0A0D12", "solid", "#0A0D12", ""},
-		{"painted same page stays silent", orig, "#0A0D12", "solid", "#0A0D12", ""},
-		{"painted new page emits", orig, "#0A0D12", "solid", "#101216", "rgb:1010/1212/1616"},
+		{"painted same page stays silent", orig, "rgb:0a0a/0d0d/1212", "solid", "#0A0D12", ""},
+		{"painted new page emits", orig, "rgb:0a0a/0d0d/1212", "solid", "#101216", "rgb:1010/1212/1616"},
 		{"painted invalid page stays silent", orig, "#0A0D12", "solid", "notacolor", ""},
 		{"transparent with nothing set stays silent", orig, "", "transparent", "#0A0D12", ""},
 		{"transparent entry restores the capture", orig, "#0A0D12", "transparent", "#0A0D12", orig},
@@ -55,7 +55,7 @@ func TestTerminalBGTargetDecisions(t *testing.T) {
 
 func TestTerminalBGTargetAsciiStaysSilent(t *testing.T) {
 	withTerminalBGState(t, "rgb:0000/0000/0000", "", "solid")
-	lipgloss.SetColorProfile(termenv.Ascii)
+	t.Setenv("NO_COLOR", "1")
 	if got := terminalBGTarget(lipgloss.Color("#0A0D12")); got != "" {
 		t.Fatalf("ascii profile must stay silent, got %q", got)
 	}

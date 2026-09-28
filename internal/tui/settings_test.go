@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"orpheus/internal/config"
 	"orpheus/internal/librespot"
@@ -40,16 +40,20 @@ func send(m model, msg tea.KeyMsg) model {
 }
 
 func sendKey(m model, runes string) model {
-	return send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(runes)})
+	code := '?'
+	if r := []rune(runes); len(r) > 0 {
+		code = r[0]
+	}
+	return send(m, tea.KeyPressMsg{Code: code, Text: runes})
 }
 
 func openViaKey(m model) model {
-	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	next, _ := m.handleKey(tea.KeyPressMsg{Code: 'o', Text: "o"})
 	return next.(model)
 }
 
-func sendEnter(m model) model { return send(m, tea.KeyMsg{Type: tea.KeyEnter}) }
-func sendEsc(m model) model   { return send(m, tea.KeyMsg{Type: tea.KeyEscape}) }
+func sendEnter(m model) model { return send(m, tea.KeyPressMsg{Code: tea.KeyEnter}) }
+func sendEsc(m model) model   { return send(m, tea.KeyPressMsg{Code: tea.KeyEscape}) }
 
 func TestSettingsModalOpenCloseCursor(t *testing.T) {
 	m, _, _, _ := newSettingsTestModel(t)
@@ -59,11 +63,11 @@ func TestSettingsModalOpenCloseCursor(t *testing.T) {
 		t.Fatal("expected settings modal open in root mode")
 	}
 
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	if next.ui.settings.cursor != 1 {
 		t.Fatalf("down should move cursor to 1, got %d", next.ui.settings.cursor)
 	}
-	next = send(next, tea.KeyMsg{Type: tea.KeyUp})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyUp})
 	if next.ui.settings.cursor != 0 {
 		t.Fatalf("up should move cursor to 0, got %d", next.ui.settings.cursor)
 	}
@@ -86,7 +90,7 @@ func TestSettingsThemePickerLiveAppliesAndPersists(t *testing.T) {
 
 	// moving down previews the next theme live
 	idx := next.ui.settings.themeCursor
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	if next.ui.settings.themeCursor != idx+1 {
 		t.Fatalf("down should advance the theme cursor, got %d", next.ui.settings.themeCursor)
 	}
@@ -128,7 +132,7 @@ func TestSettingsThemePickerEscReverts(t *testing.T) {
 
 	next := openViaKey(m)
 	next = sendEnter(next) // open picker
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	if next.ui.settings.themeBackup != "default" {
 		t.Fatalf("backup preset = %q, want default", next.ui.settings.themeBackup)
 	}
@@ -153,7 +157,7 @@ func TestSettingsThemePickerDefersArtRegenToSave(t *testing.T) {
 	defaultKey := likedArtPaletteKey(m.likedArtThemeColors())
 	next := openViaKey(m)
 	next = sendEnter(next) // open picker
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	// Live preview moves the styles but must not pay the procedural
 	// cover regen per keypress: the art stays on the old palette.
 	if likedArtKey != defaultKey {
@@ -172,9 +176,9 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 	m, keysPath, _, _ := newSettingsTestModel(t)
 
 	next := openViaKey(m)
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown}) // to theme options row
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown}) // to keybinds row
-	next = sendEnter(next)                           // -> keys list
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown}) // to theme options row
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown}) // to keybinds row
+	next = sendEnter(next)                                // -> keys list
 	if next.ui.settings.mode != settingsModeKeys {
 		t.Fatalf("enter on keybinds row should open the keys list, mode=%v", next.ui.settings.mode)
 	}
@@ -182,7 +186,7 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 		if entry.action == "play_pause" {
 			break
 		}
-		next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+		next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	next = sendEnter(next) // start capture
 	if next.ui.settings.mode != settingsModeCapture || next.ui.settings.captureKey != "play_pause" {
@@ -212,10 +216,10 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected keys.json content: %q", string(data))
 	}
 
-	if !keyMatches(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, next.ui.keys.PlayPause) {
+	if !keyMatches(tea.KeyPressMsg{Code: 'j', Text: "j"}, next.ui.keys.PlayPause) {
 		t.Fatal("captured key should match play_pause after rebind")
 	}
-	if keyMatches(tea.KeyMsg{Type: tea.KeySpace}, next.ui.keys.PlayPause) {
+	if keyMatches(tea.KeyPressMsg{Code: tea.KeySpace}, next.ui.keys.PlayPause) {
 		t.Fatal("space should no longer match play_pause after rebind")
 	}
 	if LoadKeys(keysPath)["play_pause"] == nil {
@@ -227,9 +231,9 @@ func TestSettingsCrossfadePersistsToConfigFileWithRestartHint(t *testing.T) {
 	m, _, _, configPath := newSettingsTestModel(t)
 
 	next := openViaKey(m)
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	if next.ui.settings.cursor != 3 {
 		t.Fatalf("cursor = %d, want 3", next.ui.settings.cursor)
 	}
@@ -265,10 +269,10 @@ func TestSettingsCacheTogglePersistsToConfigFile(t *testing.T) {
 	m, _, _, configPath := newSettingsTestModel(t)
 
 	next := openViaKey(m)
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	if next.ui.settings.cursor != 4 {
 		t.Fatalf("cursor = %d, want 4", next.ui.settings.cursor)
 	}
@@ -297,10 +301,10 @@ func TestSettingsCaptureEscAndNavigation(t *testing.T) {
 	m, _, _, _ := newSettingsTestModel(t)
 
 	next := openViaKey(m)
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown}) // theme options row
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown}) // keybinds row
-	next = sendEnter(next)                           // keys list
-	next = sendEnter(next)                           // capture for "tab"
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown}) // theme options row
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown}) // keybinds row
+	next = sendEnter(next)                                // keys list
+	next = sendEnter(next)                                // capture for "tab"
 	if next.ui.settings.mode != settingsModeCapture {
 		t.Fatal("expected capture mode")
 	}

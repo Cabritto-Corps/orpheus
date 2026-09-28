@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
+	"charm.land/lipgloss/v2"
 	golibrespot "github.com/elxgy/go-librespot"
 )
 
@@ -226,7 +226,7 @@ func (m *model) ensureHelpViewport() {
 	_, innerH, contentW := helpModalSize(m.ui.width, m.ui.height)
 	body := m.helpGroupedBody(contentW, innerH-4)
 	if lipgloss.Height(body) > innerH-2 {
-		v := viewport.New(contentW, innerH-2)
+		v := viewport.New(viewport.WithWidth(contentW), viewport.WithHeight(innerH-2))
 		v.SetContent(body)
 		m.ui.helpViewport = &v
 	} else {

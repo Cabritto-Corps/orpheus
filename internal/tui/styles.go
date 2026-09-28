@@ -2,12 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/lipgloss/v2"
 )
 
 var (
@@ -287,7 +288,7 @@ func transparentFrame() bool {
 // solid mode so the whole frame is one surface. Transparent keeps the
 // panel tone — the box is floating chrome, not a frame zone, and an
 // unpainted box would dissolve into the terminal behind it.
-func modalBoxBackground() lipgloss.Color {
+func modalBoxBackground() color.Color {
 	if activeBackgrounds.Style == "solid" {
 		return colorPage
 	}
@@ -463,14 +464,17 @@ func applyListStyles(l *list.Model) {
 		Foreground(colorOffWhite)
 
 	l.Styles.TitleBar = lipgloss.NewStyle().
-		Background(lipgloss.Color("")).
+		Background(lipgloss.NoColor{}).
 		Padding(0, 0, 1, 0)
 
-	l.Styles.FilterPrompt = lipgloss.NewStyle().
+	// The v2 filter input styles prompt and cursor per focus state; the v1
+	// FilterPrompt/FilterCursor applied regardless, so set both states.
+	l.Styles.Filter.Focused.Prompt = lipgloss.NewStyle().
+		Foreground(colorBlue)
+	l.Styles.Filter.Blurred.Prompt = lipgloss.NewStyle().
 		Foreground(colorBlue)
 
-	l.Styles.FilterCursor = lipgloss.NewStyle().
-		Foreground(colorBlueLight)
+	l.Styles.Filter.Cursor.Color = colorBlueLight
 
 	l.Styles.StatusBar = lipgloss.NewStyle().
 		Foreground(colorMutedBlue)

@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"orpheus/internal/librespot"
 	"orpheus/internal/playbackdomain"

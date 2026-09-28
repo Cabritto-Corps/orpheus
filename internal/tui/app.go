@@ -6,10 +6,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"orpheus/internal/config"
 	"orpheus/internal/librespot"
@@ -212,9 +212,7 @@ func Run(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.Config
 	CaptureTerminalBG()
 	defer RestoreTerminalBG()
 	ApplyTerminalBG(colorPage)
-	p := tea.NewProgram(m,
-		tea.WithAltScreen(),
-	)
+	p := tea.NewProgram(m)
 	if playbackStateCh != nil {
 		StartPlaybackStateListener(playbackStateCh, p.Send, ctx)
 	}

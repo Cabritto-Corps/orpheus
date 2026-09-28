@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	golibrespot "github.com/elxgy/go-librespot"
 
 	"orpheus/internal/librespot"
@@ -394,10 +394,10 @@ func TestAdvancePlayerCoverEpochOnTrackChangeEvenWithEmptyURL(t *testing.T) {
 func TestTransportTransitionBlocksTransportKeys(t *testing.T) {
 	m := model{ui: uiModel{keys: newKeys()}}
 	m.beginTransportTransition()
-	if !m.shouldBlockTransportInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}) {
+	if !m.shouldBlockTransportInput(tea.KeyPressMsg{Code: 'n', Text: "n"}) {
 		t.Fatal("expected transport key to be blocked while transition pending")
 	}
-	if m.shouldBlockTransportInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}}) {
+	if m.shouldBlockTransportInput(tea.KeyPressMsg{Code: '?', Text: "?"}) {
 		t.Fatal("expected non-transport key to remain allowed")
 	}
 }
@@ -406,7 +406,7 @@ func TestHandlePlaybackKeyQueuesSkipWhenBlocked(t *testing.T) {
 	ch := make(chan librespot.TUICommand, 1)
 	m := model{ui: uiModel{keys: newKeys()}, tuiCmdCh: ch}
 	m.beginTransportTransition()
-	next, _ := m.handlePlaybackKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	next, _ := m.handlePlaybackKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	got := next.(model)
 	if len(got.transport.inputQueue) != 1 || got.transport.inputQueue[0].kind != playbackInputNext {
 		t.Fatalf("expected one queued next input action, got %+v", got.transport.inputQueue)

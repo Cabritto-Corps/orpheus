@@ -1,22 +1,25 @@
 package tui
 
 import (
+	"image/color"
 	"slices"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/lipgloss/v2"
 )
 
 const (
 	modalLabelWidth = 20
 
-	// modalContentInset is the box's horizontal padding: header, separator,
-	// rows and the selected-row highlight all share this content width so
-	// their right edges line up instead of ragged.
-	modalContentInset = 2
+	// modalContentInset is the box chrome every content width budgets
+	// for: 1-cell padding per side plus the 1-cell border ring. Rows,
+	// hints and tables built to (width - inset) fit the box content
+	// exactly. lipgloss v2 Width is the TOTAL block width (content wraps
+	// at width - padding - border); v1 treated it as the content width,
+	// so this was 2 (border only) before the v2 migration.
+	modalContentInset = 4
 )
 
 // modalGeometry clamps a modal's inner dimensions to the placement budget:
@@ -79,9 +82,9 @@ func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int
 	// The ░ scrim dims the frame behind the box. In transparent mode the
 	// whitespace keeps no background: the terminal owns the backdrop and
 	// painting page would reclaim the whole frame.
-	wsBg := colorPage
+	wsBg := color.Color(colorPage)
 	if transparentFrame() {
-		wsBg = ""
+		wsBg = lipgloss.NoColor{}
 	}
 	return lipgloss.Place(
 		termW,
@@ -90,8 +93,7 @@ func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int
 		lipgloss.Center,
 		box,
 		lipgloss.WithWhitespaceChars("░"),
-		lipgloss.WithWhitespaceForeground(colorScrim),
-		lipgloss.WithWhitespaceBackground(wsBg),
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Foreground(colorScrim).Background(wsBg)),
 	)
 }
 
@@ -150,7 +152,7 @@ func alignRight(s string, width int) string {
 // framework instead of being re-invented per surface.
 func hintLine(bindings []key.Binding, width int) string {
 	h := help.New()
-	h.Width = width
+	h.SetWidth(width)
 	h.Styles.ShortKey = styleTrackPopupTitle
 	h.Styles.ShortDesc = styleModalHint
 	h.Styles.ShortSeparator = styleModalHint
@@ -166,7 +168,7 @@ func withDesc(b key.Binding, desc string) key.Binding {
 
 // themeSwatch is one preview cell of the palette bar.
 type themeSwatch struct {
-	color lipgloss.Color
+	color color.Color
 }
 
 // themeSwatches picks the seven representative roles of a palette.
@@ -186,7 +188,7 @@ func themeSwatches(c themeColors) []themeSwatch {
 // block, identical on every row — the bar must never reflow when the
 // cursor moves over it.
 func swatchBar(swatches []themeSwatch) string {
-	if lipgloss.DefaultRenderer().ColorProfile() == termenv.Ascii {
+	if !colorEnabled() {
 		return ""
 	}
 	var b strings.Builder

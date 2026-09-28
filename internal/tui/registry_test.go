@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	"charm.land/lipgloss/v2"
 
 	"orpheus/internal/spotify"
 )

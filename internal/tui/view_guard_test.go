@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"orpheus/internal/config"
 	"orpheus/internal/spotify"
@@ -156,7 +156,7 @@ func TestViewFrameContract(t *testing.T) {
 					variant.width, variant.height, variant.tab, variant.playing = size[0], size[1], tb, playing
 					name := fmt.Sprintf("%dx%d/%s/%s/%s", size[0], size[1], tabName(variant.tab), variant.name, map[bool]string{true: "playing", false: "idle"}[playing])
 					m := guardModel(t, variant)
-					assertFrameContract(t, name, m.View(), variant.width, variant.height)
+					assertFrameContract(t, name, m.View().Content, variant.width, variant.height)
 				}
 			}
 		}
@@ -173,7 +173,7 @@ func TestViewFrameContractAllThemes(t *testing.T) {
 				variant := frameVariant{name: themeName, width: size[0], height: size[1], tab: tb, hasQueue: true}
 				m := guardModel(t, variant)
 				name := fmt.Sprintf("%dx%d/%s/%s", size[0], size[1], themeName, tabName(variant.tab))
-				assertFrameContract(t, name, m.View(), variant.width, variant.height)
+				assertFrameContract(t, name, m.View().Content, variant.width, variant.height)
 			}
 		}
 	}
@@ -193,7 +193,7 @@ func TestViewFrameContractBackgroundModes(t *testing.T) {
 				st.backgrounds.Style = style
 				applyTheme(st)
 				name := fmt.Sprintf("%dx%d/bg-%s/%s", size[0], size[1], style, tabName(variant.tab))
-				assertFrameContract(t, name, m.View(), variant.width, variant.height)
+				assertFrameContract(t, name, m.View().Content, variant.width, variant.height)
 			}
 		}
 	}
@@ -205,7 +205,7 @@ func TestViewFrameContractModals(t *testing.T) {
 		for _, modal := range []string{"settings", "settings-theme", "settings-theme-options", "settings-keys", "settings-capture", "help", "popup"} {
 			variant := frameVariant{name: modal, width: size[0], height: size[1], tab: tabPlayer, playing: true, hasQueue: true, modal: modal}
 			m := guardModel(t, variant)
-			assertFrameContract(t, fmt.Sprintf("modal-%s-%dx%d", modal, size[0], size[1]), m.View(), variant.width, variant.height)
+			assertFrameContract(t, fmt.Sprintf("modal-%s-%dx%d", modal, size[0], size[1]), m.View().Content, variant.width, variant.height)
 		}
 	}
 }

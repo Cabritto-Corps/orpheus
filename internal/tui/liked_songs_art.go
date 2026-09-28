@@ -4,7 +4,7 @@ import (
 	"image"
 	"image/color"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 const likedSongsImageURL = "orpheus://liked-songs"

@@ -2,12 +2,15 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
+	"os"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/progress"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/progress"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
 )
 
 const (
@@ -50,22 +53,22 @@ const (
 	iconRepeatTrackNF   = "\uf01e"
 )
 
-func (m model) View() string {
+func (m model) View() tea.View {
 	if m.ui.width < 40 || m.ui.height < 12 {
 		// No kitty overlay here: the error branch must never emit one.
-		return styleError.Render("terminal too small — please resize") + m.kittyOverlay()
+		return tea.View{Content: styleError.Render("terminal too small — please resize") + m.kittyOverlay(), AltScreen: true}
 	}
 
 	header := m.headerView()
 
 	if m.ui.helpOpen {
-		return m.helpModalView() + m.kittyOverlay()
+		return tea.View{Content: m.helpModalView() + m.kittyOverlay(), AltScreen: true}
 	}
 	if m.ui.settings.open {
-		return m.settingsModalView() + m.kittyOverlay()
+		return tea.View{Content: m.settingsModalView() + m.kittyOverlay(), AltScreen: true}
 	}
 	if m.ui.trackPopupOpen {
-		return m.trackPopupView() + m.kittyOverlay()
+		return tea.View{Content: m.trackPopupView() + m.kittyOverlay(), AltScreen: true}
 	}
 
 	tabBar := m.tabBarView()
@@ -86,26 +89,39 @@ func (m model) View() string {
 		// No frame paint at all: the terminal's own background shows
 		// through every zone. Selection and modal chrome keep their own
 		// backgrounds (they are overlays, not zones).
-		return lipgloss.JoinVertical(lipgloss.Left, parts...) + m.kittyOverlay()
+		return tea.View{Content: lipgloss.JoinVertical(lipgloss.Left, parts...) + m.kittyOverlay(), AltScreen: true}
 	default:
 		// Solid — and anything unexpected: one uniform surface.
-		return paintPage(lipgloss.JoinVertical(lipgloss.Left, parts...), m.ui.width) + m.kittyOverlay()
+		return tea.View{Content: paintPage(lipgloss.JoinVertical(lipgloss.Left, parts...), m.ui.width) + m.kittyOverlay(), AltScreen: true}
 	}
 }
 
-// bgSequence returns the terminal SGR that sets c as the background
-// (profile-aware, so ANSI palettes quantize correctly), or "" on ASCII
-// profiles where a themed background is not representable.
-func bgSequence(c lipgloss.Color) string {
-	if c == "" {
+// colorEnabled reports whether the terminal wants colors: NO_COLOR, dumb
+// and non-TTY environments (the Ascii/NoTTY profiles) disable color.
+// Everything else renders full-fidelity and lets the v2 renderer
+// downsample at output. colorprofile.Env reads the live environment with
+// no globals, so tests control it with t.Setenv instead of mutating a
+// shared renderer.
+func colorEnabled() bool {
+	switch colorprofile.Env(os.Environ()) {
+	case colorprofile.Ascii, colorprofile.NoTTY:
+		return false
+	default:
+		return true
+	}
+}
+
+// bgSequence returns the terminal SGR that sets c as the background, or
+// "" where a themed background is not representable (no-color
+// profiles). Full fidelity is always emitted: the v2 renderer
+// downsamples raw SGR in frame content at output, so no per-profile
+// quantization happens here.
+func bgSequence(c color.Color) string {
+	if c == nil || !colorEnabled() {
 		return ""
 	}
-	profile := lipgloss.DefaultRenderer().ColorProfile()
-	if profile == termenv.Ascii {
-		return ""
-	}
-	st := termenv.Style{}.Background(profile.Color(string(c)))
-	return strings.TrimSuffix(st.Styled(""), termenv.CSI+termenv.ResetSeq+"m")
+	r, g, b, _ := c.RGBA()
+	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r>>8, g>>8, b>>8)
 }
 
 // reassertBgLines asserts the background at every line start as well as
@@ -132,14 +148,18 @@ func reassertBg(text, seq string) string {
 	if seq == "" {
 		return text
 	}
-	return strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+seq)
+	// Match both reset spellings: v1 terminated styles with \x1b[0m,
+	// v2 emits the abbreviated \x1b[m. Neither is a substring of the
+	// other, so order is irrelevant.
+	out := strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+seq)
+	return strings.ReplaceAll(out, "\x1b[m", "\x1b[m"+seq)
 }
 
 // paintBand fills every line of a band with a background tone that
 // survives inner resets: the sequence is asserted at the line start,
 // re-asserted after each reset, and forced again under the trailing
 // padding (which would otherwise inherit an inner element's own bg).
-func paintBand(band string, width int, bg lipgloss.Color) string {
+func paintBand(band string, width int, bg color.Color) string {
 	seq := bgSequence(bg)
 	if seq == "" {
 		return band
@@ -253,13 +273,13 @@ func gradientBar(frac float64, width int) string {
 	p := progress.New(
 		progress.WithWidth(width),
 		progress.WithoutPercentage(),
-		progress.WithGradient(string(colorBlue), string(colorBlueLight)),
+		progress.WithColors(colorBlue, colorBlueLight),
 	)
 	full, empty := themeBarRunes()
 	p.Full, p.Empty = full, empty
 	// bubbles' defaults are hardcoded hexes (#606060 empty); the theme's
 	// own gray keeps the empty track inside the palette.
-	p.EmptyColor = string(colorGray)
+	p.EmptyColor = colorGray
 	return p.ViewAs(frac)
 }
 
