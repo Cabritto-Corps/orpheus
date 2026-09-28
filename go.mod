@@ -7,7 +7,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.8
-	github.com/elxgy/go-librespot v0.0.0-20260927155744-0685f372a495
+	github.com/elxgy/go-librespot v0.0.0-20260928180041-673b13b1e49f
 	github.com/joho/godotenv v1.5.1
 	github.com/muesli/termenv v0.16.0
 	github.com/sirupsen/logrus v1.10.2
