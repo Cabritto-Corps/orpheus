@@ -24,7 +24,7 @@ Press `o` → **Theme options**. Every row cycles with `+`/`-` (or enter) and pr
 - **Base palette** — the preset everything starts from. Changing it resets color changes but keeps your glyph, typography, cover and backgrounds choices
 - **Page tone** — the color of the whole frame. `preset` uses the preset's own
 - **Accent** — sets the accent and derives the light accent from it
-- **Backgrounds** — `divided` tints modal boxes with the panel color, `solid` flattens them to the page color
+- **Backgrounds** — `solid` paints the whole frame in one page-colored surface, `transparent` paints no frame background so your terminal's shows through
 - **Border** — box style of modals and placeholder covers: `rounded`, `thick`, `double`, `ascii`
 - **Now playing** — the marker next to the playlist/album row currently playing: `♪`, `●`, `▶`, `→` or none
 - **Play/pause** — the transport icons: `▶ ⏸`, `► ⏸`, `▷ ⏸` or `>` `||`
@@ -107,11 +107,11 @@ If your terminal uses a Nerd Font (`orpheus_nerd_fonts=true` in your `.env`), th
 ### Backgrounds
 
 ```json
-"backgrounds": { "style": "divided" }
+"backgrounds": { "style": "solid" }
 ```
 
-- `divided`: modal boxes are tinted with the `panel` color so they lift off the page
-- `solid`: modal boxes use the page color — the whole frame is one surface
+- `solid`: the whole frame is one uniform page surface — modal boxes included
+- `transparent`: the frame paints no background at all and your terminal's own background shows through. Selection highlights and modal boxes keep their colors (a box is floating chrome), the modal backdrop keeps its pattern but stops painting behind it, and orpheus hands back the terminal background color it would otherwise set for itself while this mode is active
 
 ## Terminal background
 

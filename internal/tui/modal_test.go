@@ -41,6 +41,32 @@ func TestModalFrameGoldenParts(t *testing.T) {
 	}
 }
 
+// TestModalFrameTransparentBackdrop: the dim ░ pattern survives without
+// a page fill — painting page behind the box would reclaim the frame the
+// mode promises to the terminal.
+func TestModalFrameTransparentBackdrop(t *testing.T) {
+	st := themePresetState("default")
+	st.backgrounds.Style = "transparent"
+	applyTheme(st)
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(termenv.Ascii)
+		applyTheme(themePresetState("default"))
+	})
+	title := styleModalTitle.Render("Settings")
+	body := "\n  body line\n"
+	out := modalFrame(100, 30, title, styleModalHint.Render("esc: close"), body, 52, 12)
+	if !strings.Contains(out, "░") {
+		t.Fatal("transparent backdrop lost the dim pattern")
+	}
+	if !strings.Contains(out, "╭") && !strings.Contains(out, "┌") {
+		t.Fatal("transparent modal lost its border")
+	}
+	if pageSeq := bgSequence(colorPage); strings.Contains(out, pageSeq) {
+		t.Fatal("transparent backdrop paints the page background")
+	}
+}
+
 func TestModalRowSelectedAndFallback(t *testing.T) {
 	sel := modalRow("Theme", "default", true, 60)
 	plain := modalRow("Theme", "default", false, 60)

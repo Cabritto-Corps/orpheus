@@ -76,6 +76,13 @@ func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int
 		box = reassertBgLines(box, seq)
 	}
 
+	// The ░ scrim dims the frame behind the box. In transparent mode the
+	// whitespace keeps no background: the terminal owns the backdrop and
+	// painting page would reclaim the whole frame.
+	wsBg := colorPage
+	if transparentFrame() {
+		wsBg = ""
+	}
 	return lipgloss.Place(
 		termW,
 		termH,
@@ -84,7 +91,7 @@ func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int
 		box,
 		lipgloss.WithWhitespaceChars("░"),
 		lipgloss.WithWhitespaceForeground(colorScrim),
-		lipgloss.WithWhitespaceBackground(colorPage),
+		lipgloss.WithWhitespaceBackground(wsBg),
 	)
 }
 
