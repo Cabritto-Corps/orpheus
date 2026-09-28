@@ -29,7 +29,9 @@ jobs:
       # shared cache entry is an attack surface for the binaries it produces.
       # Releases are rare, so the uncached cost is acceptable.
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            libasound2-dev libflac-dev libogg-dev libvorbis-dev
 
       - name: Vet
         run: go vet ./...
@@ -37,21 +39,125 @@ jobs:
       - name: Test
         run: go test -race ./...
 
-  build:
+  # Linux ships as one artifact per FLAC soname. The soname is baked into the
+  # binary at link time (`#cgo pkg-config: flac`), and distros disagree: FLAC
+  # 1.3.x links libFLAC.so.8, 1.4.x links .so.12, >=1.5.x links .so.14. One
+  # binary can never satisfy all of them, so each flavor builds in a pinned
+  # container carrying that FLAC generation. The glibc floor follows the
+  # container (2.35 for flac8, 2.36 for flac12, current for flac14), which
+  # matches the era of the distros each flavor targets. The FLAC
+  # version->soname map also lives in install.sh — update them together.
+  build-linux:
     needs: test
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       matrix:
         include:
-          - os: ubuntu-24.04
-            suffix: linux-amd64
-            deps: sudo apt-get update && sudo apt-get install -y libasound2-dev libflac-dev libogg-dev libvorbis-dev
-            checksum: sha256sum
-          - os: macos-15
-            suffix: darwin-arm64
-            deps: brew update && brew install libogg libvorbis flac
-            checksum: shasum -a 256
-    runs-on: ${{ matrix.os }}
+          # FLAC 1.3.4 -> libFLAC.so.8. Ubuntu 22.04 (not Debian bullseye:
+          # its mirrors are past LTS) so apt stays reachable until 2027.
+          # Targets: Ubuntu <=22.04, Debian <=bullseye, Mint 21, old Fedora.
+          - flavor: flac8
+            image: ubuntu:22.04
+            family: apt
+            soname: libFLAC.so.8
+          # FLAC 1.4.2 -> libFLAC.so.12.
+          # Targets: Ubuntu 24.04+, Debian bookworm+, Mint 22, Fedora ~38-41.
+          - flavor: flac12
+            image: debian:bookworm
+            family: apt
+            soname: libFLAC.so.12
+          # FLAC 1.5.x -> libFLAC.so.14. Arch has no -dev split (headers
+          # ship with the libs); base-devel provides toolchain + pacman.
+          # Targets: Arch / EndeavourOS / CachyOS, Debian trixie+, new
+          # Fedora.
+          - flavor: flac14
+            image: archlinux:base-devel
+            family: pacman
+            soname: libFLAC.so.14
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # Root inside the container: no sudo.
+      - name: Install dependencies
+        run: |
+          case "${{ matrix.family }}" in
+            apt) apt-get update && apt-get install -y --no-install-recommends \
+              build-essential pkg-config libasound2-dev libflac-dev \
+              libogg-dev libvorbis-dev ;;
+            pacman) pacman -Syu --needed --noconfirm \
+              go pkgconf flac libogg libvorbis alsa-lib ;;
+          esac
+
+      # Stamps the tag into the binary so `./orpheus --version` identifies a
+      # download. Kept un-stripped so panic stack traces stay useful.
+      # env indirection instead of ${{ }} inline: git tag names may legally
+      # contain shell metacharacters, and env values are data, never
+      # re-parsed by the shell.
+      - name: Build
+        env:
+          ORPHEUS_VERSION: ${{ github.ref_name }}
+        run: >
+          go build -ldflags "-X main.version=$ORPHEUS_VERSION"
+          -o orpheus ./cmd/orpheus
+
+      - name: Verify version stamp
+        run: ./orpheus --version
+
+      # The matrix is worthless if a leg silently links the wrong FLAC, so
+      # each leg proves its soname. The decoder is the only FLAC consumer:
+      # ldd must show exactly one libFLAC, and it must be the flavor's.
+      - name: Verify FLAC soname
+        env:
+          EXPECTED_SONAME: ${{ matrix.soname }}
+        run: |
+          ldd orpheus | tee ldd.txt
+          grep -qF "$EXPECTED_SONAME" ldd.txt || {
+            echo "expected $EXPECTED_SONAME in ldd output"
+            exit 1
+          }
+          [ "$(grep -c 'libFLAC\.so' ldd.txt)" = 1 ] || {
+            echo "expected exactly one libFLAC NEEDED entry"
+            exit 1
+          }
+
+      # The archive holds a binary named `orpheus`, so the tutorial's
+      # `./orpheus` instructions work straight after extraction. Fixed
+      # names, no version: the installer downloads by flavor, never by tag
+      # parsing.
+      - name: Package
+        env:
+          ASSET: orpheus-linux-amd64-${{ matrix.flavor }}.tar.gz
+        run: tar -czf "$ASSET" orpheus
+
+      - name: Checksum
+        env:
+          ASSET: orpheus-linux-amd64-${{ matrix.flavor }}.tar.gz
+        run: sha256sum "$ASSET" > "$ASSET.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binary-linux-amd64-${{ matrix.flavor }}
+          path: |
+            orpheus-linux-amd64-${{ matrix.flavor }}.tar.gz
+            orpheus-linux-amd64-${{ matrix.flavor }}.tar.gz.sha256
+
+  # macOS stays a single asset: Homebrew supplies the matching FLAC dylib at
+  # `brew install` time, so there is no soname-skew matrix to build. Out of
+  # the flac8/flac12/flac14 scope by design.
+  build-darwin:
+    needs: test
+    timeout-minutes: 20
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -63,17 +169,15 @@ jobs:
           cache: false
 
       - name: Install dependencies
-        run: ${{ matrix.deps }}
+        run: brew update && brew install libogg libvorbis flac
 
-      # Stamps the tag into the binary so `./orpheus --version` identifies a
-      # download. Kept un-stripped so panic stack traces stay useful.
-      # env indirection instead of ${{ }} inline: git tag names may legally
-      # contain shell metacharacters, and env values are data, never re-parsed
-      # by the shell.
+      # Same stamp semantics as the Linux legs (see above).
       - name: Build
         env:
           ORPHEUS_VERSION: ${{ github.ref_name }}
-        run: go build -ldflags "-X main.version=$ORPHEUS_VERSION" -o orpheus ./cmd/orpheus
+        run: >
+          go build -ldflags "-X main.version=$ORPHEUS_VERSION"
+          -o orpheus ./cmd/orpheus
 
       - name: Verify version stamp
         run: ./orpheus --version
@@ -81,22 +185,24 @@ jobs:
       # The archive holds a binary named `orpheus`, so the tutorial's
       # `./orpheus` instructions work straight after extraction.
       - name: Package
-        run: tar -czf "orpheus-${{ matrix.suffix }}.tar.gz" orpheus
+        run: tar -czf "orpheus-darwin-arm64.tar.gz" orpheus
 
       # sha256sum does not exist on macOS runners; the manifest lists GNU
       # tools only with g-aliases (gtar) and no coreutils.
       - name: Checksum
-        run: ${{ matrix.checksum }} "orpheus-${{ matrix.suffix }}.tar.gz" > "orpheus-${{ matrix.suffix }}.tar.gz.sha256"
+        run: >
+          shasum -a 256 "orpheus-darwin-arm64.tar.gz" >
+          "orpheus-darwin-arm64.tar.gz.sha256"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: binary-${{ matrix.suffix }}
+          name: binary-darwin-arm64
           path: |
-            orpheus-${{ matrix.suffix }}.tar.gz
-            orpheus-${{ matrix.suffix }}.tar.gz.sha256
+            orpheus-darwin-arm64.tar.gz
+            orpheus-darwin-arm64.tar.gz.sha256
 
   release:
-    needs: build
+    needs: [build-linux, build-darwin]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -118,14 +224,17 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          PREV=$(git describe --tags --abbrev=0 "refs/tags/${TAG}^" 2>/dev/null || true)
+          PREV=$(git describe --tags --abbrev=0 \
+            "refs/tags/${TAG}^" 2>/dev/null || true)
           if [ -n "$PREV" ]; then RANGE="$PREV..$TAG"; else RANGE="$TAG"; fi
           echo "commit range: $RANGE"
           {
             echo "## Changes"
             section() {
               local neg="$1" title="$2" regex="$3" list
-              list=$(git log --no-merges --format='%h%x09%s' "$RANGE" | awk -F'\t' -v r="$regex" -v n="$neg" 'n == "yes" ? $2 !~ r : $2 ~ r')
+              list=$(git log --no-merges --format='%h%x09%s' "$RANGE" | \
+                awk -F'\t' -v r="$regex" -v n="$neg" \
+                'n == "yes" ? $2 !~ r : $2 ~ r')
               if [ -n "$list" ]; then
                 printf '\n### %s\n\n' "$title"
                 while IFS=$'\t' read -r sha msg; do
@@ -143,7 +252,9 @@ jobs:
             # Fallback: subjects with no conventional-commit type. Direct
             # pushes to main are not commitlinted, so they land here instead
             # of vanishing from the notes.
-            section yes "Other" '^(feat|fix|hotfix|perf|refactor|docs|test|chore|release)([(][^)]*[)])?: '
+            other='^(feat|fix|hotfix|perf|refactor|docs|test|'
+            other+='chore|release)([(][^)]*[)])?: '
+            section yes "Other" "$other"
           } > release-notes.md
           cat release-notes.md
 

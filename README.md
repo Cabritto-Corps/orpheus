@@ -17,7 +17,20 @@ The installer verifies the release SHA-256 checksum, installs the binary to `~/.
 - `bash -s -- --bin-dir <dir>` to choose another directory
 - `bash -s -- --version vX.Y.Z` to pin a release
 - `bash -s -- --install-deps` to install missing audio libraries with your distro package manager
+- `bash -s -- --flac-flavor <flac8|flac12|flac14>` to override the automatic audio-library flavor pick (see below)
 - `bash -s -- --no-config` to skip starter configuration files
+
+#### Audio library flavors
+
+Linux binaries ship in three flavors, one per FLAC version your distro provides (`ldconfig -p | grep libFLAC` tells you yours). The installer picks automatically:
+
+| Flavor | Needs | Typical distros |
+| --- | --- | --- |
+| `flac8` | `libFLAC.so.8` (FLAC 1.3.x) | Ubuntu ≤ 22.04, Debian ≤ bullseye, Mint 21 |
+| `flac12` | `libFLAC.so.12` (FLAC 1.4.x) | Ubuntu 24.04+, Debian bookworm+, Mint 22 |
+| `flac14` | `libFLAC.so.14` (FLAC 1.5.x) | Arch / EndeavourOS / CachyOS, Debian trixie+ |
+
+Downloading by hand? Grab `orpheus-linux-amd64-<flavor>.tar.gz` from the [releases page](https://github.com/Cabritto-Corps/orpheus/releases/latest). macOS has a single `orpheus-darwin-arm64.tar.gz` (no flavors).
 
 On Linux, missing ALSA/FLAC/Ogg/Vorbis libraries are detected with `ldd` and the installer prints the exact distro command (or runs it with explicit consent). macOS needs `brew install libogg libvorbis flac`. Then run `orpheus auth login` (requires Spotify Premium).
 

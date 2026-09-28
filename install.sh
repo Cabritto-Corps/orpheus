@@ -10,6 +10,7 @@ set -euo pipefail
 REPO="Cabritto-Corps/orpheus"
 SUPPORTED="linux-amd64, darwin-arm64"
 install_deps="auto"
+flac_flavor="${ORPHEUS_FLAC_FLAVOR:-}"
 seed_config=1
 PATH_SETUP=""
 CONFIG_CREATED=""
@@ -18,16 +19,21 @@ DEPS_STATUS=""
 PLATFORM_DISPLAY=""
 DISTRO_FAMILY=""
 INSTALLED_VERSION=""
+FLAC_FLAVOR=""
 
 usage() {
 	cat <<'EOF'
-Usage: install.sh [--bin-dir DIR] [--version TAG] [--install-deps] [--no-config] [--help]
+Usage: install.sh [--bin-dir DIR] [--version TAG] [--flac-flavor ID] [--install-deps] [--no-config] [--help]
 
 Installs the orpheus Spotify TUI player from a GitHub release binary.
 
   --bin-dir DIR   install directory (default: $HOME/.local/bin)
   --version TAG   release tag to install, e.g. v0.4.2 (default: latest).
                   A bare number (0.4.2) is accepted and gets a v prefix.
+  --flac-flavor ID
+                  Linux audio build to download: flac8, flac12 or flac14
+                  (matches the libFLAC.so.N on your system). Default: auto-
+                  detected from the installed libraries or distro packages.
   --install-deps  install missing audio libraries with the detected distro
                   package manager (uses sudo and only affects system audio
                   libraries). Without this flag the installer prints the
@@ -35,7 +41,7 @@ Installs the orpheus Spotify TUI player from a GitHub release binary.
   --no-config     do not create starter files under ~/.config/orpheus
   --help          print this help and exit
 
-Environment overrides: BIN_DIR, ORPHEUS_VERSION (flags win).
+Environment overrides: BIN_DIR, ORPHEUS_VERSION, ORPHEUS_FLAC_FLAVOR (flags win).
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/Cabritto-Corps/orpheus/main/install.sh | bash
@@ -198,13 +204,200 @@ missing_audio_libs() {
 	done | sort -u
 }
 
-deps_install_command() {
-	local family="$1"
+flac_soname_to_flavor() {
+	case "$1" in
+		8) printf 'flac8\n' ;;
+		12) printf 'flac12\n' ;;
+		14) printf 'flac14\n' ;;
+		*) return 1 ;;
+	esac
+}
+
+flac_flavor_soname() {
+	case "$1" in
+		flac8) printf '8\n' ;;
+		flac12) printf '12\n' ;;
+		flac14) printf '14\n' ;;
+		*) return 1 ;;
+	esac
+}
+
+# Maps an upstream FLAC version (e.g. 1.5.0, 1.4.3+ds-2) to a flavor id.
+# Fails for versions whose soname is unknown (e.g. a future FLAC 2.x).
+flac_version_to_flavor() {
+	local version="$1" major minor rest
+	version=${version%%[-+]*} # drop distro suffixes like -1.2 or +ds-2
+	major=${version%%.*}
+	rest=${version#*.}
+	minor=${rest%%.*}
+	case "$major" in
+		'' | *[!0-9]*) return 1 ;;
+	esac
+	case "$minor" in
+		'' | *[!0-9]*) return 1 ;;
+	esac
+	if [ "$major" -gt 1 ]; then
+		return 1
+	fi
+	if [ "$minor" -le 3 ]; then
+		printf 'flac8\n'
+	elif [ "$minor" -eq 4 ]; then
+		printf 'flac12\n'
+	else
+		printf 'flac14\n'
+	fi
+}
+
+installed_flac_soname() {
+	local soname best=''
+	if command -v ldconfig >/dev/null 2>&1; then
+		while IFS= read -r soname; do
+			soname=${soname#libFLAC.so.}
+			case "$soname" in
+				'' | *[!0-9]*) continue ;; # bare devel link, C++ lib, etc.
+			esac
+			if [ -z "$best" ] || [ "$soname" -gt "$best" ]; then
+				best="$soname"
+			fi
+		done < <(ldconfig -p 2>/dev/null | grep -F 'libFLAC.so.' | awk '{ print $1 }')
+	fi
+	if [ -z "$best" ]; then
+		best=$(installed_flac_soname_glob) || return 1
+	fi
+	[ -n "$best" ] || return 1
+	printf '%s\n' "$best"
+}
+
+installed_flac_soname_glob() {
+	local path soname best=''
+	for path in /usr/lib/libFLAC.so.* /usr/lib64/libFLAC.so.* /lib/libFLAC.so.* /lib64/libFLAC.so.* /usr/local/lib/libFLAC.so.*; do
+		[ -e "$path" ] || [ -L "$path" ] || continue
+		soname=${path##*/libFLAC.so.}
+		case "$soname" in
+			'' | *[!0-9]*) continue ;;
+		esac
+		if [ -z "$best" ] || [ "$soname" -gt "$best" ]; then
+			best="$soname"
+		fi
+	done
+	[ -n "$best" ] || return 1
+	printf '%s\n' "$best"
+}
+
+# Prints the upstream FLAC version installable from the distro repos, or fails.
+repo_flac_version() {
+	local family="$1" version
 	case "$family" in
-		apt) printf 'sudo apt-get update && sudo apt-get install -y '\''libasound2t64|libasound2'\'' '\''libflac12t64|libflac12'\'' libogg0 libvorbis0a\n' ;;
+		apt)
+			command -v apt-cache >/dev/null 2>&1 || return 1
+			version=$(apt-cache policy libflac14t64 libflac14 libflac12t64 libflac12 libflac8 2>/dev/null | awk '$1 == "Candidate:" && $2 != "(none)" { print $2; exit }')
+			;;
+		dnf)
+			command -v dnf >/dev/null 2>&1 || return 1
+			version=$(dnf info flac-libs 2>/dev/null | awk '$1 == "Version" { print $3; exit }')
+			;;
+		pacman)
+			command -v pacman >/dev/null 2>&1 || return 1
+			version=$(pacman -Si flac 2>/dev/null | awk -F': *' '/^Version/ { print $2; exit }')
+			;;
+		zypper)
+			command -v zypper >/dev/null 2>&1 || return 1
+			version=$(zypper info libFLAC14 libFLAC12 libFLAC8 2>/dev/null | awk -F': ' '/^Version/ { print $2; exit }')
+			;;
+		*) return 1 ;;
+	esac
+	[ -n "$version" ] || return 1
+	printf '%s\n' "$version"
+}
+
+detect_flac_flavor() {
+	local family="$1" override="${2:-}" soname='' version='' flavor=''
+	if [ -n "$override" ]; then
+		case "$override" in
+			flac8 | flac12 | flac14) printf '%s\n' "$override"; return 0 ;;
+			*) die "invalid audio flavor: $override (expected flac8, flac12 or flac14)" ;;
+		esac
+	fi
+	if soname=$(installed_flac_soname) && [ -n "$soname" ]; then
+		if flavor=$(flac_soname_to_flavor "$soname"); then
+			info "audio flavor: $flavor (found libFLAC.so.$soname on this system)" >&2
+			printf '%s\n' "$flavor"
+			return 0
+		fi
+		info "installed libFLAC.so.$soname has no published flavor yet; trying the newest (flac14) — the library check later will confirm." >&2
+		printf 'flac14\n'
+		return 0
+	fi
+	if version=$(repo_flac_version "$family") && [ -n "$version" ]; then
+		if flavor=$(flac_version_to_flavor "$version"); then
+			info "audio flavor: $flavor (distro repositories ship FLAC $version)" >&2
+			printf '%s\n' "$flavor"
+			return 0
+		fi
+		info "repository FLAC version '$version' is newer than any published flavor; trying the newest (flac14) — the library check later will confirm." >&2
+		printf 'flac14\n'
+		return 0
+	fi
+	info 'could not determine the local FLAC version; defaulting to flac12.' >&2
+	printf 'flac12\n'
+}
+
+# Prints the first package name apt knows, or fails.
+apt_first_available() {
+	local pkg
+	for pkg in "$@"; do
+		if apt-cache show "$pkg" >/dev/null 2>&1; then
+			printf '%s\n' "$pkg"
+			return 0
+		fi
+	done
+	return 1
+}
+
+apt_alsa_package() {
+	apt_first_available libasound2t64 libasound2
+}
+
+apt_flac_package() {
+	local flavor="${1:-flac12}"
+	case "$flavor" in
+		flac8) apt_first_available libflac8 ;;
+		flac14) apt_first_available libflac14t64 libflac14 ;;
+		*) apt_first_available libflac12t64 libflac12 ;;
+	esac
+}
+
+zypper_flac_package() {
+	local flavor="${1:-flac12}"
+	case "$flavor" in
+		flac8) printf 'libFLAC8\n' ;;
+		flac14) printf 'libFLAC14\n' ;;
+		*) printf 'libFLAC12\n' ;;
+	esac
+}
+
+apt_install_first_available() {
+	local pkg
+	for pkg in "$@"; do
+		if apt-cache show "$pkg" >/dev/null 2>&1; then
+			sudo apt-get install -y "$pkg"
+			return 0
+		fi
+	done
+	return 1
+}
+
+deps_install_command() {
+	local family="$1" flavor="${2:-flac12}" alsa='' flac=''
+	case "$family" in
+		apt)
+			alsa=$(apt_first_available libasound2t64 libasound2 2>/dev/null) || alsa='libasound2t64 (or libasound2)'
+			flac=$(apt_flac_package "$flavor" 2>/dev/null) || flac='libflac12t64 (or libflac12)'
+			printf 'sudo apt-get update && sudo apt-get install -y %s %s libogg0 libvorbis0a\n' "$alsa" "$flac"
+			;;
 		dnf) printf 'sudo dnf install -y alsa-lib flac-libs libogg libvorbis\n' ;;
 		pacman) printf 'sudo pacman -Syu --needed --noconfirm alsa-lib flac libogg libvorbis\n' ;;
-		zypper) printf 'sudo zypper refresh && sudo zypper install -y libasound2 libFLAC12 libogg0 libvorbis0\n' ;;
+		zypper) printf 'sudo zypper refresh && sudo zypper install -y libasound2 %s libogg0 libvorbis0\n' "$(zypper_flac_package "$flavor")" ;;
 		brew) printf 'brew install libogg libvorbis flac\n' ;;
 		*) return 1 ;;
 	esac
@@ -223,12 +416,20 @@ prompt_yes_no() {
 }
 
 run_deps_install() {
-	local family="$1"
+	local family="$1" flavor="${2:-flac12}"
 	need_cmd sudo
 	case "$family" in
 		apt)
 			need_cmd apt-get
-			sudo apt-get update && sudo apt-get install -y 'libasound2t64|libasound2' 'libflac12t64|libflac12' libogg0 libvorbis0a
+			sudo apt-get update
+			apt_install_first_available libasound2t64 libasound2 ||
+				die "no ALSA runtime package found (tried libasound2t64, libasound2)"
+			case "$flavor" in
+				flac8) apt_install_first_available libflac8 || die "no FLAC runtime package found (tried libflac8)" ;;
+				flac14) apt_install_first_available libflac14t64 libflac14 || die "no FLAC runtime package found (tried libflac14t64, libflac14)" ;;
+				*) apt_install_first_available libflac12t64 libflac12 || die "no FLAC runtime package found (tried libflac12t64, libflac12)" ;;
+			esac
+			sudo apt-get install -y libogg0 libvorbis0a
 			;;
 		dnf)
 			need_cmd dnf
@@ -500,8 +701,25 @@ check_supported_libc() {
 	esac
 }
 
+soname_mismatch_advice() {
+	local binary="$1" forced="$2"
+	local needed available soname suggestion
+	needed=$(ldd "$binary" 2>/dev/null | awk '/=> not found/ {print $1}' | sort -u | tr '\n' ' ')
+	available=$(ldconfig -p 2>/dev/null | grep -o 'libFLAC\.so\.[0-9]*' | sort -u | tr '\n' ' ')
+	warn 'audio libraries are STILL missing after the package install.'
+	[ -n "$needed" ] && warn "the release binary needs: $needed"
+	[ -n "$available" ] && warn "this system provides: $available"
+	warn 'no package install can fix a soname mismatch: this release build was linked against a different FLAC major version than your distribution ships.'
+	if soname=$(installed_flac_soname) && suggestion=$(flac_soname_to_flavor "$soname"); then
+		warn "this system needs the $suggestion build: re-run the installer with '--flac-flavor $suggestion' (or drop --flac-flavor to auto-detect)."
+	elif [ -n "$forced" ]; then
+		warn "you forced --flac-flavor $forced; try the other flavors or drop the flag to auto-detect."
+	fi
+	warn "or build orpheus from source (links against your native libraries): git clone https://github.com/$REPO.git && cd orpheus && make build"
+}
+
 handle_runtime_dependencies() {
-	local binary="$1" platform="$2" family="$3" mode="$4"
+	local binary="$1" platform="$2" family="$3" mode="$4" flavor="${5:-flac12}"
 	local missing='' cmd=''
 	DEPS_STATUS='checked'
 	if [ "$platform" = 'linux-amd64' ]; then
@@ -519,7 +737,7 @@ handle_runtime_dependencies() {
 		fi
 		info 'missing audio libraries:'
 		printf '%s\n' "$missing" | sed 's/^/  - /'
-		if ! cmd=$(deps_install_command "$family"); then
+		if ! cmd=$(deps_install_command "$family" "$flavor"); then
 			DEPS_STATUS='manual-unknown'
 			warn "unknown distribution family '$family'; install its ALSA, FLAC, Ogg and Vorbis runtime packages."
 			return 0
@@ -527,9 +745,15 @@ handle_runtime_dependencies() {
 		info "package command: $cmd"
 		if [ "$mode" = 'yes' ] || prompt_yes_no 'Install the missing audio libraries now?'; then
 			info "running: $cmd"
-			if run_deps_install "$family"; then
+			if run_deps_install "$family" "$flavor"; then
+				missing=$(missing_audio_libs "$binary")
+				if [ -n "$missing" ]; then
+					DEPS_STATUS='broken:audio libraries still missing after install'
+					soname_mismatch_advice "$binary" "$flavor"
+					return 1
+				fi
 				DEPS_STATUS="installed:$cmd"
-				ok 'missing audio libraries installed'
+				ok 'missing audio libraries installed and verified'
 			else
 				die "dependency installation failed; install them manually first: $cmd"
 			fi
@@ -591,6 +815,7 @@ print_summary() {
 		installed:*) deps_status="installed (${DEPS_STATUS#installed:})" ;;
 		manual:*) deps_status="not installed (${DEPS_STATUS#manual:})" ;;
 		manual-unknown) deps_status='not installed; distro-specific command unavailable' ;;
+		broken:*) deps_status="BROKEN (${DEPS_STATUS#broken:})" ;;
 		unchecked) deps_status='not inspected' ;;
 		*) deps_status='not inspected' ;;
 	esac
@@ -624,6 +849,11 @@ main() {
 				version="$2"
 				shift 2
 				;;
+			--flac-flavor)
+				[ $# -ge 2 ] || die "--flac-flavor needs an argument (flac8, flac12 or flac14)"
+				flac_flavor="$2"
+				shift 2
+				;;
 			--install-deps)
 				install_deps='yes'
 				shift
@@ -653,9 +883,15 @@ main() {
 	check_supported_libc "$platform" /lib/ld-musl-x86_64.so.1 /lib/ld-musl-aarch64.so.1
 	DISTRO_FAMILY="$(detect_distro_family)"
 	distro_name="$(distro_pretty_name)"
-	PLATFORM_DISPLAY="$platform ($distro_name; $DISTRO_FAMILY)"
+	if [ "$platform" = 'linux-amd64' ]; then
+		FLAC_FLAVOR="$(detect_flac_flavor "$DISTRO_FAMILY" "$flac_flavor")"
+		PLATFORM_DISPLAY="$platform ($distro_name; $DISTRO_FAMILY; $FLAC_FLAVOR)"
+		asset="orpheus-${platform}-${FLAC_FLAVOR}.tar.gz"
+	else
+		PLATFORM_DISPLAY="$platform ($distro_name; $DISTRO_FAMILY)"
+		asset="orpheus-${platform}.tar.gz"
+	fi
 	step "detected platform: $PLATFORM_DISPLAY"
-	asset="orpheus-${platform}.tar.gz"
 	if [ "$version" = "latest" ]; then
 		base_url="https://github.com/$REPO/releases/latest/download"
 	else
@@ -670,10 +906,19 @@ main() {
 	tmpdir="$(mktemp -d)"
 	trap 'rm -rf "$tmpdir"' EXIT
 	tmp_tarball="$tmpdir/$asset"
-	tmp_sha="$tmpdir/$asset.sha256"
 	step 'downloading release assets'
 	info "$base_url/$asset"
-	curl -fsSL --retry 3 -o "$tmp_tarball" "$base_url/$asset"
+	if ! curl -fsSL --retry 3 -o "$tmp_tarball" "$base_url/$asset"; then
+		if [ "$platform" = 'linux-amd64' ] && [ "$asset" != 'orpheus-linux-amd64.tar.gz' ]; then
+			info "$asset is not in this release (it predates per-FLAC builds); falling back to orpheus-linux-amd64.tar.gz"
+			asset='orpheus-linux-amd64.tar.gz'
+			tmp_tarball="$tmpdir/$asset"
+			curl -fsSL --retry 3 -o "$tmp_tarball" "$base_url/$asset"
+		else
+			die "download failed: $base_url/$asset"
+		fi
+	fi
+	tmp_sha="$tmpdir/$asset.sha256"
 	curl -fsSL --retry 3 -o "$tmp_sha" "$base_url/$asset.sha256"
 	step 'verifying SHA-256 checksum'
 	verify_checksum "$tmp_tarball" "$tmp_sha"
@@ -722,8 +967,12 @@ fi
 	fi
 
 	step 'checking system libraries'
-	handle_runtime_dependencies "$bin_dir/orpheus" "$platform" "$DISTRO_FAMILY" "$install_deps"
-	print_summary "$bin_dir/orpheus"
+	if handle_runtime_dependencies "$bin_dir/orpheus" "$platform" "$DISTRO_FAMILY" "$install_deps" "$FLAC_FLAVOR"; then
+		print_summary "$bin_dir/orpheus"
+	else
+		print_summary "$bin_dir/orpheus"
+		exit 1
+	fi
 }
 
 if [[ -z "${BASH_SOURCE[0]:-}" || "${BASH_SOURCE[0]:-}" == "${0}" ]]; then
