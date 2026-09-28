@@ -187,7 +187,7 @@ func (p *AppPlayer) handleShuffleCacheRefresh(ctx context.Context) {
 	p.prefetchNext(ctx)
 }
 
-func (p *AppPlayer) prefetchNext(ctx context.Context) {
+func (p *AppPlayer) prefetchNext(_ context.Context) {
 	candidates := p.prefetchCandidateIDs()
 	if len(candidates) == 0 {
 		return
@@ -971,7 +971,7 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 	return nil
 }
 
-func (p *AppPlayer) addToQueue(ctx context.Context, track *connectpb.ContextTrack) {
+func (p *AppPlayer) addToQueue(_ context.Context, track *connectpb.ContextTrack) {
 	if p.state.tracks == nil {
 		p.runtime.Log.Warnf("cannot add to queue without a context")
 		return
@@ -1039,7 +1039,7 @@ func (p *AppPlayer) afterQueueEdit() {
 	p.emitPlaybackState()
 }
 
-func (p *AppPlayer) setQueue(ctx context.Context, prev []*connectpb.ContextTrack, next []*connectpb.ContextTrack) {
+func (p *AppPlayer) setQueue(_ context.Context, prev []*connectpb.ContextTrack, next []*connectpb.ContextTrack) {
 	if p.state.tracks == nil {
 		p.runtime.Log.Warnf("cannot set queue without a context")
 		return
@@ -1051,7 +1051,7 @@ func (p *AppPlayer) setQueue(ctx context.Context, prev []*connectpb.ContextTrack
 	p.emitPlaybackState()
 }
 
-func (p *AppPlayer) play(ctx context.Context) error {
+func (p *AppPlayer) play(_ context.Context) error {
 	if p.primaryStream == nil {
 		return fmt.Errorf("no primary stream")
 	}
@@ -1101,7 +1101,7 @@ func (p *AppPlayer) retryPlaybackAfterOutputFailure() error {
 	return nil
 }
 
-func (p *AppPlayer) pause(ctx context.Context) error {
+func (p *AppPlayer) pause(_ context.Context) error {
 	if p.primaryStream == nil {
 		return fmt.Errorf("no primary stream")
 	}
@@ -1116,7 +1116,7 @@ func (p *AppPlayer) pause(ctx context.Context) error {
 	return nil
 }
 
-func (p *AppPlayer) seek(ctx context.Context, position int64) error {
+func (p *AppPlayer) seek(_ context.Context, position int64) error {
 	if p.primaryStream == nil {
 		return fmt.Errorf("no primary stream")
 	}
@@ -1221,7 +1221,7 @@ func (p *AppPlayer) selectAdvanceNextTarget(ctx context.Context, forceNext bool)
 	return selection
 }
 
-func (p *AppPlayer) applyAdvanceNextSelection(ctx context.Context, selection advanceNextSelection, forceNext bool) {
+func (p *AppPlayer) applyAdvanceNextSelection(_ context.Context, selection advanceNextSelection, forceNext bool) {
 	if p.state == nil || p.state.player == nil {
 		return
 	}
