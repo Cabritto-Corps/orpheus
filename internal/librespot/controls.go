@@ -880,8 +880,16 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	// loop reloads (see maybeResetStopRecoveryGuard).
 	p.outputRecreateOnPlay = false
 	p.maybeResetStopRecoveryGuard(spotId.Uri())
-	if err := p.player.SeekMs(trackPosition); err != nil {
-		p.runtime.Log.WithError(err).WithField("position_ms", trackPosition).Warn("seek after load failed")
+	// A promoted secondary is already playing when the fork crossfaded into
+	// it ahead of this advance (SetPrimaryStream above only acknowledged the
+	// same source): seeking to 0 would rewind the fade-consumed decoder and
+	// reset the fade, restarting the track the listener already hears. Fresh
+	// decoders start at 0 anyway, so the post-load seek only matters for a
+	// nonzero resume position.
+	if trackPosition != 0 || !promotedSecondary {
+		if err := p.player.SeekMs(trackPosition); err != nil {
+			p.runtime.Log.WithError(err).WithField("position_ms", trackPosition).Warn("seek after load failed")
+		}
 	}
 	p.sess.Events().PostPrimaryStreamLoad(p.primaryStream, paused)
 	p.runtime.Log.WithField("uri", spotId.Uri()).Infof("loaded %s %s (paused: %t, position: %dms, duration: %dms, prefetched: %t)", spotId.Type(), strconv.QuoteToGraphic(p.primaryStream.Media.Name()), paused, trackPosition, p.primaryStream.Media.Duration(), prefetched)
