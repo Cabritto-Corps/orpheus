@@ -825,11 +825,21 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	if spotId.Type() != golibrespot.SpotifyIdTypeTrack && spotId.Type() != golibrespot.SpotifyIdTypeEpisode {
 		return fmt.Errorf("unsupported spotify type: %s", spotId.Type())
 	}
+	// The intended start position is read BEFORE the wall-clock rebase below:
+	// UpdateTimestamp inflates PositionAsOfTimestamp by elapsed*speed, and a
+	// "fresh start" inferred from the inflated value missed the transition-
+	// cache promotion on any >=1ms scheduling delay, cold-loading a stream
+	// staged for exactly this moment. Callers encode intent in the pre-rebase
+	// value: 0 on advance/skip/transfer, setPlayerPositionAtNow for output-
+	// failure reloads.
+	trackPosition := p.state.player.PositionAsOfTimestamp
+	if trackPosition < 0 {
+		trackPosition = 0
+	}
 	golibrespot.UpdateTimestamp(p.state.player, 0)
 	if p.state.player.PositionAsOfTimestamp < 0 {
 		p.state.player.PositionAsOfTimestamp = 0
 	}
-	trackPosition := golibrespot.TrackPosition(p.state.player, 0)
 	p.setPlayerTransportState(true, true, paused)
 	p.state.player.PlaybackSpeed = 0
 	var prefetched bool
