@@ -19,27 +19,18 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	filtering := m.isFiltering()
 
-	switch {
-	case keyMatches(msg, k.Quit):
-		if !filtering || msg.String() == "ctrl+c" {
-			return m, tea.Quit
-		}
-	case keyMatches(msg, k.ToggleHelp):
-		if !filtering {
-			m.ui.helpOpen = !m.ui.helpOpen
-			if m.ui.helpOpen {
-				m.ensureHelpViewport()
-			}
-			return m, nil
-		}
-	case keyMatches(msg, k.Settings):
-		if !filtering {
-			return m.openSettings()
-		}
+	// ctrl+c is quit's guaranteed key: it punches through modals, key
+	// capture and filter mode alike.
+	if msg.String() == "ctrl+c" {
+		return m, tea.Quit
 	}
 
+	// An open modal owns every other key (focus trap): the global keys
+	// below stay inert while help, settings or the popup is up, and Esc
+	// always closes. Pressing ? with help open dismisses it; entering
+	// help or settings from inside another modal is not possible.
 	if m.ui.helpOpen {
-		if keyMatches(msg, k.CloseModal) {
+		if keyMatches(msg, k.CloseModal) || keyMatches(msg, k.ToggleHelp) {
 			m.ui.helpOpen = false
 		}
 		switch {
@@ -59,6 +50,25 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.ui.trackPopupOpen {
 		return m.handleTrackPopupKey(msg)
+	}
+
+	switch {
+	case keyMatches(msg, k.Quit):
+		if !filtering {
+			return m, tea.Quit
+		}
+	case keyMatches(msg, k.ToggleHelp):
+		if !filtering {
+			m.ui.helpOpen = !m.ui.helpOpen
+			if m.ui.helpOpen {
+				m.ensureHelpViewport()
+			}
+			return m, nil
+		}
+	case keyMatches(msg, k.Settings):
+		if !filtering {
+			return m.openSettings()
+		}
 	}
 
 	if keyMatches(msg, k.Tab) {
@@ -383,6 +393,10 @@ func (m model) handleTrackPopupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case keyMatches(msg, k.CloseModal):
 		m.ui.trackPopupOpen = false
+		return m, nil
+	case keyMatches(msg, k.Quit):
+		// The bubbles list binds q to its own quit; inside the modal
+		// Esc closes and q stays inert (ctrl+c already quit above).
 		return m, nil
 	case keyMatches(msg, k.Select):
 		sel, ok := m.ui.trackPopupList.SelectedItem().(trackItem)

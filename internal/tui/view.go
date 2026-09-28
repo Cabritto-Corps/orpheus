@@ -52,6 +52,7 @@ const (
 
 func (m model) View() string {
 	if m.ui.width < 40 || m.ui.height < 12 {
+		// No kitty overlay here: the error branch must never emit one.
 		return styleError.Render("terminal too small — please resize") + m.kittyOverlay()
 	}
 

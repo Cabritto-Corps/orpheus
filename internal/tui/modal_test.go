@@ -1,15 +1,131 @@
 package tui
 
 import (
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
 
 func teaDown() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyDown} }
+
+func isQuitCmd(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	return reflect.ValueOf(cmd).Pointer() == reflect.ValueOf(tea.Quit).Pointer()
+}
+
+func sendTop(m model, msg tea.KeyMsg) (model, tea.Cmd) {
+	next, cmd := m.handleKey(msg)
+	return next.(model), cmd
+}
+
+func ctrlC() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyCtrlC} }
+
+func TestHelpGroupsDerivedFromRegistry(t *testing.T) {
+	if got, want := helpGroupTitles(), []string{"Playback", "Navigation", "Queue"}; !slices.Equal(got, want) {
+		t.Fatalf("derived groups = %v, want %v", got, want)
+	}
+	m, _, _, _ := newSettingsTestModel(t)
+	body := m.helpGroupedBody(120, 40)
+	for _, title := range []string{"Playback", "Navigation", "Queue"} {
+		if !strings.Contains(body, title) {
+			t.Fatalf("help body missing group %q", title)
+		}
+	}
+	// A fourth group must render instead of vanishing: temporairely
+	// extend the registry and confirm the new title appears.
+	saved := actionRegistry
+	actionRegistry = append(append([]actionMeta{}, actionRegistry...), actionMeta{
+		action: "zz_synth", group: "Synth", label: "synth row", desc: "synth row",
+		bind: func(k keyMap) key.Binding { return k.Refresh },
+		set:  func(m *keyMap, keys []string) {},
+	})
+	defer func() { actionRegistry = saved }()
+	body = m.helpGroupedBody(120, 40)
+	if !strings.Contains(body, "Synth") {
+		t.Fatal("a fourth registry group must render in the help modal")
+	}
+}
+func TestFocusTrapModalsSwallowGlobalKeys(t *testing.T) {
+	q := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}
+	help := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}}
+	settings := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}}
+
+	// Help open: q must not quit, o must not open settings behind it.
+	m, _, _, _ := newSettingsTestModel(t)
+	m.ui.helpOpen = true
+	next, cmd := sendTop(m, q)
+	if isQuitCmd(cmd) || !next.ui.helpOpen {
+		t.Fatal("q must be inert while help is open")
+	}
+	next, _ = sendTop(m, settings)
+	if !next.ui.helpOpen || next.ui.settings.open {
+		t.Fatal("o must not open settings while help is open")
+	}
+	// ? dismisses help (the modal's own dismiss), Esc closes it.
+	next, _ = sendTop(m, help)
+	if next.ui.helpOpen {
+		t.Fatal("? should dismiss an open help modal")
+	}
+
+	// Settings open: q must not quit, ? must not stack help on top.
+	m2, _, _, _ := newSettingsTestModel(t)
+	m2 = openViaKey(m2)
+	next, cmd = sendTop(m2, q)
+	if isQuitCmd(cmd) || !next.ui.settings.open {
+		t.Fatal("q must be inert while settings are open")
+	}
+	next, _ = sendTop(m2, help)
+	if next.ui.helpOpen {
+		t.Fatal("? must not stack help on top of settings")
+	}
+
+	// Popup open: q must not quit, o must not open settings.
+	pm := guardModel(t, frameVariant{name: "popup-trap", width: 100, height: 30, tab: tabPlayer, modal: "popup"})
+	next, cmd = sendTop(pm, q)
+	if isQuitCmd(cmd) || !next.ui.trackPopupOpen {
+		t.Fatal("q must be inert while the track popup is open")
+	}
+	next, _ = sendTop(pm, settings)
+	if next.ui.settings.open {
+		t.Fatal("o must not open settings while the popup is open")
+	}
+}
+
+func TestFocusTrapKeyCapture(t *testing.T) {
+	m, _, _, _ := newSettingsTestModel(t)
+	m = openViaKey(m)
+	m.ui.settings.mode = settingsModeCapture
+	m.ui.settings.captureKey = "play_pause"
+
+	// ctrl+c is quit's guaranteed key: it punches through capture.
+	_, cmd := sendTop(m, ctrlC())
+	if !isQuitCmd(cmd) {
+		t.Fatal("ctrl+c must quit even during key capture")
+	}
+	// q is an ordinary key inside capture: it arms the pending rebind
+	// and must never quit the app.
+	next, cmd := sendTop(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if isQuitCmd(cmd) {
+		t.Fatal("q must not quit during key capture")
+	}
+	if next.ui.settings.mode != settingsModeCapture || next.ui.settings.pendingKey != "q" {
+		t.Fatalf("q should arm the pending rebind, got mode %v pending %q",
+			next.ui.settings.mode, next.ui.settings.pendingKey)
+	}
+	// Esc cancels capture back to the keys list.
+	next, _ = sendTop(next, tea.KeyMsg{Type: tea.KeyEscape})
+	if next.ui.settings.mode != settingsModeKeys || next.ui.settings.captureKey != "" {
+		t.Fatal("esc must cancel capture")
+	}
+}
 
 func openSettingsForTest(m model) model {
 	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
