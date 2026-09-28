@@ -118,56 +118,13 @@ func applyKeyOverrides(m keyMap, overrides map[string][]string) keyMap {
 		if len(keys) == 0 {
 			continue
 		}
-		switch action {
-		case "tab":
-			m.Tab = overrideBinding(m.Tab, keys)
-		case "play_pause":
-			m.PlayPause = overrideBinding(m.PlayPause, keys)
-		case "next":
-			m.Next = overrideBinding(m.Next, keys)
-		case "prev":
-			m.Prev = overrideBinding(m.Prev, keys)
-		case "shuffle":
-			m.Shuffle = overrideBinding(m.Shuffle, keys)
-		case "loop":
-			m.Loop = overrideBinding(m.Loop, keys)
-		case "vol_up":
-			m.VolUp = overrideBinding(m.VolUp, keys)
-		case "vol_down":
-			m.VolDown = overrideBinding(m.VolDown, keys)
-		case "seek_back":
-			m.SeekBack = overrideBinding(m.SeekBack, keys)
-		case "seek_fwd":
-			m.SeekFwd = overrideBinding(m.SeekFwd, keys)
-		case "refresh":
-			m.Refresh = overrideBinding(m.Refresh, keys)
-		case "filter":
-			m.Filter = overrideBinding(m.Filter, keys)
-		case "toggle_help":
-			m.ToggleHelp = overrideBinding(m.ToggleHelp, keys)
-		case "select":
-			m.Select = overrideBinding(m.Select, keys)
-		case "close_modal":
-			m.CloseModal = overrideBinding(m.CloseModal, keys)
-		case "quit":
-			if !keysContainList(keys, "ctrl+c") {
-				keys = append(append([]string{}, keys...), "ctrl+c")
+		// The registry decides which actions are rebindable: an unknown
+		// action matches nothing and is ignored, like the old switch's
+		// implicit default.
+		for i := range actionRegistry {
+			if actionRegistry[i].action == action {
+				actionRegistry[i].set(&m, keys)
 			}
-			m.Quit = overrideBinding(m.Quit, keys)
-		case "queue_up":
-			m.QueueUp = overrideBinding(m.QueueUp, keys)
-		case "queue_down":
-			m.QueueDown = overrideBinding(m.QueueDown, keys)
-		case "queue_jump":
-			m.QueueJump = overrideBinding(m.QueueJump, keys)
-		case "queue_remove":
-			m.QueueRemove = overrideBinding(m.QueueRemove, keys)
-		case "queue_move_up":
-			m.QueueMoveUp = overrideBinding(m.QueueMoveUp, keys)
-		case "queue_move_down":
-			m.QueueMoveDown = overrideBinding(m.QueueMoveDown, keys)
-		case "settings":
-			m.Settings = overrideBinding(m.Settings, keys)
 		}
 	}
 	return m

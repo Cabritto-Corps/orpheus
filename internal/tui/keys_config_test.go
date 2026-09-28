@@ -140,3 +140,31 @@ func TestOverrideBindingHelpLabelFollowsRebind(t *testing.T) {
 		t.Fatalf("space label should render as 'space', got %q", sp.Help().Key)
 	}
 }
+
+// TestApplyKeyOverridesCoversRegistry pins the registry-driven loop: every
+// registry action must round-trip through applyKeyOverrides, so a new
+// action with a missing setter fails this test instead of silently
+// staying unbindable.
+func TestApplyKeyOverridesCoversRegistry(t *testing.T) {
+	for _, meta := range actionRegistry {
+		custom := []string{"f24"}
+		got := applyKeyOverrides(newKeys(), map[string][]string{meta.action: custom})
+		keys := meta.bind(got).Keys()
+		want := custom
+		if meta.action == "quit" {
+			want = []string{"f24", "ctrl+c"}
+		}
+		if !stringSlicesEqual(keys, want) {
+			t.Fatalf("%s: got keys %v, want %v", meta.action, keys, want)
+		}
+	}
+	// Unknown actions stay ignored.
+	before := newKeys()
+	after := applyKeyOverrides(before, map[string][]string{"nope": {"x"}})
+	for _, meta := range actionRegistry {
+		got, want := meta.bind(after).Keys(), meta.bind(before).Keys()
+		if !stringSlicesEqual(got, want) {
+			t.Fatalf("unknown action changed %s: %v -> %v", meta.action, want, got)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -85,32 +86,40 @@ type actionMeta struct {
 	label  string
 	desc   string
 	bind   func(keyMap) key.Binding
+	// set applies a keys.json override to the matching field, so the
+	// registry — not a parallel switch — decides which actions are rebindable.
+	set func(*keyMap, []string)
 }
 
 var actionRegistry = []actionMeta{
-	{"play_pause", "Playback", "play/pause", "play/pause", func(k keyMap) key.Binding { return k.PlayPause }},
-	{"next", "Playback", "next track", "next track", func(k keyMap) key.Binding { return k.Next }},
-	{"prev", "Playback", "previous track", "previous track", func(k keyMap) key.Binding { return k.Prev }},
-	{"shuffle", "Playback", "shuffle", "shuffle", func(k keyMap) key.Binding { return k.Shuffle }},
-	{"loop", "Playback", "repeat", "repeat", func(k keyMap) key.Binding { return k.Loop }},
-	{"vol_up", "Playback", "volume up", "volume up", func(k keyMap) key.Binding { return k.VolUp }},
-	{"vol_down", "Playback", "volume down", "volume down", func(k keyMap) key.Binding { return k.VolDown }},
-	{"seek_back", "Playback", "seek back", "seek back", func(k keyMap) key.Binding { return k.SeekBack }},
-	{"seek_fwd", "Playback", "seek forward", "seek forward", func(k keyMap) key.Binding { return k.SeekFwd }},
-	{"tab", "Navigation", "switch tab", "switch tab", func(k keyMap) key.Binding { return k.Tab }},
-	{"refresh", "Navigation", "refresh library", "refresh library", func(k keyMap) key.Binding { return k.Refresh }},
-	{"filter", "Navigation", "search filter", "search filter", func(k keyMap) key.Binding { return k.Filter }},
-	{"select", "Navigation", "select / play", "select / play", func(k keyMap) key.Binding { return k.Select }},
-	{"toggle_help", "Navigation", "toggle help", "toggle help", func(k keyMap) key.Binding { return k.ToggleHelp }},
-	{"settings", "Navigation", "open settings", "open settings", func(k keyMap) key.Binding { return k.Settings }},
-	{"close_modal", "Navigation", "close modal", "close modal", func(k keyMap) key.Binding { return k.CloseModal }},
-	{"quit", "Navigation", "quit (ctrl+c always quits)", "quit", func(k keyMap) key.Binding { return k.Quit }},
-	{"queue_up", "Queue", "queue cursor up", "cursor up", func(k keyMap) key.Binding { return k.QueueUp }},
-	{"queue_down", "Queue", "queue cursor down", "cursor down", func(k keyMap) key.Binding { return k.QueueDown }},
-	{"queue_jump", "Queue", "play from queue row", "play from row", func(k keyMap) key.Binding { return k.QueueJump }},
-	{"queue_remove", "Queue", "remove queue row", "remove row", func(k keyMap) key.Binding { return k.QueueRemove }},
-	{"queue_move_up", "Queue", "move queue row up", "move row up", func(k keyMap) key.Binding { return k.QueueMoveUp }},
-	{"queue_move_down", "Queue", "move queue row down", "move row down", func(k keyMap) key.Binding { return k.QueueMoveDown }},
+	{"play_pause", "Playback", "play/pause", "play/pause", func(k keyMap) key.Binding { return k.PlayPause }, func(m *keyMap, keys []string) { m.PlayPause = overrideBinding(m.PlayPause, keys) }},
+	{"next", "Playback", "next track", "next track", func(k keyMap) key.Binding { return k.Next }, func(m *keyMap, keys []string) { m.Next = overrideBinding(m.Next, keys) }},
+	{"prev", "Playback", "previous track", "previous track", func(k keyMap) key.Binding { return k.Prev }, func(m *keyMap, keys []string) { m.Prev = overrideBinding(m.Prev, keys) }},
+	{"shuffle", "Playback", "shuffle", "shuffle", func(k keyMap) key.Binding { return k.Shuffle }, func(m *keyMap, keys []string) { m.Shuffle = overrideBinding(m.Shuffle, keys) }},
+	{"loop", "Playback", "repeat", "repeat", func(k keyMap) key.Binding { return k.Loop }, func(m *keyMap, keys []string) { m.Loop = overrideBinding(m.Loop, keys) }},
+	{"vol_up", "Playback", "volume up", "volume up", func(k keyMap) key.Binding { return k.VolUp }, func(m *keyMap, keys []string) { m.VolUp = overrideBinding(m.VolUp, keys) }},
+	{"vol_down", "Playback", "volume down", "volume down", func(k keyMap) key.Binding { return k.VolDown }, func(m *keyMap, keys []string) { m.VolDown = overrideBinding(m.VolDown, keys) }},
+	{"seek_back", "Playback", "seek back", "seek back", func(k keyMap) key.Binding { return k.SeekBack }, func(m *keyMap, keys []string) { m.SeekBack = overrideBinding(m.SeekBack, keys) }},
+	{"seek_fwd", "Playback", "seek forward", "seek forward", func(k keyMap) key.Binding { return k.SeekFwd }, func(m *keyMap, keys []string) { m.SeekFwd = overrideBinding(m.SeekFwd, keys) }},
+	{"tab", "Navigation", "switch tab", "switch tab", func(k keyMap) key.Binding { return k.Tab }, func(m *keyMap, keys []string) { m.Tab = overrideBinding(m.Tab, keys) }},
+	{"refresh", "Navigation", "refresh library", "refresh library", func(k keyMap) key.Binding { return k.Refresh }, func(m *keyMap, keys []string) { m.Refresh = overrideBinding(m.Refresh, keys) }},
+	{"filter", "Navigation", "search filter", "search filter", func(k keyMap) key.Binding { return k.Filter }, func(m *keyMap, keys []string) { m.Filter = overrideBinding(m.Filter, keys) }},
+	{"select", "Navigation", "select / play", "select / play", func(k keyMap) key.Binding { return k.Select }, func(m *keyMap, keys []string) { m.Select = overrideBinding(m.Select, keys) }},
+	{"toggle_help", "Navigation", "toggle help", "toggle help", func(k keyMap) key.Binding { return k.ToggleHelp }, func(m *keyMap, keys []string) { m.ToggleHelp = overrideBinding(m.ToggleHelp, keys) }},
+	{"settings", "Navigation", "open settings", "open settings", func(k keyMap) key.Binding { return k.Settings }, func(m *keyMap, keys []string) { m.Settings = overrideBinding(m.Settings, keys) }},
+	{"close_modal", "Navigation", "close modal", "close modal", func(k keyMap) key.Binding { return k.CloseModal }, func(m *keyMap, keys []string) { m.CloseModal = overrideBinding(m.CloseModal, keys) }},
+	{"quit", "Navigation", "quit (ctrl+c always quits)", "quit", func(k keyMap) key.Binding { return k.Quit }, func(m *keyMap, keys []string) {
+		if !keysContainList(keys, "ctrl+c") {
+			keys = append(append([]string{}, keys...), "ctrl+c")
+		}
+		m.Quit = overrideBinding(m.Quit, keys)
+	}},
+	{"queue_up", "Queue", "queue cursor up", "cursor up", func(k keyMap) key.Binding { return k.QueueUp }, func(m *keyMap, keys []string) { m.QueueUp = overrideBinding(m.QueueUp, keys) }},
+	{"queue_down", "Queue", "queue cursor down", "cursor down", func(k keyMap) key.Binding { return k.QueueDown }, func(m *keyMap, keys []string) { m.QueueDown = overrideBinding(m.QueueDown, keys) }},
+	{"queue_jump", "Queue", "play from queue row", "play from row", func(k keyMap) key.Binding { return k.QueueJump }, func(m *keyMap, keys []string) { m.QueueJump = overrideBinding(m.QueueJump, keys) }},
+	{"queue_remove", "Queue", "remove queue row", "remove row", func(k keyMap) key.Binding { return k.QueueRemove }, func(m *keyMap, keys []string) { m.QueueRemove = overrideBinding(m.QueueRemove, keys) }},
+	{"queue_move_up", "Queue", "move queue row up", "move row up", func(k keyMap) key.Binding { return k.QueueMoveUp }, func(m *keyMap, keys []string) { m.QueueMoveUp = overrideBinding(m.QueueMoveUp, keys) }},
+	{"queue_move_down", "Queue", "move queue row down", "move row down", func(k keyMap) key.Binding { return k.QueueMoveDown }, func(m *keyMap, keys []string) { m.QueueMoveDown = overrideBinding(m.QueueMoveDown, keys) }},
 }
 
 // helpGroupsLayout derives the help modal's titled rows from the registry.
@@ -156,8 +165,20 @@ func (m model) helpGroupLines(title string, labelWidth, colW int) []string {
 	return lines
 }
 
+// helpGroupTitles derives the help modal's group order from the registry
+// (dedup in registry order), so a new group renders instead of vanishing.
+func helpGroupTitles() []string {
+	titles := []string{}
+	for _, meta := range actionRegistry {
+		if !slices.Contains(titles, meta.group) {
+			titles = append(titles, meta.group)
+		}
+	}
+	return titles
+}
+
 func (m model) helpGroupedBody(contentW, availH int) string {
-	groups := []string{"Playback", "Navigation", "Queue"}
+	groups := helpGroupTitles()
 	labelWidth := 0
 	for _, g := range helpGroupsLayout {
 		lw := lipgloss.Width(g.label)
@@ -171,13 +192,15 @@ func (m model) helpGroupedBody(contentW, availH int) string {
 	// Three columns, each an equal share of the full content width with the
 	// keys right-aligned at their column's edge - natural-width columns
 	// hugged the left and left a dead band on the right of the modal.
-	colW := (contentW - 2*gutter) / 3
+	// Equal shares: for the current three groups this is exactly the old
+	// (contentW - 2*gutter) / 3, so the existing layout is pixel-identical.
+	colW := (contentW - (len(groups)-1)*gutter) / len(groups)
 	if colW >= labelWidth+6 {
-		var cols [][]string
+		cols := make([][]string, 0, len(groups))
 		for _, title := range groups {
 			cols = append(cols, m.helpGroupLines(title, labelWidth, colW))
 		}
-		three := joinTopAligned(cols[0], cols[1], cols[2])
+		three := joinTopAligned(cols...)
 		if lipgloss.Width(three) <= contentW {
 			return three + "\n\n" + styleTrackPopupHint.Render("ctrl+c always quits")
 		}
