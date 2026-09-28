@@ -20,7 +20,7 @@ type frameVariant struct {
 	tab      tab
 	playing  bool
 	hasQueue bool
-	modal    string // "", "help", "settings", "popup"
+	modal    string // "", "help", "settings", "settings-theme", "settings-theme-options", "settings-keys", "settings-capture", "popup"
 	erroring bool
 }
 
@@ -202,7 +202,7 @@ func TestViewFrameContractBackgroundModes(t *testing.T) {
 func TestViewFrameContractModals(t *testing.T) {
 	sizes := [][2]int{{40, 12}, {50, 16}, {80, 24}, {120, 40}}
 	for _, size := range sizes {
-		for _, modal := range []string{"settings", "settings-theme", "settings-keys", "settings-capture", "help", "popup"} {
+		for _, modal := range []string{"settings", "settings-theme", "settings-theme-options", "settings-keys", "settings-capture", "help", "popup"} {
 			variant := frameVariant{name: modal, width: size[0], height: size[1], tab: tabPlayer, playing: true, hasQueue: true, modal: modal}
 			m := guardModel(t, variant)
 			assertFrameContract(t, fmt.Sprintf("modal-%s-%dx%d", modal, size[0], size[1]), m.View(), variant.width, variant.height)

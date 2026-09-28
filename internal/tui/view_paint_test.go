@@ -84,6 +84,11 @@ func TestModalPaintNeverLosesBackground(t *testing.T) {
 			m.ui.settings.mode = settingsModeTheme
 			return m.settingsModalView()
 		}},
+		{"theme-options", func(m *model) string {
+			m.openSettings()
+			m.openThemeOptions()
+			return m.settingsModalView()
+		}},
 		{"help", func(m *model) string {
 			m.ui.helpOpen = true
 			m.ensureHelpViewport()
