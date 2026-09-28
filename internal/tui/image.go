@@ -24,6 +24,7 @@ import (
 	_ "golang.org/x/image/webp"
 
 	"orpheus/internal/cache"
+	"orpheus/internal/config"
 )
 
 type coverKey struct {
@@ -60,7 +61,22 @@ type imgCache struct {
 	pinned           map[string]struct{}
 }
 
+func imageStyleOrDefault(style string) string {
+	if normalized := config.NormalizeImageStyle(style); normalized != "" {
+		return normalized
+	}
+	return config.ImageStyleRendered
+}
+
 func newImgCache() *imgCache {
+	return newImgCacheWithSelection("", false, os.Getenv)
+}
+
+func newImgCacheWithSelection(style string, managed bool, getenv func(string) string) *imgCache {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	protocol, explicit := resolveImageProtocolForStyle(style, managed, getenv)
 	return &imgCache{
 		imgs:             cache.NewLRU[string, image.Image](maxCachedImages),
 		covers:           cache.NewLRU[coverKey, string](maxCachedCoverRenders),
@@ -68,13 +84,25 @@ func newImgCache() *imgCache {
 		inflight:         make(map[string]struct{}),
 		failedAt:         make(map[string]time.Time),
 		rendering:        make(map[coverKey]chan struct{}),
-		protocol:         detectImageProtocol(os.Getenv),
+		protocol:         protocol,
 		kittyChunks:      make(map[string][]string),
 		kittyChunkOrder:  make([]string, 0, maxKittyChunkCacheEntries),
-		protocolExplicit: detectProtocolOverride(os.Getenv),
+		protocolExplicit: explicit,
 		coverKeysByURL:   make(map[string]map[coverKey]struct{}),
 		pinned:           make(map[string]struct{}),
 	}
+}
+
+func resolveImageProtocolForStyle(style string, managed bool, getenv func(string) string) (imageProtocol, bool) {
+	switch config.NormalizeImageStyle(style) {
+	case config.ImageStylePixelated:
+		return imageProtocolNone, true
+	case config.ImageStyleRendered:
+		if managed {
+			return detectTerminalImageProtocol(getenv), false
+		}
+	}
+	return detectImageProtocol(getenv), detectProtocolOverride(getenv)
 }
 
 func (c *imgCache) getImage(url string) (image.Image, bool) {
@@ -244,12 +272,41 @@ func (c *imgCache) setProtocol(protocol imageProtocol) {
 	c.resetKittyOverlayStateLocked()
 }
 
-func detectProtocolOverride(getenv func(string) string) bool {
-	switch strings.ToLower(strings.TrimSpace(getenv("ORPHEUS_IMAGE_PROTOCOL"))) {
-	case "none", "ansi", "kitty":
-		return true
+func (c *imgCache) setImageStyle(style string, managed bool, getenv func(string) string) {
+	if getenv == nil {
+		getenv = os.Getenv
 	}
-	return false
+	protocol, explicit := resolveImageProtocolForStyle(style, managed, getenv)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.protocol = protocol
+	// A forced pixelated choice must behave like an environment override:
+	// the automatic fallback and recovery paths must not restore kitty.
+	c.protocolExplicit = explicit
+	c.covers.Clear()
+	for url := range c.coverKeysByURL {
+		delete(c.coverKeysByURL, url)
+	}
+	clear(c.encoded)
+	clear(c.kittyChunks)
+	c.kittyChunkOrder = c.kittyChunkOrder[:0]
+	c.resetKittyOverlayStateLocked()
+}
+
+func detectProtocolOverride(getenv func(string) string) bool {
+	_, ok := imageProtocolEnvOverride(getenv)
+	return ok
+}
+
+func imageProtocolEnvOverride(getenv func(string) string) (imageProtocol, bool) {
+	switch strings.ToLower(strings.TrimSpace(getenv("ORPHEUS_IMAGE_PROTOCOL"))) {
+	case "none", "ansi":
+		return imageProtocolNone, true
+	case "kitty":
+		return imageProtocolKitty, true
+	default:
+		return imageProtocolNone, false
+	}
 }
 
 // refreshURL replaces an image and drops every cached render of the old
@@ -619,15 +676,13 @@ func renderKittyImage(encoded string, cols, rows int) string {
 }
 
 func detectImageProtocol(getenv func(string) string) imageProtocol {
-	if override := strings.ToLower(strings.TrimSpace(getenv("ORPHEUS_IMAGE_PROTOCOL"))); override != "" {
-		switch override {
-		case "none", "ansi":
-			return imageProtocolNone
-		case "kitty":
-			return imageProtocolKitty
-		}
+	if protocol, ok := imageProtocolEnvOverride(getenv); ok {
+		return protocol
 	}
+	return detectTerminalImageProtocol(getenv)
+}
 
+func detectTerminalImageProtocol(getenv func(string) string) imageProtocol {
 	term := strings.ToLower(getenv("TERM"))
 	termProgram := strings.ToLower(getenv("TERM_PROGRAM"))
 	if strings.TrimSpace(getenv("KITTY_WINDOW_ID")) != "" {

@@ -140,6 +140,8 @@ type settingsModel struct {
 	crossfadeSeconds float64
 	cacheEnabled     bool
 	cacheSizeMB      int64
+	imageStyle       string
+	imageStyleSet    bool
 
 	restartRequiredCrossfade bool
 	restartRequiredCache     bool

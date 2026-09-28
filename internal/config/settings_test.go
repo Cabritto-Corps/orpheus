@@ -90,3 +90,70 @@ func TestSaveAppSettingsOverMalformedFile(t *testing.T) {
 		t.Fatal("managed section missing after saving over a malformed file")
 	}
 }
+
+func TestAppSettingsImageStyleOverlay(t *testing.T) {
+	pixelated := " PIXELATED "
+	cfg := Config{}
+	ApplyAppSettings(&cfg, AppSettings{})
+	if cfg.ImageStyle != "" {
+		t.Fatalf("unset images section must leave ImageStyle empty, got %q", cfg.ImageStyle)
+	}
+	ApplyAppSettings(&cfg, AppSettings{Images: &ImageStyleSettings{Style: &pixelated}})
+	if cfg.ImageStyle != ImageStylePixelated {
+		t.Fatalf("ImageStyle = %q, want %q", cfg.ImageStyle, ImageStylePixelated)
+	}
+	none := "none"
+	unknown := "oil-painting"
+	ApplyAppSettings(&cfg, AppSettings{Images: &ImageStyleSettings{Style: &none}})
+	ApplyAppSettings(&cfg, AppSettings{Images: &ImageStyleSettings{Style: &unknown}})
+	if cfg.ImageStyle != ImageStylePixelated {
+		t.Fatalf("env-only and unknown styles must not overwrite ImageStyle, got %q", cfg.ImageStyle)
+	}
+}
+
+func TestExplicitImageStyle(t *testing.T) {
+	path := writeInitialConfig(t, `{"images":{"style":"rendered"}}
+`)
+	style, explicit := ExplicitImageStyle(path)
+	if !explicit || style != ImageStyleRendered {
+		t.Fatalf("explicit style = (%q, %v), want (%q, true)", style, explicit, ImageStyleRendered)
+	}
+	missing := writeInitialConfig(t, `{"crossfade":{"enabled":true}}
+`)
+	if style, explicit := ExplicitImageStyle(missing); explicit || style != "" {
+		t.Fatalf("omitted images section must be unset, got (%q, %v)", style, explicit)
+	}
+	unknown := writeInitialConfig(t, `{"images":{"style":"oil-painting"}}
+`)
+	if style, explicit := ExplicitImageStyle(unknown); explicit || style != "" {
+		t.Fatalf("unknown images style must be unset, got (%q, %v)", style, explicit)
+	}
+}
+
+func TestLoadFromEnvImageStylePrecedence(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ORPHEUS_CONFIG_DIR", dir)
+	t.Setenv("SPOTIFY_CLIENT_ID", "test-client")
+	t.Setenv("ORPHEUS_IMAGE_PROTOCOL", "none")
+	settingsPath := filepath.Join(dir, "config.json")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ImageStyle != "" {
+		t.Fatalf("unset config.json must leave ImageStyle empty for ORPHEUS_IMAGE_PROTOCOL, got %q", cfg.ImageStyle)
+	}
+
+	pixelated := ImageStylePixelated
+	if err := SaveAppSettings(settingsPath, AppSettings{Images: &ImageStyleSettings{Style: &pixelated}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ImageStyle != ImageStylePixelated {
+		t.Fatalf("explicit config.json style must win, got %q", cfg.ImageStyle)
+	}
+}

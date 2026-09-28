@@ -9,7 +9,7 @@ The config directory is `~/.config/orpheus` on Linux. Change it with the `ORPHEU
 | File | What it is | Who creates it |
 | --- | --- | --- |
 | `.env` | bootstrap: your Spotify client id, plus any override you deliberately set. Written by you only, never by orpheus | you |
-| `config.json` | the app settings the UI manages (crossfade, audio cache) | the settings modal |
+| `config.json` | the app settings the UI manages (crossfade, audio cache, image style) | the settings modal |
 | `theme.json` | your theme | the theme picker / you ([theming](theming.md)) |
 | `keys.json` | your keybinds | written when you rebind a key in settings |
 | `token.json` | Spotify Web API login | `orpheus auth login` |
@@ -36,7 +36,7 @@ The `.env` is yours: orpheus reads it but never writes it. All you normally need
 
 ## `config.json`
 
-The settings you change inside orpheus (crossfade, audio cache) live here, written by the settings modal:
+The settings you change inside orpheus (crossfade, audio cache, image style) live here, written by the settings modal:
 
 ```json
 {
@@ -47,11 +47,23 @@ The settings you change inside orpheus (crossfade, audio cache) live here, writt
   "audio_cache": {
     "enabled": true,
     "size_mb": 2048
+  },
+  "images": {
+    "style": "pixelated"
   }
 }
 ```
 
 Precedence for these settings: a value in `config.json` wins over the `.env`/environment copy, because the settings UI writes there. Anything the file leaves out keeps falling back to the environment and the defaults, so you can hand-edit just one field. The first time you change one of these settings in the modal, the whole current state is written — that also migrates whatever your `.env` carried.
+
+### Cover image style
+
+Settings > Images selects `rendered` or `pixelated`:
+
+- `rendered`: use kitty graphics when the terminal supports the kitty protocol. On other terminals, the existing half-block fallback still applies.
+- `pixelated`: always use half-block ANSI art, even on a terminal where kitty graphics would work.
+
+An explicit `config.json` choice wins over `ORPHEUS_IMAGE_PROTOCOL`. If `config.json` leaves `images.style` unset, the environment controls startup: `kitty`, `ansi`, or `none`.
 
 ## Every `.env` variable
 

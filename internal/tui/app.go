@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -123,6 +124,10 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 	applyTheme(state)
 	browser := newBrowseList()
 	albums := newBrowseList()
+	imageStyle, imageStyleSet := cfg.ImageStyle, config.NormalizeImageStyle(cfg.ImageStyle) != ""
+	if !imageStyleSet {
+		imageStyle, imageStyleSet = config.ExplicitImageStyle(cfg.SettingsPath)
+	}
 
 	m := model{
 		ctx:             ctx,
@@ -146,7 +151,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 		},
 		ui: uiModel{
 			activeTab:              tabPlaylists,
-			imgs:                   newImgCache(),
+			imgs:                   newImgCacheWithSelection(imageStyle, imageStyleSet, os.Getenv),
 			spinner:                themedSpinner(),
 			startupCoverBoostTicks: 40,
 			cover:                  newCoverManager(),
@@ -157,6 +162,8 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 	}
 
 	m.syncListFilterBinding()
+	m.ui.settings.imageStyle = imageStyleOrDefault(imageStyle)
+	m.ui.settings.imageStyleSet = imageStyleSet
 	return m
 }
 

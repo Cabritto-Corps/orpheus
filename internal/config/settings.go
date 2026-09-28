@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // AppSettings is what the settings UI manages: the sections it writes live
@@ -14,6 +15,41 @@ import (
 type AppSettings struct {
 	Crossfade  *CrossfadeSettings  `json:"crossfade,omitempty"`
 	AudioCache *AudioCacheSettings `json:"audio_cache,omitempty"`
+	Images     *ImageStyleSettings `json:"images,omitempty"`
+}
+
+const (
+	ImageStyleRendered  = "rendered"
+	ImageStylePixelated = "pixelated"
+)
+
+type ImageStyleSettings struct {
+	Style *string `json:"style,omitempty"`
+}
+
+// NormalizeImageStyle accepts only the two settings-modal values. Unknown
+// styles (including an env-only "none") resolve to "" so callers can
+// distinguish an explicit choice from the unset state.
+func NormalizeImageStyle(style string) string {
+	switch strings.ToLower(strings.TrimSpace(style)) {
+	case ImageStyleRendered:
+		return ImageStyleRendered
+	case ImageStylePixelated:
+		return ImageStylePixelated
+	default:
+		return ""
+	}
+}
+
+// ExplicitImageStyle reports a style named in config.json. An omitted or
+// unknown style is not a choice, so environment selection keeps working.
+func ExplicitImageStyle(path string) (string, bool) {
+	settings := LoadAppSettings(path)
+	if settings.Images == nil || settings.Images.Style == nil {
+		return "", false
+	}
+	style := NormalizeImageStyle(*settings.Images.Style)
+	return style, style != ""
 }
 
 type CrossfadeSettings struct {
@@ -55,6 +91,11 @@ func ApplyAppSettings(cfg *Config, settings AppSettings) {
 			cfg.AudioCacheSizeMB = *s.SizeMB
 		}
 	}
+	if s := settings.Images; s != nil && s.Style != nil {
+		if style := NormalizeImageStyle(*s.Style); style != "" {
+			cfg.ImageStyle = style
+		}
+	}
 }
 
 // LoadAppSettings reads config.json, warning and starting empty on
@@ -78,7 +119,7 @@ func LoadAppSettings(path string) AppSettings {
 }
 
 // SaveAppSettings persists the managed sections atomically, merged over
-// whatever the file already contains: keys outside the two managed sections
+// whatever the file already contains: keys outside the managed sections
 // survive a save instead of being silently dropped, and the managed
 // sections always win. A malformed existing file starts from a clean
 // object rather than failing the save.

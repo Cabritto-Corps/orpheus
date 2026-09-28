@@ -2,6 +2,7 @@ package tui
 
 import (
 	"log/slog"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,6 +29,8 @@ func newSettingsModel(cfg config.Config, resolvedPreset string) settingsModel {
 		crossfadeSeconds: cfg.CrossfadeSeconds,
 		cacheEnabled:     cfg.AudioCacheEnabled,
 		cacheSizeMB:      cfg.AudioCacheSizeMB,
+		imageStyle:       imageStyleOrDefault(cfg.ImageStyle),
+		imageStyleSet:    config.NormalizeImageStyle(cfg.ImageStyle) != "",
 	}
 }
 
@@ -77,10 +80,10 @@ func (m model) handleSettingsRoot(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.ui.settings.open = false
 		return m, nil
 	case keyMatches(msg, k.QueueUp):
-		m.ui.settings.cursor = (m.ui.settings.cursor + 4) % 5
+		m.ui.settings.cursor = (m.ui.settings.cursor + 5) % 6
 		return m, nil
 	case keyMatches(msg, k.QueueDown):
-		m.ui.settings.cursor = (m.ui.settings.cursor + 1) % 5
+		m.ui.settings.cursor = (m.ui.settings.cursor + 1) % 6
 		return m, nil
 	case keyMatches(msg, k.Select):
 		return m.settingsActivate()
@@ -139,6 +142,11 @@ func (m model) settingsActivate() (tea.Model, tea.Cmd) {
 		s.cacheEnabled = !s.cacheEnabled
 		s.restartRequiredCache = true
 		m.saveAppSettings()
+	case 5: // images: cycle the render style and apply it without a restart
+		s.imageStyle = cycleImageStyle(s.imageStyle, 1)
+		s.imageStyleSet = true
+		m.saveAppSettings()
+		return m.applyImageStyle()
 	}
 	return m, nil
 }
@@ -154,7 +162,40 @@ func (m model) settingsAdjust(step int) (tea.Model, tea.Cmd) {
 		s.cacheSizeMB = clampCacheSizeMB(s.cacheSizeMB + int64(step)*256)
 		s.restartRequiredCache = true
 		m.saveAppSettings()
+	case 5:
+		s.imageStyle = cycleImageStyle(s.imageStyle, step)
+		s.imageStyleSet = true
+		m.saveAppSettings()
+		return m.applyImageStyle()
 	}
+	return m, nil
+}
+
+var imageStyleChoices = []string{config.ImageStyleRendered, config.ImageStylePixelated}
+
+func cycleImageStyle(style string, step int) string {
+	return cycleValue(imageStyleChoices, imageStyleOrDefault(style), step)
+}
+
+func settingsImageLabel(s *settingsModel) string {
+	return imageStyleOrDefault(s.imageStyle)
+}
+
+func (m model) applyImageStyle() (tea.Model, tea.Cmd) {
+	return m.applyImageStyleWithEnv(os.Getenv)
+}
+
+func (m model) applyImageStyleWithEnv(getenv func(string) string) (tea.Model, tea.Cmd) {
+	if m.ui.imgs == nil {
+		return m, nil
+	}
+	style := imageStyleOrDefault(m.ui.settings.imageStyle)
+	m.ui.imgs.setImageStyle(style, true, getenv)
+	// Style-specific supervision belongs to the previous attempt: clear it
+	// so a stored kitty failure cannot override the newly selected style.
+	m.ui.cover.kittyFellBack = false
+	m.ui.cover.kittyRecoveryStreak = 0
+	m.ui.cover.playerCoverFailStreak = 0
 	return m, nil
 }
 
@@ -238,9 +279,15 @@ func (m *model) saveAppSettings() {
 	seconds := s.crossfadeSeconds
 	cacheEnabled := s.cacheEnabled
 	sizeMB := s.cacheSizeMB
+	var images *config.ImageStyleSettings
+	if s.imageStyleSet {
+		style := imageStyleOrDefault(s.imageStyle)
+		images = &config.ImageStyleSettings{Style: &style}
+	}
 	if err := config.SaveAppSettings(s.configPath, config.AppSettings{
 		Crossfade:  &config.CrossfadeSettings{Enabled: &enabled, Seconds: &seconds},
 		AudioCache: &config.AudioCacheSettings{Enabled: &cacheEnabled, SizeMB: &sizeMB},
+		Images:     images,
 	}); err != nil {
 		s.saveErr = "save failed: " + err.Error()
 		slog.Warn("failed writing config.json", "path", s.configPath, "error", err)
@@ -501,6 +548,7 @@ func (m model) settingsModalView() string {
 			modalRow("Keybinds", "edit...", s.cursor == 2, modalW),
 			modalRow("Crossfade", settingsCrossfadeLabel(&s)+crossfadeGauge, s.cursor == 3, modalW),
 			modalRow("Audio cache", settingsCacheLabel(&s)+cacheGauge, s.cursor == 4, modalW),
+			modalRow("Images", settingsImageLabel(&s), s.cursor == 5, modalW),
 		}
 		var body strings.Builder
 		body.WriteString("\n" + lipgloss.JoinVertical(lipgloss.Left, rows...) + "\n")

@@ -84,7 +84,7 @@ On Linux, missing ALSA/FLAC/Ogg/Vorbis libraries are detected with `ldd` and the
 | **Under the hood** | | |
 | Streaming playback | real spotify streaming via go-librespot: prefetch and gapless between tracks | — |
 | Crossfade & audio cache | optional, configured in settings or the config files | — |
-| Cover art | kitty image protocol with a fallback for other terminals | — |
+| Cover art | kitty image protocol with a fallback for other terminals; style is selectable in settings | — |
 | Config files | everything persists to plain files you can edit ([configuration](docs/config.md)) | — |
 
 Every keybind can be changed in settings (`o` → Keybinds).
