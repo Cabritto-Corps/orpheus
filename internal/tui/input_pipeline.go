@@ -2,6 +2,7 @@ package tui
 
 import (
 	"log/slog"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -91,12 +92,20 @@ func (m *model) requeueFront(action playbackInputKind, prevRetries int) {
 func (m *model) pumpInputExecutor() tea.Cmd {
 	for range maxInputActionsPerTick {
 		m.syncExecutorState()
-		if m.transport.executorState != executorStateIdle || len(m.transport.inputQueue) == 0 {
+		if len(m.transport.inputQueue) == 0 {
 			return nil
 		}
 		idx := m.dequeueNextInputIndex()
-		if len(m.transport.inputQueue) == 0 {
-			return nil
+		if m.transport.executorState != executorStateIdle {
+			// Volume is an idempotent set-command that never touches
+			// transition state, and the key handler deliberately
+			// leaves it unblocked during transitions — let it drain
+			// so the bar and the audio stay live while a track
+			// change is in flight. Everything else stays queued.
+			idx = m.dequeueNextVolumeIndex()
+			if idx < 0 {
+				return nil
+			}
 		}
 		action := m.transport.inputQueue[idx].kind
 		retryCount := m.transport.inputQueue[idx].retryCount
@@ -187,6 +196,9 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 		m.transport.status.Volume = target
 		m.transport.volDebouncePending = target
 		m.transport.volDebounceToken++
+		if m.trySendVolume(target) {
+			return nil
+		}
 		return m.volDebounceCmd(m.transport.volDebounceToken)
 	case playbackInputVolDown:
 		if m.transport.status == nil {
@@ -201,6 +213,9 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 		m.transport.status.Volume = target
 		m.transport.volDebouncePending = target
 		m.transport.volDebounceToken++
+		if m.trySendVolume(target) {
+			return nil
+		}
 		return m.volDebounceCmd(m.transport.volDebounceToken)
 	case playbackInputSeekBack:
 		if m.transport.status == nil {
@@ -235,6 +250,26 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 
 func isVolumeAction(action playbackInputKind) bool {
 	return action == playbackInputVolUp || action == playbackInputVolDown
+}
+
+// trySendVolume commits a volume target to the player immediately
+// (leading edge) instead of waiting out the debounce interval. The
+// trailing debounce timer stays as the fallback when the command
+// channel is full: pending keeps the target and the token guards the
+// retry, so no press is ever lost to a busy player.
+func (m *model) trySendVolume(target int) bool {
+	if m.tuiCmdCh == nil {
+		return false
+	}
+	select {
+	case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandSetVolume, Volume: target}:
+		m.transport.volDebouncePending = -1
+		m.transport.volSentTarget = target
+		m.transport.volSentAt = time.Now()
+		return true
+	default:
+		return false
+	}
 }
 
 func isSeekAction(action playbackInputKind) bool {
@@ -273,6 +308,20 @@ func (m *model) dequeueNextInputIndex() int {
 		}
 	}
 	return bestIdx
+}
+
+func (m *model) dequeueNextVolumeIndex() int {
+	best := -1
+	var bestPrio inputPriority
+	for i, item := range m.transport.inputQueue {
+		if !isVolumeAction(item.kind) {
+			continue
+		}
+		if best < 0 || item.priority > bestPrio {
+			best, bestPrio = i, item.priority
+		}
+	}
+	return best
 }
 
 func (m *model) dropQueuedByPredicate(drop func(playbackInputKind) bool) {
