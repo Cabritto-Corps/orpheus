@@ -150,19 +150,20 @@ func TestSettingsThemePickerDefersArtRegenToSave(t *testing.T) {
 		m.refreshLikedSongsArt()
 	})
 
+	defaultKey := likedArtPaletteKey(m.likedArtThemeColors())
 	next := openViaKey(m)
 	next = sendEnter(next) // open picker
 	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
 	// Live preview moves the styles but must not pay the procedural
 	// cover regen per keypress: the art stays on the old palette.
-	if likedArtPaletteKey() == likedArtKey {
+	if likedArtKey != defaultKey {
 		t.Fatal("preview must leave the liked-songs art unsynced until save")
 	}
 	next = sendEnter(next) // save: the art syncs once to the picked palette
 	if next.ui.settings.mode != settingsModeRoot {
 		t.Fatal("enter should return to the settings root")
 	}
-	if likedArtPaletteKey() != likedArtKey {
+	if want := likedArtPaletteKey(next.likedArtThemeColors()); likedArtKey != want {
 		t.Fatal("save must sync the liked-songs art to the picked palette")
 	}
 }
