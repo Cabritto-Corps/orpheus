@@ -1,6 +1,7 @@
 package tui
 
 import (
+	stdlist "container/list"
 	"log/slog"
 	"strings"
 
@@ -11,11 +12,14 @@ import (
 )
 
 type coverManager struct {
-	imageRetryCount       map[string]int
-	imageRetryToken       map[string]int
-	resolveInFlight       map[string]struct{}
-	queue                 []string
-	queued                map[string]int
+	imageRetryCount map[string]int
+	imageRetryToken map[string]int
+	resolveInFlight map[string]struct{}
+	queue           *stdlist.List
+	queued          map[string]*stdlist.Element
+	// queue is the FIFO of cover URLs to load; queued maps each URL to
+	// its list element. Element pointers stay valid across pops and
+	// removes, so no index bookkeeping exists that could desync.
 	playerCoverFailStreak int
 	kittyRecoveryStreak   int
 	// kittyFellBack records that kitty was disabled by the failure
@@ -29,7 +33,8 @@ func newCoverManager() coverManager {
 		imageRetryCount: make(map[string]int),
 		imageRetryToken: make(map[string]int),
 		resolveInFlight: make(map[string]struct{}),
-		queued:          make(map[string]int),
+		queue:           stdlist.New(),
+		queued:          make(map[string]*stdlist.Element),
 	}
 }
 
@@ -71,21 +76,18 @@ func (c *coverManager) enqueueURL(url string) bool {
 	if _, exists := c.queued[url]; exists {
 		return false
 	}
-	c.queued[url] = len(c.queue)
-	c.queue = append(c.queue, url)
+	c.queued[url] = c.queue.PushBack(url)
 	return true
 }
 
 func (c *coverManager) popURL() (string, bool) {
-	if len(c.queue) == 0 {
+	el := c.queue.Front()
+	if el == nil {
 		return "", false
 	}
-	url := c.queue[0]
-	c.queue = c.queue[1:]
+	url := el.Value.(string)
+	_ = c.queue.Remove(el)
 	delete(c.queued, url)
-	for i, u := range c.queue {
-		c.queued[u] = i
-	}
 	return url, true
 }
 
@@ -93,31 +95,28 @@ func (c *coverManager) popURL() (string, bool) {
 // fast scroll does not leave hundreds of off-screen loads queued ahead of
 // what the user is looking at.
 func (c *coverManager) pruneExcept(keep map[string]struct{}) {
-	if len(c.queue) == 0 {
+	if c.queue.Len() == 0 {
 		return
 	}
-	filtered := c.queue[:0]
-	for _, u := range c.queue {
-		if _, ok := keep[u]; ok {
-			filtered = append(filtered, u)
-		} else {
+	for el := c.queue.Front(); el != nil; {
+		next := el.Next()
+		u := el.Value.(string)
+		if _, ok := keep[u]; !ok {
+			_ = c.queue.Remove(el)
 			delete(c.queued, u)
 		}
+		el = next
 	}
-	c.queue = filtered
 }
 
 func (c *coverManager) removeFromQueue(url string) bool {
 	url = strings.TrimSpace(url)
-	idx, ok := c.queued[url]
+	el, ok := c.queued[url]
 	if !ok {
 		return false
 	}
-	c.queue = append(c.queue[:idx], c.queue[idx+1:]...)
+	_ = c.queue.Remove(el)
 	delete(c.queued, url)
-	for i := idx; i < len(c.queue); i++ {
-		c.queued[c.queue[i]] = i
-	}
 	return true
 }
 
@@ -232,7 +231,7 @@ func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
 			urls = append(urls, playerURL)
 		}
 	}
-	for len(m.ui.cover.queue) > 0 && len(urls) < limit {
+	for m.ui.cover.queue.Len() > 0 && len(urls) < limit {
 		url, _ := m.ui.cover.popURL()
 		if !m.ui.imgs.shouldQueueLoad(url) {
 			continue
@@ -309,7 +308,7 @@ func (m *model) applyResolvedContextImageURL(kind, id, imageURL string) bool {
 			if m.browse.playlistList.FilterState() == list.Unfiltered {
 				m.browse.playlistList.SetItems(items)
 				if len(items) > 0 {
-					m.browse.playlistList.Select(clampInt(prevIndex, 0, len(items)-1))
+					m.browse.playlistList.Select(min(max(prevIndex, 0), len(items)-1))
 				}
 			}
 		}
@@ -333,7 +332,7 @@ func (m *model) applyResolvedContextImageURL(kind, id, imageURL string) bool {
 			if m.browse.albumList.FilterState() == list.Unfiltered {
 				m.browse.albumList.SetItems(items)
 				if len(items) > 0 {
-					m.browse.albumList.Select(clampInt(prevIndex, 0, len(items)-1))
+					m.browse.albumList.Select(min(max(prevIndex, 0), len(items)-1))
 				}
 			}
 		}

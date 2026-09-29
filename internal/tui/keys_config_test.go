@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"charm.land/bubbles/v2/key"
@@ -96,19 +97,13 @@ func TestGoldenNextOverrideToJ(t *testing.T) {
 	}
 }
 
-func TestKeysContainList(t *testing.T) {
-	if !keysContainList([]string{"a", "b"}, "b") || keysContainList([]string{"a"}, "b") {
-		t.Fatal("keysContainList broken")
-	}
-}
-
 func TestQuitAlwaysKeepsCtrlC(t *testing.T) {
 	overrides := LoadKeys(writeKeysFile(t, `{"quit": "esc"}`))
 	m := newKeysFromConfig(overrides)
-	if !keysContainList(m.Quit.Keys(), "ctrl+c") {
+	if !slices.Contains(m.Quit.Keys(), "ctrl+c") {
 		t.Fatalf("quit must always contain ctrl+c, got %v", m.Quit.Keys())
 	}
-	if !keysContainList(m.Quit.Keys(), "esc") {
+	if !slices.Contains(m.Quit.Keys(), "esc") {
 		t.Fatalf("user quit key missing, got %v", m.Quit.Keys())
 	}
 }
@@ -117,7 +112,7 @@ func TestQuitOverrideArrayAlsoKeepsCtrlC(t *testing.T) {
 	overrides := LoadKeys(writeKeysFile(t, `{"quit": ["esc", "ctrl+z"]}`))
 	m := newKeysFromConfig(overrides)
 	for _, want := range []string{"esc", "ctrl+z", "ctrl+c"} {
-		if !keysContainList(m.Quit.Keys(), want) {
+		if !slices.Contains(m.Quit.Keys(), want) {
 			t.Fatalf("quit keys = %v, missing %q", m.Quit.Keys(), want)
 		}
 	}
@@ -171,7 +166,7 @@ func TestApplyKeyOverridesCoversRegistry(t *testing.T) {
 		if meta.action == "quit" {
 			want = []string{"f24", "ctrl+c"}
 		}
-		if !stringSlicesEqual(keys, want) {
+		if !slices.Equal(keys, want) {
 			t.Fatalf("%s: got keys %v, want %v", meta.action, keys, want)
 		}
 	}
@@ -180,7 +175,7 @@ func TestApplyKeyOverridesCoversRegistry(t *testing.T) {
 	after := applyKeyOverrides(before, map[string][]string{"nope": {"x"}})
 	for _, meta := range actionRegistry {
 		got, want := meta.bind(after).Keys(), meta.bind(before).Keys()
-		if !stringSlicesEqual(got, want) {
+		if !slices.Equal(got, want) {
 			t.Fatalf("unknown action changed %s: %v -> %v", meta.action, want, got)
 		}
 	}

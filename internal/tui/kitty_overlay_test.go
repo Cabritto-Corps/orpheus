@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/colorprofile"
 	uv "github.com/charmbracelet/ultraviolet"
 
 	"orpheus/internal/spotify"
@@ -176,7 +177,7 @@ func TestCoverWaitsForInflightRenderInsteadOfSpinning(t *testing.T) {
 
 	done := make(chan string, 1)
 	go func() {
-		s, _ := c.cover(key.url, key.cols, key.rows)
+		s, _ := c.cover(key.url, key.cols, key.rows, colorprofile.TrueColor)
 		done <- s
 	}()
 

@@ -138,10 +138,6 @@ func shortKeyLabel(keys []string) string {
 	}
 }
 
-func keysContainList(keys []string, want string) bool {
-	return slices.Contains(keys, want)
-}
-
 func newKeysFromConfig(overrides map[string][]string) keyMap {
 	return applyKeyOverrides(newKeys(), overrides)
 }
@@ -170,7 +166,7 @@ func SaveKeys(path string, overrides map[string][]string) error {
 		if len(keys) == 0 {
 			continue
 		}
-		if def, ok := defaultKeysForAction(defaults, action); ok && stringSlicesEqual(def, keys) {
+		if def, ok := defaultKeysForAction(defaults, action); ok && slices.Equal(def, keys) {
 			continue
 		}
 		out[action] = keys
@@ -200,16 +196,4 @@ func LoadKeys(path string) map[string][]string {
 		return nil
 	}
 	return overrides
-}
-
-func stringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

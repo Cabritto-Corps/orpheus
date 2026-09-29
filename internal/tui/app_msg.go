@@ -229,7 +229,7 @@ func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 	}
 	items := m.browse.playlistList.Items()
 	if m.browse.playlistList.FilterState() == list.Unfiltered && len(items) > 0 {
-		center := clampInt(m.browse.playlistList.GlobalIndex(), 0, len(items)-1)
+		center := min(max(m.browse.playlistList.GlobalIndex(), 0), len(items)-1)
 		half := coverPreloadWindow / 2
 		start := max(0, center-half)
 		end := min(len(items), center+half+1)
@@ -243,7 +243,7 @@ func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 	}
 	albumItems := m.browse.albumList.Items()
 	if m.browse.albumList.FilterState() == list.Unfiltered && len(albumItems) > 0 {
-		center := clampInt(m.browse.albumList.GlobalIndex(), 0, len(albumItems)-1)
+		center := min(max(m.browse.albumList.GlobalIndex(), 0), len(albumItems)-1)
 		half := coverPreloadWindow / 2
 		start := max(0, center-half)
 		end := min(len(albumItems), center+half+1)

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/muesli/termenv"
 )
 
@@ -41,11 +42,11 @@ func CaptureTerminalBG() {
 // making the release idempotent); leaving it re-applies the page because
 // Last no longer matches. Kept pure so the transitions are unit-testable
 // without emitting escape sequences.
-func terminalBGTarget(page color.Color, transparent bool) string {
+func terminalBGTarget(page color.Color, transparent bool, profile colorprofile.Profile) string {
 	if terminalBGOriginal == "" {
 		return ""
 	}
-	if !colorEnabled() {
+	if profile <= colorprofile.Ascii {
 		return ""
 	}
 	if transparent {
@@ -71,8 +72,8 @@ func terminalBGTarget(page color.Color, transparent bool) string {
 // color: the padding around the grid is painted with the terminal
 // background, so matching it makes the page fill read as whole-window.
 // ANSI-name pages (no hex) and ASCII profiles keep the transparent look.
-func ApplyTerminalBG(page color.Color, transparent bool) {
-	spec := terminalBGTarget(page, transparent)
+func ApplyTerminalBG(page color.Color, transparent bool, profile colorprofile.Profile) {
+	spec := terminalBGTarget(page, transparent, profile)
 	if spec == "" {
 		return
 	}
@@ -98,8 +99,8 @@ func RestoreTerminalBG() {
 // captured at theme-apply time; theme changes return it as a tea.Cmd so
 // the padding follows the live preview without reading theme state off
 // the event loop.
-func TerminalBGSync(page color.Color, transparent bool) tea.Msg {
-	ApplyTerminalBG(page, transparent)
+func TerminalBGSync(page color.Color, transparent bool, profile colorprofile.Profile) tea.Msg {
+	ApplyTerminalBG(page, transparent, profile)
 	return nil
 }
 

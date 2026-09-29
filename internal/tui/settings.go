@@ -501,10 +501,10 @@ func (m *model) applyCapture(action, keyName string) error {
 	}
 	if action == "quit" {
 		// ctrl+c always quits: keep it in the stored list like the loader does.
-		if !keyContains(overrides[action], "ctrl+c") {
+		if !slices.Contains(overrides[action], "ctrl+c") {
 			overrides[action] = append(append([]string{}, overrides[action]...), "ctrl+c")
 		}
-		if !keyContains(overrides[action], keyName) {
+		if !slices.Contains(overrides[action], keyName) {
 			overrides[action] = []string{keyName, "ctrl+c"}
 		} else {
 			overrides[action] = []string{keyName}
@@ -543,10 +543,6 @@ func captureKeyName(msg tea.KeyPressMsg) string {
 }
 
 // isModifierCode reports the bare left/right modifier keys.
-
-func keyContains(keys []string, want string) bool {
-	return slices.Contains(keys, want)
-}
 
 func (m model) settingsKeysTable(w, h int) *table.Model {
 	// The table is rebuilt on every render: rows mirror the live keyMap, so
@@ -615,7 +611,7 @@ func (m model) themePickerView(modalW, innerH int) string {
 		if themePresetName(s.themePreset) == themePresetName(name) {
 			marker = "✓"
 		}
-		bar := swatchBar(themeSwatches(colors))
+		bar := m.styles.swatchBar(themeSwatches(colors))
 		row := " " + marker + " " + padCell(name, 14) + " " + bar
 		rows = append(rows, m.styles.modalRow(row, "", s.themeCursor == i, modalW))
 		if i < len(settingsThemeOrder)-1 {
@@ -712,7 +708,7 @@ func (m model) settingsModalView() string {
 
 func (m model) themeValue(preset string) string {
 	colors := resolveThemeColors(preset, m.cachedThemeOverrides())
-	return preset + "  " + swatchBar(themeSwatches(colors))
+	return preset + "  " + m.styles.swatchBar(themeSwatches(colors))
 }
 
 func settingsActionLabel(action string) string {

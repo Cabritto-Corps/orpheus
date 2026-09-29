@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
-	"image/color"
 	_ "image/jpeg"
 	"image/png"
 	_ "image/png"
@@ -19,6 +18,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/colorprofile"
+
+	"golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 
 	"orpheus/internal/cache"
@@ -206,7 +208,7 @@ func (c *imgCache) pinURL(url string) {
 	c.pinned[url] = struct{}{}
 }
 
-func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
+func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int, profile colorprofile.Profile) {
 	c.mu.RLock()
 	protocol := c.protocol
 	if protocol == imageProtocolKitty {
@@ -240,7 +242,7 @@ func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
 
 		// Resize+render happens outside the lock so per-frame View() reads
 		// are not blocked behind bilinear work.
-		s := renderCover(img, cols, rows)
+		s := renderCover(img, cols, rows, profile)
 
 		c.mu.Lock()
 		delete(c.rendering, key)
@@ -413,7 +415,7 @@ func (c *imgCache) invalidateCovers() {
 	}
 }
 
-func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
+func (c *imgCache) cover(url string, cols, rows int, profile colorprofile.Profile) (string, bool) {
 	if url == "" || cols <= 0 || rows <= 0 {
 		return "", true
 	}
@@ -441,12 +443,12 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 		ch := make(chan struct{})
 		c.rendering[key] = ch
 		c.mu.Unlock()
-		return c.renderAndCache(key, url, img, cols, rows, ch)
+		return c.renderAndCache(key, url, img, cols, rows, ch, profile)
 	}
 }
 
-func (c *imgCache) renderAndCache(key coverKey, url string, img image.Image, cols, rows int, ch chan struct{}) (string, bool) {
-	s := renderCover(img, cols, rows)
+func (c *imgCache) renderAndCache(key coverKey, url string, img image.Image, cols, rows int, ch chan struct{}, profile colorprofile.Profile) (string, bool) {
+	s := renderCover(img, cols, rows, profile)
 
 	c.mu.Lock()
 	var result string
@@ -525,8 +527,8 @@ func encodeImageAsPNGBase64(img image.Image) (string, error) {
 	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 }
 
-func renderCover(img image.Image, cols, rows int) string {
-	return renderHalfBlock(img, cols, rows)
+func renderCover(img image.Image, cols, rows int, profile colorprofile.Profile) string {
+	return renderHalfBlock(img, cols, rows, profile)
 }
 
 func detectImageProtocol(getenv func(string) string) imageProtocol {
@@ -587,74 +589,21 @@ func (httpImageProvider) Fetch(ctx context.Context, url string) ([]byte, error) 
 func resizeBilinear(src image.Image, width, height int) *image.RGBA {
 	dst := image.NewRGBA(image.Rect(0, 0, width, height))
 	sb := src.Bounds()
-	sw := sb.Dx()
-	sh := sb.Dy()
-	if sw <= 0 || sh <= 0 || width <= 0 || height <= 0 {
+	if sb.Dx() <= 0 || sb.Dy() <= 0 || width <= 0 || height <= 0 {
 		return dst
 	}
-	if sw == 1 || sh == 1 || width == 1 || height == 1 {
-		for y := range height {
-			sy := sb.Min.Y + y*sh/height
-			for x := range width {
-				sx := sb.Min.X + x*sw/width
-				r, g, b, _ := src.At(sx, sy).RGBA()
-				dst.SetRGBA(x, y, color.RGBA{
-					R: uint8(r >> 8),
-					G: uint8(g >> 8),
-					B: uint8(b >> 8),
-					A: 255,
-				})
-			}
-		}
-		return dst
-	}
-
-	scaleX := float64(sw-1) / float64(width-1)
-	scaleY := float64(sh-1) / float64(height-1)
-	for y := range height {
-		fy := float64(y) * scaleY
-		y0 := int(fy)
-		y1 := y0 + 1
-		if y1 >= sh {
-			y1 = sh - 1
-		}
-		wy := fy - float64(y0)
-		for x := range width {
-			fx := float64(x) * scaleX
-			x0 := int(fx)
-			x1 := x0 + 1
-			if x1 >= sw {
-				x1 = sw - 1
-			}
-			wx := fx - float64(x0)
-
-			r00, g00, b00, _ := src.At(sb.Min.X+x0, sb.Min.Y+y0).RGBA()
-			r10, g10, b10, _ := src.At(sb.Min.X+x1, sb.Min.Y+y0).RGBA()
-			r01, g01, b01, _ := src.At(sb.Min.X+x0, sb.Min.Y+y1).RGBA()
-			r11, g11, b11, _ := src.At(sb.Min.X+x1, sb.Min.Y+y1).RGBA()
-
-			interp := func(c00, c10, c01, c11 uint32) uint8 {
-				top := (1.0-wx)*float64(c00) + wx*float64(c10)
-				bot := (1.0-wx)*float64(c01) + wx*float64(c11)
-				v := (1.0-wy)*top + wy*bot
-				return uint8((uint32(v) >> 8) & 0xff)
-			}
-			dst.SetRGBA(x, y, color.RGBA{
-				R: interp(r00, r10, r01, r11),
-				G: interp(g00, g10, g01, g11),
-				B: interp(b00, b10, b01, b11),
-				A: 255,
-			})
-		}
-	}
+	// ApproxBiLinear is the fast path: a nearest/bilinear mix whose
+	// per-pixel output differs slightly from the old hand-rolled kernel
+	// (and which preserves source alpha instead of forcing opaque).
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, sb, draw.Src, nil)
 	return dst
 }
 
-func renderHalfBlock(img image.Image, cols, rows int) string {
+func renderHalfBlock(img image.Image, cols, rows int, profile colorprofile.Profile) string {
 	if cols <= 0 || rows <= 0 || img == nil {
 		return ""
 	}
-	if !colorEnabled() {
+	if profile <= colorprofile.Ascii {
 		// NO_COLOR / no-color terminals strip truecolor ANSI, turning the
 		// half-block mosaic into meaningless blank blocks.
 		return ""

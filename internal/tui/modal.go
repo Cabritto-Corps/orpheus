@@ -4,9 +4,9 @@ import (
 	"image/color"
 	"strings"
 
-	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 const (
@@ -104,7 +104,7 @@ func (s *themeStyles) modalFrame(termW, termH int, title, hint, body string, wan
 	// (rows, hints, headers) end with a reset and the border ring is
 	// drawn foreground-only — both would punch holes in the box tone.
 	// Re-assert at line starts and after every reset.
-	if seq := bgSequence(s.modalBoxBackground()); seq != "" {
+	if seq := s.bgSequence(s.modalBoxBackground()); seq != "" {
 		box = reassertBgLines(box, seq)
 	}
 
@@ -161,8 +161,8 @@ func (s *themeStyles) modalRow(label, value string, selected bool, width int) st
 		// then close the span with the box's own background so the line
 		// never ends with the selection active — a line that ends on the
 		// selection bg spills it onto whatever is drawn after it.
-		return reassertBg(rendered, bgSequence(s.colorSelectionBg)) +
-			bgSequence(s.modalBoxBackground())
+		return reassertBg(rendered, s.bgSequence(s.colorSelectionBg)) +
+			s.bgSequence(s.modalBoxBackground())
 	}
 	return row
 }
@@ -180,7 +180,7 @@ func alignRight(s string, width int) string {
 // ellipsis truncation at narrow widths and style handling follow the
 // framework instead of being re-invented per surface.
 func (s *themeStyles) hintLine(bindings []key.Binding, width int) string {
-	h := help.New()
+	h := s.help
 	h.SetWidth(width)
 	h.Styles.ShortKey = s.styleTrackPopupTitle
 	h.Styles.ShortDesc = s.styleModalHint
@@ -216,8 +216,8 @@ func themeSwatches(c themeColors) []themeSwatch {
 // swatchBar renders the palette preview: every role as a foreground full
 // block, identical on every row — the bar must never reflow when the
 // cursor moves over it.
-func swatchBar(swatches []themeSwatch) string {
-	if !colorEnabled() {
+func (s *themeStyles) swatchBar(swatches []themeSwatch) string {
+	if s.colorProfile <= colorprofile.Ascii {
 		return ""
 	}
 	var b strings.Builder
@@ -225,7 +225,15 @@ func swatchBar(swatches []themeSwatch) string {
 		if i > 0 {
 			b.WriteString(" ")
 		}
-		b.WriteString(lipgloss.NewStyle().Foreground(sw.color).Render("██"))
+		st, ok := s.swatchStyles[sw.color]
+		if !ok {
+			st = lipgloss.NewStyle().Foreground(sw.color)
+			if s.swatchStyles == nil {
+				s.swatchStyles = map[color.Color]lipgloss.Style{}
+			}
+			s.swatchStyles[sw.color] = st
+		}
+		b.WriteString(st.Render("██"))
 	}
 	return b.String()
 }

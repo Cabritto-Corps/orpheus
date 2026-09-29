@@ -112,7 +112,7 @@ var actionRegistry = []actionMeta{
 	{"settings", "Navigation", "open settings", "open settings", func(k keyMap) key.Binding { return k.Settings }, func(m *keyMap, keys []string) { m.Settings = overrideBinding(m.Settings, keys) }},
 	{"close_modal", "Navigation", "close modal", "close modal", func(k keyMap) key.Binding { return k.CloseModal }, func(m *keyMap, keys []string) { m.CloseModal = overrideBinding(m.CloseModal, keys) }},
 	{"quit", "Navigation", "quit (ctrl+c always quits)", "quit", func(k keyMap) key.Binding { return k.Quit }, func(m *keyMap, keys []string) {
-		if !keysContainList(keys, "ctrl+c") {
+		if !slices.Contains(keys, "ctrl+c") {
 			keys = append(append([]string{}, keys...), "ctrl+c")
 		}
 		m.Quit = overrideBinding(m.Quit, keys)

@@ -182,7 +182,9 @@ func (m model) themeOptionsApply(state themeState) (tea.Model, tea.Cmd) {
 	m.styles = buildThemeStyles(state)
 	m.rethemeBrowseLists()
 	m.ui.spinner = themedSpinner(m.styles)
-	return m, func() tea.Msg { return TerminalBGSync(m.styles.colorPage, m.styles.transparentFrame()) }
+	return m, func() tea.Msg {
+		return TerminalBGSync(m.styles.colorPage, m.styles.transparentFrame(), m.styles.colorProfile)
+	}
 }
 
 // themeOptionsApplyAndRefresh is the settle path for theme changes: it

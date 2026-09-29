@@ -3,10 +3,8 @@ package tui
 import (
 	"fmt"
 	"image/color"
-	"os"
 	"strings"
 
-	"charm.land/bubbles/v2/progress"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
@@ -117,28 +115,13 @@ func (m model) pageView() string {
 	}
 }
 
-// colorEnabled reports whether the terminal wants colors: NO_COLOR, dumb
-// and non-TTY environments (the Ascii/NoTTY profiles) disable color.
-// Everything else renders full-fidelity and lets the v2 renderer
-// downsample at output. colorprofile.Env reads the live environment with
-// no globals, so tests control it with t.Setenv instead of mutating a
-// shared renderer.
-func colorEnabled() bool {
-	switch colorprofile.Env(os.Environ()) {
-	case colorprofile.Ascii, colorprofile.NoTTY:
-		return false
-	default:
-		return true
-	}
-}
-
 // bgSequence returns the terminal SGR that sets c as the background, or
 // "" where a themed background is not representable (no-color
 // profiles). Full fidelity is always emitted: the v2 renderer
 // downsamples raw SGR in frame content at output, so no per-profile
 // quantization happens here.
-func bgSequence(c color.Color) string {
-	if c == nil || !colorEnabled() {
+func (s *themeStyles) bgSequence(c color.Color) string {
+	if c == nil || s.colorProfile <= colorprofile.Ascii {
 		return ""
 	}
 	r, g, b, _ := c.RGBA()
@@ -180,8 +163,8 @@ func reassertBg(text, seq string) string {
 // survives inner resets: the sequence is asserted at the line start,
 // re-asserted after each reset, and forced again under the trailing
 // padding (which would otherwise inherit an inner element's own bg).
-func paintBand(band string, width int, bg color.Color) string {
-	seq := bgSequence(bg)
+func (s *themeStyles) paintBand(band string, width int, bg color.Color) string {
+	seq := s.bgSequence(bg)
 	if seq == "" {
 		return band
 	}
@@ -197,7 +180,7 @@ func paintBand(band string, width int, bg color.Color) string {
 // is padded to the terminal width and drawn on the page background, so a
 // theme owns the full canvas instead of the terminal's default color.
 func (s *themeStyles) paintPage(frame string, width int) string {
-	return paintBand(frame, width, s.colorPage)
+	return s.paintBand(frame, width, s.colorPage)
 }
 
 type bodyLayout struct {
@@ -287,16 +270,8 @@ func (s *themeStyles) gradientBar(frac float64, width int) string {
 		return ""
 	}
 	frac = max(0, min(1, frac))
-	p := progress.New(
-		progress.WithWidth(width),
-		progress.WithoutPercentage(),
-		progress.WithColors(s.colorBlue, s.colorBlueLight),
-	)
-	full, empty := s.themeBarRunes()
-	p.Full, p.Empty = full, empty
-	// bubbles' defaults are hardcoded hexes (#606060 empty); the theme's
-	// own gray keeps the empty track inside the palette.
-	p.EmptyColor = s.colorGray
+	p := s.barProgress
+	p.SetWidth(width)
 	return p.ViewAs(frac)
 }
 
@@ -312,13 +287,9 @@ func truncate(s string, max int) string {
 	if max <= 0 {
 		return ""
 	}
-	if lipgloss.Width(s) <= max {
-		return s
-	}
-	if max <= 1 {
-		return "…"
-	}
-	return ansi.Truncate(s, max-1, "") + "…"
+	// ansi.Truncate accounts for the tail width itself and returns s
+	// unchanged when it already fits.
+	return ansi.Truncate(s, max, "…")
 }
 
 // padCell pads s with spaces to width display cells (not bytes).

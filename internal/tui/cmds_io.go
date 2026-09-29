@@ -125,7 +125,7 @@ func (m *model) loadImageCmd(url string, priority bool) tea.Cmd {
 			if err := cache.ensureKittyEncoding(url, img); err != nil {
 				return imageLoadedMsg{url: url, err: err}
 			}
-			cache.preRenderCovers(url, coverSizes)
+			cache.preRenderCovers(url, coverSizes, m.styles.colorProfile)
 			return imageLoadedMsg{url: url}
 		}
 
@@ -159,7 +159,7 @@ func (m *model) loadImageCmd(url string, priority bool) tea.Cmd {
 		if err := cache.ensureKittyEncoding(url, img); err != nil {
 			return imageLoadedMsg{url: url, err: err}
 		}
-		cache.preRenderCovers(url, coverSizes)
+		cache.preRenderCovers(url, coverSizes, m.styles.colorProfile)
 		return imageLoadedMsg{url: url}
 	}
 }
@@ -297,7 +297,7 @@ func (m *model) loadImagesBatchCmd(urls []string) tea.Cmd {
 					done <- indexedImageMsg{idx, imageLoadedMsg{url: target, err: err}}
 					return
 				}
-				m.ui.imgs.preRenderCovers(target, coverSizes)
+				m.ui.imgs.preRenderCovers(target, coverSizes, m.styles.colorProfile)
 				done <- indexedImageMsg{idx, imageLoadedMsg{url: target}}
 			}(ri, imgData.Data, url)
 		}

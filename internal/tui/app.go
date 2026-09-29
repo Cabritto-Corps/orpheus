@@ -191,7 +191,7 @@ func normalizeListPagination(l *list.Model) {
 		perPage = len(visible)
 	}
 	maxPage := (len(visible) - 1) / perPage
-	l.Paginator.Page = clampInt(l.Paginator.Page, 0, maxPage)
+	l.Paginator.Page = min(max(l.Paginator.Page, 0), maxPage)
 	if l.FilterState() == list.Unfiltered {
 		idx := l.GlobalIndex()
 		if idx >= len(visible) {
@@ -214,7 +214,7 @@ func Run(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.Config
 	// to the theme's page color for the session; restore on exit.
 	CaptureTerminalBG()
 	defer RestoreTerminalBG()
-	ApplyTerminalBG(m.styles.colorPage, m.styles.transparentFrame())
+	ApplyTerminalBG(m.styles.colorPage, m.styles.transparentFrame(), m.styles.colorProfile)
 	p := tea.NewProgram(m)
 	if playbackStateCh != nil {
 		StartPlaybackStateListener(playbackStateCh, p.Send, ctx)
@@ -240,14 +240,4 @@ func keyMatches(msg tea.KeyPressMsg, b key.Binding) bool {
 		}
 	}
 	return false
-}
-
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }

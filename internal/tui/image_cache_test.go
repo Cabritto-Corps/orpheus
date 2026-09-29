@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"orpheus/internal/config"
 	"orpheus/internal/loader"
@@ -103,7 +104,7 @@ func TestImageCacheEvictsOldestImageAndItsRenderedCovers(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 
 	cache.setImage("u-0", img, 0, 0)
-	cache.preRenderCovers("u-0", [][2]int{{8, 4}})
+	cache.preRenderCovers("u-0", [][2]int{{8, 4}}, colorprofile.TrueColor)
 
 	for i := 1; i <= maxCachedImages; i++ {
 		cache.setImage(fmt.Sprintf("u-%d", i), img, 0, 0)
@@ -131,7 +132,7 @@ func TestImageCacheEvictsOldestRenderedCover(t *testing.T) {
 	for i := range maxCachedCoverRenders + 1 {
 		sizes = append(sizes, [2]int{2 + i, 1})
 	}
-	cache.preRenderCovers("u", sizes)
+	cache.preRenderCovers("u", sizes, colorprofile.TrueColor)
 
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
@@ -431,8 +432,8 @@ func TestCoverQueueDedupesAndDrains(t *testing.T) {
 	m := NewLoaderModel()
 	m.enqueueCoverURL("u1")
 	m.enqueueCoverURL("u1")
-	if len(m.ui.cover.queue) != 1 {
-		t.Fatalf("expected deduped cover queue size 1, got %d", len(m.ui.cover.queue))
+	if m.ui.cover.queue.Len() != 1 {
+		t.Fatalf("expected deduped cover queue size 1, got %d", m.ui.cover.queue.Len())
 	}
 	cmd := m.drainCoverQueueCmd(4)
 	if cmd == nil {

@@ -196,14 +196,14 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	if m.browse.playlistList.FilterState() == list.Unfiltered {
 		m.browse.playlistList.SetItems(plItems)
 		if len(plItems) > 0 {
-			idx := clampInt(prevPlaylistIndex, 0, len(plItems)-1)
+			idx := min(max(prevPlaylistIndex, 0), len(plItems)-1)
 			m.browse.playlistList.Select(idx)
 		}
 	}
 	if m.browse.albumList.FilterState() == list.Unfiltered {
 		m.browse.albumList.SetItems(alItems)
 		if len(alItems) > 0 {
-			idx := clampInt(prevAlbumIndex, 0, len(alItems)-1)
+			idx := min(max(prevAlbumIndex, 0), len(alItems)-1)
 			m.browse.albumList.Select(idx)
 		}
 	}

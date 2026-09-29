@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/colorprofile"
+
 	"orpheus/internal/config"
 	"orpheus/internal/loader"
 	"orpheus/internal/spotify"
@@ -132,7 +134,7 @@ func TestForcedPixelatedNeverUsesKitty(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	img.SetRGBA(0, 0, color.RGBA{R: 255, A: 255})
 	img.SetRGBA(1, 1, color.RGBA{G: 255, A: 255})
-	rendered := renderCover(img, 4, 2)
+	rendered := renderCover(img, 4, 2, colorprofile.TrueColor)
 	if !strings.Contains(rendered, "▀") {
 		t.Fatalf("expected half-block output, got %q", rendered)
 	}
@@ -154,7 +156,7 @@ func TestManagedRenderedFallsBackToHalfBlockWithoutKitty(t *testing.T) {
 	}
 
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	rendered := renderCover(img, 4, 2)
+	rendered := renderCover(img, 4, 2, colorprofile.TrueColor)
 	if !strings.Contains(rendered, "▀") {
 		t.Fatalf("expected half-block fallback output, got %q", rendered)
 	}

@@ -189,9 +189,9 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 		}
 		var target int
 		if m.transport.volDebouncePending >= 0 {
-			target = clampInt(m.transport.volDebouncePending+5, 0, 100)
+			target = min(max(m.transport.volDebouncePending+5, 0), 100)
 		} else {
-			target = clampInt(m.transport.status.Volume+5, 0, 100)
+			target = min(max(m.transport.status.Volume+5, 0), 100)
 		}
 		m.transport.status.Volume = target
 		m.transport.volDebouncePending = target
@@ -206,9 +206,9 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 		}
 		var target int
 		if m.transport.volDebouncePending >= 0 {
-			target = clampInt(m.transport.volDebouncePending-5, 0, 100)
+			target = min(max(m.transport.volDebouncePending-5, 0), 100)
 		} else {
-			target = clampInt(m.transport.status.Volume-5, 0, 100)
+			target = min(max(m.transport.status.Volume-5, 0), 100)
 		}
 		m.transport.status.Volume = target
 		m.transport.volDebouncePending = target

@@ -3,12 +3,16 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"os"
 	"strconv"
 	"strings"
 
+	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/progress"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 // themeStyles is one fully-built theme: palette, attribute flags, widget
@@ -39,6 +43,26 @@ type themeStyles struct {
 
 	tabBar      *stringCache[tabBarCacheKey]
 	placeholder *stringCache[placeholderCacheKey]
+
+	// help is the shared bubbles/help model (width set per call); swatchStyles
+	// caches one foreground-block style per palette color so the picker
+	// doesn't rebuild styles per cell per frame. Both live on the bundle,
+	// never in globals.
+	help         help.Model
+	swatchStyles map[color.Color]lipgloss.Style
+
+	// barProgress is the single progress model for gauges and bars:
+	// width is set per render on a copy, so the frame path allocates no
+	// Model, spring, or atomic ID (gradientBar used to construct one
+	// per call).
+	barProgress progress.Model
+
+	// colorProfile is the terminal's color capability, read once from the
+	// environment at construction and refreshed from tea.ColorProfileMsg
+	// at startup. Hot paint paths compare against it instead of
+	// re-parsing the environment per line; the environment is
+	// process-fixed, so a bundle never observes it change mid-session.
+	colorProfile colorprofile.Profile
 }
 
 // panelFromPage derives the panel tone from the page when a theme does not
@@ -115,8 +139,11 @@ func hexToRGB(s string) (r, g, b uint8, ok bool) {
 // every cache starts cold and no invalidation step exists.
 func buildThemeStyles(st themeState) *themeStyles {
 	s := &themeStyles{
-		tabBar:      newStringCache[tabBarCacheKey](),
-		placeholder: newStringCache[placeholderCacheKey](),
+		tabBar:       newStringCache[tabBarCacheKey](),
+		placeholder:  newStringCache[placeholderCacheKey](),
+		help:         help.New(),
+		swatchStyles: map[color.Color]lipgloss.Style{},
+		colorProfile: colorprofile.Env(os.Environ()),
 	}
 	s.colorBlue = lipgloss.Color(st.colors.Blue)
 	s.colorBlueLight = lipgloss.Color(st.colors.BlueLight)
@@ -140,6 +167,14 @@ func buildThemeStyles(st themeState) *themeStyles {
 	s.activeGlyphs = st.glyphs
 	s.activeCover = st.cover
 	s.activeBackgrounds = st.backgrounds
+
+	full, empty := s.themeBarRunes()
+	s.barProgress = progress.New(
+		progress.WithoutPercentage(),
+		progress.WithColors(s.colorBlue, s.colorBlueLight),
+		progress.WithFillCharacters(full, empty),
+	)
+	s.barProgress.EmptyColor = s.colorGray
 
 	s.styleHeaderStatus = lipgloss.NewStyle().
 		Foreground(s.colorMutedBlue)

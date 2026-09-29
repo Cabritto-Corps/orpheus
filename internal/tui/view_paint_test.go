@@ -131,7 +131,7 @@ func TestFramePaintNeverLosesBackground(t *testing.T) {
 func TestTransparentFramePaintsNoPageBackground(t *testing.T) {
 	m := withPaintTestModelStyle(t, 100, 40, "transparent")
 	out := m.View().Content
-	pageSeq := bgSequence(m.styles.colorPage)
+	pageSeq := m.styles.bgSequence(m.styles.colorPage)
 	if pageSeq == "" {
 		t.Fatal("need TrueColor background sequences")
 	}
@@ -142,7 +142,7 @@ func TestTransparentFramePaintsNoPageBackground(t *testing.T) {
 	// sequence — lipgloss merges the tab highlight's fg+bg into one
 	// combined sequence (the TestSelectedRowKeepsHighlightThroughFragments
 	// pattern).
-	if dimParams := strings.TrimPrefix(bgSequence(m.styles.colorDimBlue), "\x1b["); !strings.Contains(out, dimParams) {
+	if dimParams := strings.TrimPrefix(m.styles.bgSequence(m.styles.colorDimBlue), "\x1b["); !strings.Contains(out, dimParams) {
 		t.Fatal("transparent frame lost the active-tab highlight")
 	}
 }
@@ -161,10 +161,10 @@ func TestTransparentModalKeepsChrome(t *testing.T) {
 	if !strings.Contains(out, "╭") && !strings.Contains(out, "┌") {
 		t.Fatal("transparent modal lost its border")
 	}
-	if !strings.Contains(out, bgSequence(m.styles.colorSelectionBg)) {
+	if !strings.Contains(out, m.styles.bgSequence(m.styles.colorSelectionBg)) {
 		t.Fatal("transparent modal lost the selection highlight")
 	}
-	if strings.Contains(out, bgSequence(m.styles.colorPage)) {
+	if strings.Contains(out, m.styles.bgSequence(m.styles.colorPage)) {
 		t.Fatal("transparent modal paints the page background")
 	}
 }
@@ -178,7 +178,7 @@ func TestSelectedRowKeepsHighlightThroughFragments(t *testing.T) {
 	row := "Crossfade|" + lipgloss.NewStyle().Foreground(st.colorBlue).Render("██████") + "|end"
 	out := st.modalRow(row, "", true, 96)
 
-	selBg := bgSequence(st.colorSelectionBg)
+	selBg := st.bgSequence(st.colorSelectionBg)
 	selParams := strings.TrimPrefix(selBg, "\x1b[")
 	// Reset spellings the renderers emit: v1 terminates styles with
 	// \x1b[0m, v2 abbreviates to \x1b[m. Matching one literal passed

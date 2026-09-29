@@ -285,7 +285,7 @@ func (m model) coverOrPlaceholder(url string, cols, rows int) string {
 		}
 		return m.placeholderArt(cols, rows)
 	}
-	if s, ok := m.ui.imgs.cover(url, rect.cols, rect.rows); ok {
+	if s, ok := m.ui.imgs.cover(url, rect.cols, rect.rows, m.styles.colorProfile); ok {
 		if rect.framed {
 			return m.styles.coverFrameBoxWith(s, cols, rows)
 		}

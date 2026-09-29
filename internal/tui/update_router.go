@@ -9,6 +9,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m.handleWindowSizeMsg(msg)
+	case tea.ColorProfileMsg:
+		// Single write point for the bundle's session-fixed profile: the
+		// runtime delivers this once at startup, and construction seeds
+		// it from the environment so tests and non-runtime paths agree.
+		m.styles.colorProfile = msg.Profile
+		return m, nil
 	case tickMsg:
 		return m.handleTickMsg()
 	case playbackStateMsg:

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 // withTerminalBGState pins the terminal-background globals for one decision
@@ -45,7 +46,7 @@ func TestTerminalBGTargetDecisions(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			withTerminalBGState(t, tc.original, tc.last)
-			if got := terminalBGTarget(lipgloss.Color(tc.page), tc.style == "transparent"); got != tc.want {
+			if got := terminalBGTarget(lipgloss.Color(tc.page), tc.style == "transparent", colorprofile.TrueColor); got != tc.want {
 				t.Fatalf("terminalBGTarget(%q) = %q, want %q", tc.page, got, tc.want)
 			}
 		})
@@ -54,8 +55,9 @@ func TestTerminalBGTargetDecisions(t *testing.T) {
 
 func TestTerminalBGTargetAsciiStaysSilent(t *testing.T) {
 	withTerminalBGState(t, "rgb:0000/0000/0000", "")
-	t.Setenv("NO_COLOR", "1")
-	if got := terminalBGTarget(lipgloss.Color("#0A0D12"), false); got != "" {
+	// The profile travels as an explicit argument now, so the Ascii case
+	// needs no environment manipulation to exercise.
+	if got := terminalBGTarget(lipgloss.Color("#0A0D12"), false, colorprofile.Ascii); got != "" {
 		t.Fatalf("ascii profile must stay silent, got %q", got)
 	}
 }
@@ -73,7 +75,7 @@ func TestApplyTerminalBGTransparentEntryRestores(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stdout = w
-	ApplyTerminalBG(lipgloss.Color("#0A0D12"), true)
+	ApplyTerminalBG(lipgloss.Color("#0A0D12"), true, colorprofile.TrueColor)
 	w.Close()
 	os.Stdout = old
 	out, err := io.ReadAll(r)

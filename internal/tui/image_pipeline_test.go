@@ -35,7 +35,7 @@ func TestLoadLibraryCoversDrainsBatchSized(t *testing.T) {
 	inflightCount := 0
 	m.ui.imgs.mu.RLock()
 	inflightCount = len(m.ui.imgs.inflight)
-	queued := len(m.ui.cover.queue)
+	queued := m.ui.cover.queue.Len()
 	m.ui.imgs.mu.RUnlock()
 
 	if inflightCount != coverQueueDrainBatch {
@@ -187,11 +187,11 @@ func TestCoverQueuePruneExcept(t *testing.T) {
 		c.enqueueURL(u)
 	}
 	c.pruneExcept(map[string]struct{}{"b": {}, "d": {}})
-	if len(c.queue) != 2 {
-		t.Fatalf("expected 2 queued after prune, got %d", len(c.queue))
+	if c.queue.Len() != 2 {
+		t.Fatalf("expected 2 queued after prune, got %d", c.queue.Len())
 	}
-	for _, u := range c.queue {
-		if u != "b" && u != "d" {
+	for el := c.queue.Front(); el != nil; el = el.Next() {
+		if u := el.Value.(string); u != "b" && u != "d" {
 			t.Fatalf("unexpected queued url %q", u)
 		}
 	}

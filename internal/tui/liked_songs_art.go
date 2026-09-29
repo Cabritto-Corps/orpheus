@@ -4,6 +4,8 @@ import (
 	"image"
 	"image/color"
 
+	"golang.org/x/image/draw"
+
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -48,7 +50,7 @@ func generateLikedSongsImage(size int, corners [4]color.NRGBA) image.Image {
 		}
 	}
 
-	return downsample(ssImg, ssSize, size)
+	return downsample(ssImg, size)
 }
 
 var (
@@ -118,31 +120,15 @@ func isInHeart(x, y float64) bool {
 	return a*a*a-x*x*y*y*y <= 0
 }
 
-func downsample(src *image.RGBA, srcSize, dstSize int) *image.RGBA {
+func downsample(src *image.RGBA, dstSize int) *image.RGBA {
 	dst := image.NewRGBA(image.Rect(0, 0, dstSize, dstSize))
-	ratio := srcSize / dstSize
-	for dy := range dstSize {
-		for dx := range dstSize {
-			var r, g, b, count uint32
-			for sy := range ratio {
-				for sx := range ratio {
-					sy2 := dy*ratio + sy
-					sx2 := dx*ratio + sx
-					c := src.RGBAAt(sx2, sy2)
-					r += uint32(c.R)
-					g += uint32(c.G)
-					b += uint32(c.B)
-					count++
-				}
-			}
-			dst.SetRGBA(dx, dy, color.RGBA{
-				R: uint8(r / count),
-				G: uint8(g / count),
-				B: uint8(b / count),
-				A: 255,
-			})
-		}
+	if dstSize <= 0 {
+		return dst
 	}
+	// ApproxBiLinear replaces the old box average: per-pixel values shift
+	// slightly, but the gradient corners and the white heart it serves
+	// are resolution-independent properties, not exact pixel values.
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Src, nil)
 	return dst
 }
 

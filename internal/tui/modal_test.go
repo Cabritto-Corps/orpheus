@@ -179,7 +179,7 @@ func TestModalFrameTransparentBackdrop(t *testing.T) {
 	if !strings.Contains(out, "╭") && !strings.Contains(out, "┌") {
 		t.Fatal("transparent modal lost its border")
 	}
-	if pageSeq := bgSequence(st.colorPage); strings.Contains(out, pageSeq) {
+	if pageSeq := st.bgSequence(st.colorPage); strings.Contains(out, pageSeq) {
 		t.Fatal("transparent backdrop paints the page background")
 	}
 }
@@ -238,7 +238,7 @@ func TestSwatchBarRendersSpacedSwatches(t *testing.T) {
 	if len(swatches) != 7 {
 		t.Fatalf("swatch colors = %d, want 7", len(swatches))
 	}
-	bar := swatchBar(swatches)
+	bar := buildThemeStyles(themePresetState("default")).swatchBar(swatches)
 	// 7 swatches x 2 cells + 6 single-space gaps: squares stay close within
 	// a row; the line spacing between theme entries does the separating.
 	if lipgloss.Width(bar) != 7*2+6 {
@@ -253,7 +253,7 @@ func TestSwatchBarRendersSpacedSwatches(t *testing.T) {
 	// Ascii profile: color-only output degrades to nothing rather than
 	// blank cells; the picker rows fall back to name + accent hex.
 	t.Setenv("NO_COLOR", "1")
-	if got := swatchBar(swatches); got != "" {
+	if got := buildThemeStyles(themePresetState("default")).swatchBar(swatches); got != "" {
 		t.Fatalf("swatch bar should be empty under Ascii profile, got %q", got)
 	}
 }
