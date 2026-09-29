@@ -41,7 +41,7 @@ func main() {
 
 	if len(os.Args) < 2 || os.Args[1] == "librespot" {
 		if err := runLibrespotTUI(); err != nil {
-			slog.Error("tui failed", "error", err)
+			fmt.Fprintln(os.Stderr, "orpheus: "+err.Error())
 			os.Exit(1)
 		}
 		return
@@ -274,7 +274,7 @@ func runCheck(ctx context.Context, authManager *auth.Manager, token *oauth2.Toke
 	fmt.Fprintf(os.Stderr, "check: done\n")
 }
 
-func runLibrespotTUI() error {
+func runLibrespotTUI() (err error) {
 	configDir, err := config.DefaultConfigDir()
 	if err != nil {
 		return fmt.Errorf("config dir: %w", err)
@@ -300,7 +300,13 @@ func runLibrespotTUI() error {
 	if err != nil {
 		return fmt.Errorf("open log file: %w", err)
 	}
-	defer func() { _ = logFile.Sync(); _ = logFile.Close() }()
+	defer func() {
+		if err != nil {
+			slog.Error("tui failed", "error", err)
+		}
+		_ = logFile.Sync()
+		_ = logFile.Close()
+	}()
 	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	log := logrus.New()
 	log.SetLevel(logrus.InfoLevel)
@@ -311,16 +317,6 @@ func runLibrespotTUI() error {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-
-	sess, appState, err := sessionconfig.NewSessionFromConfigDir(ctx, logger, sessionconfig.Options{
-		ConfigDir:    configDir,
-		CallbackPort: 8080,
-		DeviceType:   "computer",
-	})
-	if err != nil {
-		return err
-	}
-	defer sess.Close()
 
 	librespotCfg := librespot.DefaultConfig()
 	if cfg.DeviceName != "" {
@@ -334,6 +330,18 @@ func runLibrespotTUI() error {
 	}
 
 	playbackStateCh := make(chan *librespot.PlaybackStateUpdate, 32)
+	tuiCmdCh := make(chan librespot.TUICommand, 8)
+
+	sess, appState, err := sessionconfig.NewSessionFromConfigDir(ctx, logger, sessionconfig.Options{
+		ConfigDir:    configDir,
+		CallbackPort: 8080,
+		DeviceType:   "computer",
+	})
+	if err != nil {
+		return fmt.Errorf("could not sign in to Spotify: %w\ncheck your network or a Spotify outage (status.spotify.com)", err)
+	}
+	defer sess.Close()
+
 	runtime, err := librespot.NewRuntime(librespotCfg, appState, logger, playbackStateCh)
 	if err != nil {
 		return err
@@ -344,8 +352,6 @@ func runLibrespotTUI() error {
 		return err
 	}
 	defer appPlayer.Close()
-
-	tuiCmdCh := make(chan librespot.TUICommand, 8)
 	go appPlayer.Run(ctx, tuiCmdCh)
 
 	tuiCfg := config.Config{
