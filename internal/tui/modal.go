@@ -44,14 +44,44 @@ func modalHeader(title, hint string, innerW int) string {
 	return title + strings.Repeat(" ", gap) + hint
 }
 
+// modalRect is the single geometry engine behind the per-modal sizing
+// helpers: clamp the wanted box (modalGeometry), then derive the usable
+// content width. popupModalSize and helpModalSize keep their signatures
+// (open/resize/view call sites stay put) and delegate here, so the clamp
+// and the content-width rule cannot drift apart again.
+func modalRect(termW, termH, wantedW, wantedH int) (modalW, boxH, contentW int) {
+	modalW, boxH = modalGeometry(termW, termH, wantedW, wantedH)
+	contentW = max(12, modalW-modalContentInset)
+	return modalW, boxH, contentW
+}
+
+// scrollRows returns the visible window of rows around cursor with at most
+// budget entries, plus the window's start index for "+ more" accounting.
+// It is the single windowing implementation for menu rows: the theme
+// picker, the theme options and the up-next panel all computed the same
+// offset before (cursor-budget+1 once the cursor runs past the budget,
+// else 0). Rows render byte-identically; only the arithmetic is shared.
+func scrollRows[T any](rows []T, cursor, budget int) (window []T, start int) {
+	if budget <= 0 || len(rows) == 0 {
+		return nil, 0
+	}
+	cursor = min(max(cursor, 0), len(rows)-1)
+	if cursor >= budget {
+		start = cursor - budget + 1
+	}
+	end := min(start+budget, len(rows))
+	return rows[start:end], start
+}
+
 // popupModalSize is the single source for the track popup's box and list
 // dimensions: open, resize and view must derive them here or any
 // WindowSizeMsg permanently reshapes the popup (open and resize used to
 // size the list differently, shrinking it 2 cols / 4 rows per resize).
 func popupModalSize(termW, termH int) (modalW, listW, listH int) {
 	bodyH := max(8, termH-headerH-2)
-	modalW, boxH := modalGeometry(termW, termH, termW-4, bodyH)
-	return modalW, max(12, modalW-modalContentInset), max(2, boxH-2)
+	var boxH int
+	modalW, boxH, listW = modalRect(termW, termH, termW-4, bodyH)
+	return modalW, listW, max(2, boxH-2)
 }
 
 // modalFrame renders a modal covering the full terminal frame: title row

@@ -55,21 +55,42 @@ const (
 
 func (m model) View() tea.View {
 	if m.ui.width < 40 || m.ui.height < 12 {
-		// No kitty overlay here: the error branch must never emit one.
-		return tea.View{Content: m.styles.styleError.Render("terminal too small — please resize") + m.kittyOverlay(), AltScreen: true}
+		// The error branch draws no overlay: kitty graphics sit above
+		// text with absolute placement, and nothing coordinates them
+		// against a frame that never laid out.
+		return tea.View{Content: m.styles.styleError.Render("terminal too small — please resize"), AltScreen: true}
 	}
+	// Exactly one kittyOverlay append point: a new surface cannot orphan
+	// its emission, and the size-gate branch above stays overlay-free.
+	return tea.View{Content: m.mainView() + m.kittyOverlay(), AltScreen: true}
+}
 
+// mainView renders the whole frame without the overlay: the open modal
+// when one owns the frame, the header/tab/body/player chrome otherwise.
+func (m model) mainView() string {
+	if kind := m.modalKind(); kind != modalNone {
+		return m.modalView(kind)
+	}
+	return m.pageView()
+}
+
+// modalView renders the dialog that owns the frame. All settings modes
+// share settingsModalView, which dispatches internally.
+func (m model) modalView(kind modalKind) string {
+	switch kind {
+	case modalHelp:
+		return m.helpModalView()
+	case modalTrackPopup:
+		return m.trackPopupView()
+	case modalNone:
+		return ""
+	default:
+		return m.settingsModalView()
+	}
+}
+
+func (m model) pageView() string {
 	header := m.headerView()
-
-	if m.ui.helpOpen {
-		return tea.View{Content: m.helpModalView() + m.kittyOverlay(), AltScreen: true}
-	}
-	if m.ui.settings.open {
-		return tea.View{Content: m.settingsModalView() + m.kittyOverlay(), AltScreen: true}
-	}
-	if m.ui.trackPopupOpen {
-		return tea.View{Content: m.trackPopupView() + m.kittyOverlay(), AltScreen: true}
-	}
 
 	tabBar := m.tabBarView()
 
@@ -89,10 +110,10 @@ func (m model) View() tea.View {
 		// No frame paint at all: the terminal's own background shows
 		// through every zone. Selection and modal chrome keep their own
 		// backgrounds (they are overlays, not zones).
-		return tea.View{Content: lipgloss.JoinVertical(lipgloss.Left, parts...) + m.kittyOverlay(), AltScreen: true}
+		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	default:
 		// Solid — and anything unexpected: one uniform surface.
-		return tea.View{Content: m.styles.paintPage(lipgloss.JoinVertical(lipgloss.Left, parts...), m.ui.width) + m.kittyOverlay(), AltScreen: true}
+		return m.styles.paintPage(lipgloss.JoinVertical(lipgloss.Left, parts...), m.ui.width)
 	}
 }
 

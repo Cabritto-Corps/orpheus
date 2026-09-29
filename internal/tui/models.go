@@ -114,6 +114,56 @@ const (
 	settingsModeThemeOptions
 )
 
+// modalKind is the single vocabulary for "which dialog owns the frame".
+// It is DERIVED from the existing open flags — never stored — so open/
+// close bookkeeping cannot drift out of sync, and settings persistence
+// (which lives in settingsModel's content fields, not in open/mode) is
+// untouched. Order matches View()'s render precedence: help, settings,
+// popup. A new surface registers here and flows into the frame, the focus
+// trap, the filter set and the kitty gate together.
+type modalKind int
+
+const (
+	modalNone modalKind = iota
+	modalHelp
+	modalSettingsRoot
+	modalSettingsKeys
+	modalSettingsTheme
+	modalSettingsCapture
+	modalSettingsThemeOptions
+	modalTrackPopup
+)
+
+func (m model) modalKind() modalKind {
+	if m.ui.helpOpen {
+		return modalHelp
+	}
+	if s := m.ui.settings; s.open {
+		switch s.mode {
+		case settingsModeKeys:
+			return modalSettingsKeys
+		case settingsModeTheme:
+			return modalSettingsTheme
+		case settingsModeCapture:
+			return modalSettingsCapture
+		case settingsModeThemeOptions:
+			return modalSettingsThemeOptions
+		default:
+			return modalSettingsRoot
+		}
+	}
+	if m.ui.trackPopupOpen {
+		return modalTrackPopup
+	}
+	return modalNone
+}
+
+// modalActive replaces the per-modal OR-chains (overlay gate, dispatch
+// guard): one predicate, one definition of open.
+func (m model) modalActive() bool {
+	return m.modalKind() != modalNone
+}
+
 type settingsModel struct {
 	open        bool
 	mode        settingsMode

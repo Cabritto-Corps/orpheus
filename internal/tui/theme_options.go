@@ -264,11 +264,7 @@ func (m model) themeOptionsView(modalW, innerH int) string {
 		rows = append(rows, m.styles.modalRow(entry.label, value, s.optionsCursor == i, modalW))
 	}
 
-	offset := 0
-	if s.optionsCursor >= listH {
-		offset = s.optionsCursor - listH + 1
-	}
-	window := rows[min(offset, len(rows)):min(offset+listH, len(rows))]
+	window, _ := scrollRows(rows, s.optionsCursor, listH)
 
 	var body strings.Builder
 	body.WriteString("\n" + lipgloss.JoinVertical(lipgloss.Left, window...) + "\n")

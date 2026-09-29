@@ -223,15 +223,10 @@ func (m model) queuePanel(w, h int) string {
 		}
 	} else {
 		maxRows := max(0, rowBudget-1) // reserve the "+ more" line
-		window := min(len(displayQueue), maxRows)
 		cursor := min(m.transport.queueCursor, len(displayQueue)-1)
-		start := 0
-		if cursor >= maxRows && maxRows > 0 {
-			start = cursor - maxRows + 1
-		}
-		for i := range window {
+		window, start := scrollRows(displayQueue, cursor, maxRows)
+		for i, q := range window {
 			qi := start + i
-			q := displayQueue[qi]
 			row := grid.row(m.styles, w, qi+1, q.Name, q.Artist, q.DurationMS, qi == cursor)
 			lines = append(lines, row)
 		}
@@ -240,7 +235,7 @@ func (m model) queuePanel(w, h int) string {
 		if hidCurrent := len(m.transport.queue) > 0 && len(displayQueue) == len(m.transport.queue)-1; hidCurrent && stableVisibleQueueLen > 0 {
 			stableVisibleQueueLen--
 		}
-		notVisible := max(0, stableVisibleQueueLen-(start+window))
+		notVisible := max(0, stableVisibleQueueLen-(start+len(window)))
 		if notVisible > 0 || m.transport.queueHasMore {
 			marker := "+ more"
 			if notVisible > 0 && !m.transport.queueHasMore {

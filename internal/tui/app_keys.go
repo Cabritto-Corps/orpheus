@@ -29,27 +29,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// below stay inert while help, settings or the popup is up, and Esc
 	// always closes. Pressing ? with help open dismisses it; entering
 	// help or settings from inside another modal is not possible.
-	if m.ui.helpOpen {
-		if keyMatches(msg, k.CloseModal) || keyMatches(msg, k.ToggleHelp) {
-			m.ui.helpOpen = false
-		}
-		switch {
-		case keyMatches(msg, k.QueueUp):
-			// Reassign: scrollHelp has a value receiver, so discarding its
-			// return silently threw the scrolled copy away.
-			m = m.scrollHelp(-3)
-		case keyMatches(msg, k.QueueDown):
-			m = m.scrollHelp(3)
-		}
-		return m, nil
-	}
-
-	if m.ui.settings.open {
-		return m.handleSettingsKey(msg)
-	}
-
-	if m.ui.trackPopupOpen {
-		return m.handleTrackPopupKey(msg)
+	if kind := m.modalKind(); kind != modalNone {
+		return m.routeModalKey(msg, kind)
 	}
 
 	switch {
@@ -196,12 +177,39 @@ func (m model) handleAlbumKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m model) isFiltering() bool {
-	if m.ui.trackPopupOpen && m.ui.trackPopupList.FilterState() == list.Filtering {
-		return true
+// routeModalKey dispatches a key to the open dialog with the order
+// declared once: quit-first already ran in handleKey, the modal owns every
+// other key, Esc always closes. This is the focus trap — the global keys
+// below never see a key a modal swallowed.
+func (m model) routeModalKey(msg tea.KeyPressMsg, kind modalKind) (tea.Model, tea.Cmd) {
+	k := m.ui.keys
+	if kind == modalHelp {
+		if keyMatches(msg, k.CloseModal) || keyMatches(msg, k.ToggleHelp) {
+			m.ui.helpOpen = false
+		}
+		switch {
+		case keyMatches(msg, k.QueueUp):
+			// Reassign: scrollHelp has a value receiver, so discarding its
+			// return silently threw the scrolled copy away.
+			m = m.scrollHelp(-3)
+		case keyMatches(msg, k.QueueDown):
+			m = m.scrollHelp(3)
+		}
+		return m, nil
 	}
-	return (m.ui.activeTab == tabPlaylists && m.browse.playlistList.FilterState() == list.Filtering) ||
-		(m.ui.activeTab == tabAlbums && m.browse.albumList.FilterState() == list.Filtering)
+	if kind == modalTrackPopup {
+		return m.handleTrackPopupKey(msg)
+	}
+	return m.handleSettingsKey(msg)
+}
+
+func (m model) isFiltering() bool {
+	for _, l := range m.filterableLists() {
+		if l.FilterState() == list.Filtering {
+			return true
+		}
+	}
+	return false
 }
 
 // handleQueueKey handles the up-next panel's interaction keys (player tab).
@@ -250,14 +258,38 @@ func (m *model) handleQueueKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 }
 
+// allFilterLists is every bubbles list the app can filter with. New
+// surfaces register their list here instead of growing the enumeration in
+// syncListFilterBinding.
+func (m *model) allFilterLists() []*list.Model {
+	return []*list.Model{&m.browse.playlistList, &m.browse.albumList, &m.ui.trackPopupList}
+}
+
+// filterableLists narrows allFilterLists to what can own the filter right
+// now: the open popup, else the active tab's browser list. Tab-scoping is
+// load-bearing — a list left filtering on an inactive tab must not freeze
+// the new tab's keys.
+func (m model) filterableLists() []*list.Model {
+	if m.ui.trackPopupOpen {
+		return []*list.Model{&m.ui.trackPopupList}
+	}
+	switch m.ui.activeTab {
+	case tabPlaylists:
+		return []*list.Model{&m.browse.playlistList}
+	case tabAlbums:
+		return []*list.Model{&m.browse.albumList}
+	}
+	return nil
+}
+
 // syncListFilterBinding points every list's search binding at the
 // configured filter key. Bubbles dispatches filtering off its own KeyMap,
 // which the repo never otherwise touches, so without this a keys.json
 // rebind of the search action would only change the help text.
 func (m *model) syncListFilterBinding() {
-	m.browse.playlistList.KeyMap.Filter = m.ui.keys.Filter
-	m.browse.albumList.KeyMap.Filter = m.ui.keys.Filter
-	m.ui.trackPopupList.KeyMap.Filter = m.ui.keys.Filter
+	for _, l := range m.allFilterLists() {
+		l.KeyMap.Filter = m.ui.keys.Filter
+	}
 }
 
 func (m model) matchGlobalPlaybackKey(msg tea.KeyPressMsg) playbackInputKind {

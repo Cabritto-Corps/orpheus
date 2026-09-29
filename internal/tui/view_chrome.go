@@ -212,9 +212,9 @@ func (m model) trackPopupView() string {
 // helpModalSize is the single source for the help modal's dimensions so the
 // Update-side viewport rebuild and the View-side render can never drift.
 func helpModalSize(termW, termH int) (modalW, innerH, contentW int) {
-	innerH = max(6, termH-headerH-2)
-	modalW, boxH := modalGeometry(termW, termH, termW-4, innerH)
-	contentW = max(12, modalW-4)
+	wantedH := max(6, termH-headerH-2)
+	var boxH int
+	modalW, boxH, contentW = modalRect(termW, termH, termW-4, wantedH)
 	innerH = boxH
 	return modalW, innerH, contentW
 }
@@ -266,10 +266,6 @@ func (m model) helpModalView() string {
 		m.styles.styleModalHint.Render(hint), body, modalW, innerH)
 }
 
-func (m model) overlayBlocked() bool {
-	return m.ui.helpOpen || m.ui.settings.open || m.ui.trackPopupOpen
-}
-
 func (m model) kittyOverlay() string {
 	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() != imageProtocolKitty {
 		return ""
@@ -278,7 +274,7 @@ func (m model) kittyOverlay() string {
 	// deleted, so any popup would render beneath them. Hide the overlay for
 	// the whole time a modal is open and retransmit on the first unblocked
 	// frame via forceKittyRedraw.
-	if m.overlayBlocked() {
+	if m.modalActive() {
 		m.ui.imgs.forceKittyRedraw()
 		return kittyDeleteAll
 	}

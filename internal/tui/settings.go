@@ -467,13 +467,10 @@ func (m model) themePickerView(modalW, innerH int) string {
 	// Scrolling window over the registry rows; a blank row between entries
 	// keeps the swatch rows from reading as one joined block.
 	entries := (listH + 1) / 2
-	offset := 0
-	if s.themeCursor >= entries {
-		offset = s.themeCursor - entries + 1
-	}
+	shown, offset := scrollRows(settingsThemeOrder, s.themeCursor, entries)
 	var rows []string
-	for i := offset; i < min(len(settingsThemeOrder), offset+entries); i++ {
-		name := settingsThemeOrder[i]
+	for j, name := range shown {
+		i := offset + j
 		colors := resolveThemeColors(name, overrides)
 		marker := "  "
 		if themePresetName(s.themePreset) == themePresetName(name) {
