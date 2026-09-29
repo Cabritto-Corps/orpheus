@@ -15,7 +15,8 @@ func TestCachedDelegateRenderMatchesDefault(t *testing.T) {
 	for i := range items {
 		items[i] = playlistItem{summary: spotify.PlaylistSummary{ID: fmt.Sprintf("pl-%d", i), Name: fmt.Sprintf("playlist-%d", i)}}
 	}
-	cd := newCachedPlaylistDelegate()
+	st := buildThemeStyles(themePresetState("default"))
+	cd := newCachedPlaylistDelegate(st, new(string))
 	m := list.New(items, cd, 40, 20)
 	m.SetShowTitle(false)
 	m.SetShowStatusBar(false)
@@ -27,7 +28,7 @@ func TestCachedDelegateRenderMatchesDefault(t *testing.T) {
 			var got bytes.Buffer
 			cd.Render(&got, m, idx, items[idx])
 			var want bytes.Buffer
-			newPlaylistDelegate().Render(&want, m, idx, items[idx])
+			newPlaylistDelegate(st).Render(&want, m, idx, items[idx])
 			if got.String() != want.String() {
 				t.Fatalf("delegate output mismatch (sel=%d idx=%d)", sel, idx)
 			}

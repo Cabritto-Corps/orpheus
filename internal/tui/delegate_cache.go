@@ -13,8 +13,10 @@ import (
 // DefaultDelegate.Render is the most expensive per-frame call on list tabs
 // (word-wrap + grapheme width passes per visible row), yet its output is a
 // pure function of (item text, width, selection, filter state, delegate
-// height, styles). Rendering is memoized on that key; the theme's
-// applyTheme clears the registry so style swaps never serve stale rows.
+// height, styles). Rendering is memoized on that key inside each delegate's
+// own cache; delegates are rebuilt from the current theme on every theme
+// change, so a fresh delegate (and its empty cache) can never serve stale
+// rows — no epoch, no registry, no reset step.
 
 type delegateKey struct {
 	width    int
@@ -46,46 +48,19 @@ func (c *delegateCache) put(k delegateKey, s string) {
 	c.mu.Unlock()
 }
 
-func (c *delegateCache) reset() {
-	c.mu.Lock()
-	c.entries = make(map[delegateKey]string, 64)
-	c.mu.Unlock()
-}
-
-// delegateCaches is bounded: a theme rebuild creates fresh caches and the
-// replaced objects are garbage, so the oldest registry slot is recycled.
-var delegateCaches []*delegateCache
-
-const maxDelegateCaches = 16
-
-func registerDelegateCache(c *delegateCache) {
-	if len(delegateCaches) >= maxDelegateCaches {
-		delegateCaches = delegateCaches[1:]
-	}
-	delegateCaches = append(delegateCaches, c)
-}
-
 type placeholderCacheKey struct {
 	cols, rows int
-	epoch      uint64
 }
-
-var placeholderCache = newStringCache[placeholderCacheKey]()
 
 type tabBarCacheKey struct {
 	width  int
 	active tab
-	epoch  uint64
 }
 
-var (
-	themeEpoch  uint64
-	tabBarCache = newStringCache[tabBarCacheKey]()
-)
-
-// stringCache is a tiny memo for constant-per-key view fragments. Entries
-// are only valid until the theme changes (resetStringCaches clears the
-// whole registry).
+// stringCache is a tiny memo for constant-per-key view fragments. The
+// instance lives on the theme bundle, so entries are only valid for that
+// bundle's lifetime: a theme change builds a fresh bundle with cold
+// caches, and no reset step exists.
 type stringCache[K comparable] struct {
 	mu      sync.Mutex
 	entries map[K]string
@@ -111,37 +86,31 @@ func (c *stringCache[K]) put(k K, s string) {
 	c.mu.Unlock()
 }
 
-func (c *stringCache[K]) reset() {
-	c.mu.Lock()
-	c.entries = make(map[K]string, 8)
-	c.mu.Unlock()
-}
-
-func resetStringCaches() {
-	for _, c := range delegateCaches {
-		c.reset()
-	}
-	tabBarCache.reset()
-	placeholderCache.reset()
-}
-
 // cachedDelegate wraps list.DefaultDelegate. It is stored by value inside
 // list.Model (which bubbletea copies freely), so the cache lives behind a
-// pointer shared by every copy.
+// pointer shared by every copy. The now-playing context URI rides the same
+// sharing: one pointer written by the event loop on track change, so every
+// copy (and its title-derived cache key) sees the move with no flush.
 type cachedDelegate struct {
 	list.DefaultDelegate
-	cache *delegateCache
+	cache      *delegateCache
+	glyph      string
+	nowPlaying *string
 }
 
-// nowPlayingContextURI identifies the playlist/album the player is currently
-// drawing from; written only from the event loop (same goroutine View runs
-// on), read inside the delegate render.
-var nowPlayingContextURI string
+func (d cachedDelegate) currentNowPlaying() string {
+	if d.nowPlaying == nil {
+		return ""
+	}
+	return *d.nowPlaying
+}
 
-func newCachedPlaylistDelegate() cachedDelegate {
+// nowPlayingURI is written through the model's shared pointer (see
+// setNowPlaying); delegates read it through theirs, so the marker follows
+// track changes with no global and no cache flush.
+func newCachedPlaylistDelegate(s *themeStyles, nowPlaying *string) cachedDelegate {
 	c := &delegateCache{entries: make(map[delegateKey]string, 64)}
-	registerDelegateCache(c)
-	return cachedDelegate{DefaultDelegate: newPlaylistDelegate(), cache: c}
+	return cachedDelegate{DefaultDelegate: newPlaylistDelegate(s), cache: c, glyph: s.themeNowPlayingGlyph(), nowPlaying: nowPlaying}
 }
 
 // trackRow composes a track row: name left, duration right-aligned at the
@@ -197,7 +166,8 @@ func (d cachedDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	// Stamp the now-playing flag before reading the title: the glyph
 	// becomes part of Title(), which automatically invalidates the cache
 	// key for that row when playback moves to another context.
-	pi.nowPlaying = strings.TrimSpace(pi.summary.URI) == nowPlayingContextURI
+	pi.nowPlaying = strings.TrimSpace(pi.summary.URI) == d.currentNowPlaying()
+	pi.glyph = d.glyph
 	title := pi.Title()
 	desc := pi.Description()
 	key := delegateKey{

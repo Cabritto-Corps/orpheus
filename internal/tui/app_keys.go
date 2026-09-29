@@ -319,6 +319,16 @@ func (m model) handlePlaybackKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, m.pumpInputExecutor()
 }
 
+// setNowPlaying records the context URI behind the current track. The
+// list delegates read it through the shared pointer, so every list copy
+// sees track changes with no global and no cache flush. Models built
+// without the pointer (bare test fixtures) simply record nothing.
+func (m *model) setNowPlaying(uri string) {
+	if m.nowPlaying != nil {
+		*m.nowPlaying = uri
+	}
+}
+
 type trackPopupItemsMsg struct {
 	token int
 	items []spotify.QueueItem
@@ -328,9 +338,9 @@ type trackPopupItemsMsg struct {
 // themed filter prompt, a readable status bar (the item count stays visible
 // even on a single page) and pagination dots the framework's default greys
 // bury on dark themes.
-func newTrackPopupList(termW, termH int) list.Model {
+func newTrackPopupList(s *themeStyles, nowPlaying *string, termW, termH int) list.Model {
 	_, listW, listH := popupModalSize(termW, termH)
-	popup := list.New(nil, newTrackPopupDelegate(), listW, listH)
+	popup := list.New(nil, newTrackPopupDelegate(s, nowPlaying), listW, listH)
 	popup.SetShowTitle(false)
 	popup.SetShowStatusBar(true)
 	popup.SetFilteringEnabled(true)
@@ -338,11 +348,11 @@ func newTrackPopupList(termW, termH int) list.Model {
 	popup.SetShowHelp(false)
 	popup.FilterInput.Prompt = "/ "
 	popup.SetStatusBarItemName("track", "tracks")
-	popup.Styles.Filter.Focused.Prompt = lipgloss.NewStyle().Foreground(colorMutedBlue)
-	popup.Styles.Filter.Blurred.Prompt = lipgloss.NewStyle().Foreground(colorMutedBlue)
-	popup.Styles.StatusBar = lipgloss.NewStyle().Foreground(colorOffWhite).PaddingLeft(1)
-	popup.Styles.ActivePaginationDot = lipgloss.NewStyle().Foreground(colorBlue).SetString(" •")
-	popup.Styles.InactivePaginationDot = lipgloss.NewStyle().Foreground(colorDimBlue).SetString(" •")
+	popup.Styles.Filter.Focused.Prompt = lipgloss.NewStyle().Foreground(s.colorMutedBlue)
+	popup.Styles.Filter.Blurred.Prompt = lipgloss.NewStyle().Foreground(s.colorMutedBlue)
+	popup.Styles.StatusBar = lipgloss.NewStyle().Foreground(s.colorOffWhite).PaddingLeft(1)
+	popup.Styles.ActivePaginationDot = lipgloss.NewStyle().Foreground(s.colorBlue).SetString(" •")
+	popup.Styles.InactivePaginationDot = lipgloss.NewStyle().Foreground(s.colorDimBlue).SetString(" •")
 	return popup
 }
 
@@ -356,7 +366,7 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.ui.trackPopupName = sel.summary.Name
 	m.ui.trackPopupItems = nil
 
-	popup := newTrackPopupList(m.ui.width, m.ui.height)
+	popup := newTrackPopupList(m.styles, m.nowPlaying, m.ui.width, m.ui.height)
 	m.ui.trackPopupList = popup
 	m.ui.trackPopupWidth = m.ui.trackPopupList.Width() - 4
 
@@ -442,7 +452,7 @@ func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 	}
 
 	if m.tuiCmdCh != nil {
-		nowPlayingContextURI = m.ui.trackPopupURI
+		m.setNowPlaying(m.ui.trackPopupURI)
 		cmd := librespot.TUICommand{
 			Kind:    librespot.TUICommandPlayContextFromTrack,
 			URI:     m.ui.trackPopupURI,
@@ -472,7 +482,7 @@ func (m model) selectAndPlayPlaylist(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.transport.interpolationProgressMS = 0
 	if m.tuiCmdCh != nil {
 		m.beginTransportTransition()
-		nowPlayingContextURI = sel.summary.URI
+		m.setNowPlaying(sel.summary.URI)
 		cmds := []tea.Cmd{
 			m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandPlayContext, URI: sel.summary.URI}),
 			m.loadImageCmd(sel.summary.ImageURL, true),

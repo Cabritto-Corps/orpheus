@@ -153,7 +153,7 @@ var helpGroupsLayout = func() []struct {
 // column. colW is the column's allotted share of the modal width, so the
 // three columns spread across the full body instead of hugging the left.
 func (m model) helpGroupLines(title string, labelWidth, colW int) []string {
-	lines := []string{styleSectionLabel.Render(title)}
+	lines := []string{m.styles.styleSectionLabel.Render(title)}
 	for _, g := range helpGroupsLayout {
 		if g.title != title {
 			continue
@@ -162,8 +162,8 @@ func (m model) helpGroupLines(title string, labelWidth, colW int) []string {
 		if !ok {
 			continue
 		}
-		lines = append(lines, styleQueueTrack.Render(padCell(g.label, labelWidth))+
-			styleTrackPopupTitle.Render(alignRight(shortKeyLabel(keys), max(0, colW-labelWidth))))
+		lines = append(lines, m.styles.styleQueueTrack.Render(padCell(g.label, labelWidth))+
+			m.styles.styleTrackPopupTitle.Render(alignRight(shortKeyLabel(keys), max(0, colW-labelWidth))))
 	}
 	return lines
 }
@@ -205,7 +205,7 @@ func (m model) helpGroupedBody(contentW, availH int) string {
 		}
 		three := joinTopAligned(cols...)
 		if lipgloss.Width(three) <= contentW {
-			return three + "\n\n" + styleTrackPopupHint.Render("ctrl+c always quits")
+			return three + "\n\n" + m.styles.styleTrackPopupHint.Render("ctrl+c always quits")
 		}
 	}
 
@@ -216,7 +216,7 @@ func (m model) helpGroupedBody(contentW, availH int) string {
 		parts = append(parts, strings.Join(m.helpGroupLines(title, labelWidth, contentW), "\n"))
 	}
 	// No clipping here: the caller (help viewport) decides overflow.
-	return strings.Join(parts, "\n\n") + "\n\n" + styleTrackPopupHint.Render("ctrl+c always quits")
+	return strings.Join(parts, "\n\n") + "\n\n" + m.styles.styleTrackPopupHint.Render("ctrl+c always quits")
 }
 
 // joinTopAligned pads each column to the tallest height and places them

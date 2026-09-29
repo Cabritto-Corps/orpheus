@@ -18,21 +18,21 @@ func (m model) headerView() string {
 	if m.transport.status != nil {
 		playIcon, pauseIcon := m.playPauseGlyphs()
 		if m.transport.status.Playing {
-			statusStr = styleHeaderPlaying.Render("[" + playIcon + " Playing]")
+			statusStr = m.styles.styleHeaderPlaying.Render("[" + playIcon + " Playing]")
 		} else {
-			statusStr = styleHeaderPaused.Render("[" + pauseIcon + " Paused]")
+			statusStr = m.styles.styleHeaderPaused.Render("[" + pauseIcon + " Paused]")
 		}
 
 		volBar := m.headerVolumeBar(m.transport.status.Volume)
-		volText := styleHeaderVolume.Render(fmt.Sprintf("%3d%%", m.transport.status.Volume))
+		volText := m.styles.styleHeaderVolume.Render(fmt.Sprintf("%3d%%", m.transport.status.Volume))
 		rightL1 = volBar + " " + volText
 		if m.transport.status.ShuffleState {
-			rightL1 += "  " + styleDimmed.Render(m.icon(iconShuffle, iconShuffleNF))
+			rightL1 += "  " + m.styles.styleDimmed.Render(m.icon(iconShuffle, iconShuffleNF))
 		}
 		if m.transport.status.RepeatTrack {
-			rightL1 += "  " + styleDimmed.Render(m.icon(iconRepeatTrack, iconRepeatTrackNF))
+			rightL1 += "  " + m.styles.styleDimmed.Render(m.icon(iconRepeatTrack, iconRepeatTrackNF))
 		} else if m.transport.status.RepeatContext {
-			rightL1 += "  " + styleDimmed.Render(m.icon(iconRepeatContext, iconRepeatContextNF))
+			rightL1 += "  " + m.styles.styleDimmed.Render(m.icon(iconRepeatContext, iconRepeatContextNF))
 		}
 
 		availCenterW := max(10, w-lipgloss.Width(statusStr)-lipgloss.Width(rightL1)-2)
@@ -45,15 +45,15 @@ func (m model) headerView() string {
 			// transition is pending; mark it so it never reads as "paused".
 			trackName = truncate(trackName, max(availCenterW-1, 1)) + "…"
 		}
-		centerL1 = styleHeaderCenter.Render(truncate(trackName, availCenterW))
+		centerL1 = m.styles.styleHeaderCenter.Render(truncate(trackName, availCenterW))
 	} else {
-		statusStr = styleHeaderPaused.Render("Orpheus")
-		centerL1 = styleHeaderSub.Render("no active playback")
+		statusStr = m.styles.styleHeaderPaused.Render("Orpheus")
+		centerL1 = m.styles.styleHeaderSub.Render("no active playback")
 		device := m.icon(iconDevice, iconDeviceNF) + " " + m.deviceName
 		// Line 1 also carries the volume/status side only in the playing
 		// state; here the device string must fit the full width or it wraps
 		// and corrupts the chrome height.
-		rightL1 = styleHeaderStatus.Render(truncate(device, max(1, w-lipgloss.Width(statusStr)-2)))
+		rightL1 = m.styles.styleHeaderStatus.Render(truncate(device, max(1, w-lipgloss.Width(statusStr)-2)))
 	}
 
 	line1 := layoutThreeZone(w, statusStr, centerL1, rightL1)
@@ -69,11 +69,11 @@ func (m model) headerView() string {
 		if album != "" {
 			parts += "  •  " + album
 		}
-		centerL2 = styleHeaderSub.Render(truncate(parts, max(1, w-2)))
+		centerL2 = m.styles.styleHeaderSub.Render(truncate(parts, max(1, w-2)))
 	}
 	line2 := layoutThreeZone(w, "", centerL2, "")
 
-	sep := sectionDivider(w)
+	sep := m.styles.sectionDivider(w)
 	return line1 + "\n" + line2 + "\n" + sep
 }
 
@@ -104,12 +104,12 @@ func layoutThreeZone(w int, left, center, right string) string {
 }
 
 func (m model) headerVolumeBar(vol int) string {
-	return gradientBar(float64(vol)/100.0, volumeBarW)
+	return m.styles.gradientBar(float64(vol)/100.0, volumeBarW)
 }
 
 func (m model) tabBarView() string {
-	key := tabBarCacheKey{m.ui.width, m.ui.activeTab, themeEpoch}
-	if cached, ok := tabBarCache.get(key); ok {
+	key := tabBarCacheKey{m.ui.width, m.ui.activeTab}
+	if cached, ok := m.styles.tabBar.get(key); ok {
 		return cached
 	}
 	tabs := []struct {
@@ -123,22 +123,22 @@ func (m model) tabBarView() string {
 	var parts []string
 	for _, entry := range tabs {
 		if m.ui.activeTab == entry.t {
-			parts = append(parts, styleTabActive.Render(" "+entry.label+" "))
+			parts = append(parts, m.styles.styleTabActive.Render(" "+entry.label+" "))
 		} else {
-			parts = append(parts, styleTabInactive.Render(" "+entry.label+" "))
+			parts = append(parts, m.styles.styleTabInactive.Render(" "+entry.label+" "))
 		}
 	}
-	sep := styleDivider.Render("\u2502")
+	sep := m.styles.styleDivider.Render("\u2502")
 	bar := strings.Join(parts, sep)
-	underline := sectionDivider(m.ui.width)
+	underline := m.styles.sectionDivider(m.ui.width)
 	out := bar + "\n" + underline
-	tabBarCache.put(key, out)
+	m.styles.tabBar.put(key, out)
 	return out
 }
 func (m model) playerBarView() string {
 	barW := m.ui.width
 
-	sep := sectionDivider(barW)
+	sep := m.styles.sectionDivider(barW)
 
 	if m.transport.status == nil {
 		// Always render the full bar height: the idle placeholder must
@@ -147,9 +147,9 @@ func (m model) playerBarView() string {
 		return sep + "\n"
 	}
 	playIcon, pauseIcon := m.playPauseGlyphs()
-	stateIcon := styleHeaderPaused.Render(pauseIcon)
+	stateIcon := m.styles.styleHeaderPaused.Render(pauseIcon)
 	if m.transport.status.Playing {
-		stateIcon = styleHeaderPlaying.Render(playIcon)
+		stateIcon = m.styles.styleHeaderPlaying.Render(playIcon)
 	}
 
 	elapsedMs := m.transport.status.ProgressMS
@@ -165,10 +165,10 @@ func (m model) playerBarView() string {
 		}
 	}
 
-	elapsed := stylePlayerTime.Render(fmtDuration(elapsedMs))
-	total := stylePlayerTime.Render("--:--")
+	elapsed := m.styles.stylePlayerTime.Render(fmtDuration(elapsedMs))
+	total := m.styles.stylePlayerTime.Render("--:--")
 	if m.transport.status.DurationMS > 0 {
-		total = stylePlayerTime.Render(fmtDuration(m.transport.status.DurationMS))
+		total = m.styles.stylePlayerTime.Render(fmtDuration(m.transport.status.DurationMS))
 	}
 
 	elapsedW := lipgloss.Width(elapsed)
@@ -177,10 +177,10 @@ func (m model) playerBarView() string {
 	progressW := barW - elapsedW - totalW - iconW - playerBarGaps*playerBarGap
 	var progressStr string
 	if m.transport.status.DurationMS <= 0 {
-		_, empty := themeBarRunes()
-		progressStr = styleProgressBarEmpty.Render(strings.Repeat(string(empty), progressW))
+		_, empty := m.styles.themeBarRunes()
+		progressStr = m.styles.styleProgressBarEmpty.Render(strings.Repeat(string(empty), progressW))
 	} else {
-		progressStr = gradientBar(pct, progressW)
+		progressStr = m.styles.gradientBar(pct, progressW)
 	}
 
 	bar := "  " + stateIcon + "  " + elapsed + "  " + progressStr + "  " + total
@@ -191,22 +191,22 @@ func (m model) trackPopupView() string {
 	modalW, _, listH := popupModalSize(m.ui.width, m.ui.height)
 	innerH := listH + 2
 
-	title := styleTrackPopupTitle.Render("  " + m.ui.trackPopupName)
+	title := m.styles.styleTrackPopupTitle.Render("  " + m.ui.trackPopupName)
 
 	var body string
 	if m.ui.trackPopupItems == nil {
-		body = styleTrackPopupLoading.Render("\n  " + m.ui.spinner.View() + " Loading...")
+		body = m.styles.styleTrackPopupLoading.Render("\n  " + m.ui.spinner.View() + " Loading...")
 	} else if len(m.ui.trackPopupItems) == 0 {
-		body = styleTrackPopupLoading.Render("\n  No tracks found")
+		body = m.styles.styleTrackPopupLoading.Render("\n  No tracks found")
 	} else {
 		body = m.ui.trackPopupList.View()
 	}
 	var hint string
 	if m.ui.trackPopupItems != nil {
-		hint = styleTrackPopupHint.Render(hintLine([]key.Binding{m.ui.keys.Select, m.ui.keys.Filter, m.ui.keys.CloseModal}, modalW-modalContentInset))
+		hint = m.styles.styleTrackPopupHint.Render(m.styles.hintLine([]key.Binding{m.ui.keys.Select, m.ui.keys.Filter, m.ui.keys.CloseModal}, modalW-modalContentInset))
 	}
 
-	return modalFrame(m.ui.width, m.ui.height, title, hint, body, modalW, innerH)
+	return m.styles.modalFrame(m.ui.width, m.ui.height, title, hint, body, modalW, innerH)
 }
 
 // helpModalSize is the single source for the help modal's dimensions so the
@@ -262,8 +262,8 @@ func (m model) helpModalView() string {
 		}
 	}
 
-	return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Help"),
-		styleModalHint.Render(hint), body, modalW, innerH)
+	return m.styles.modalFrame(m.ui.width, m.ui.height, m.styles.styleModalTitle.Render("Help"),
+		m.styles.styleModalHint.Render(hint), body, modalW, innerH)
 }
 
 func (m model) overlayBlocked() bool {
@@ -349,7 +349,7 @@ func (m model) kittyOverlay() string {
 	// panel text draws the border, the image lands one cell in.
 	artCols, artRows := layout.coverCols, layout.coverRows
 	startRow, startCol := layout.coverStartRow, layout.coverStartCol
-	if coverFrameFits(artCols, artRows) {
+	if m.styles.coverFrameFits(artCols, artRows) {
 		artCols, artRows = artCols-2, artRows-2
 		startRow, startCol = startRow+1, startCol+1
 	}

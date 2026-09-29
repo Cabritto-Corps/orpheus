@@ -21,13 +21,15 @@ func popupItems(n int) []list.Item {
 }
 
 func TestTrackPopupFooterVisible(t *testing.T) {
-	popup := newTrackPopupList(100, 40)
+	st := buildThemeStyles(themePresetState("default"))
+	np := new(string)
+	popup := newTrackPopupList(st, np, 100, 40)
 	popup.SetItems(popupItems(5))
 	if view := popup.View(); !strings.Contains(view, "5 tracks") {
 		t.Fatalf("single-page popup should show the item count, got %q", lastLine(view))
 	}
 
-	paged := newTrackPopupList(100, 40)
+	paged := newTrackPopupList(st, np, 100, 40)
 	paged.SetItems(popupItems(80))
 	view := paged.View()
 	if !strings.Contains(view, "80 tracks") {
@@ -44,7 +46,7 @@ func TestTrackPopupDotsOnFirstOpen(t *testing.T) {
 	// the dots only appeared after a resize event.
 	m := guardModel(t, frameVariant{name: "popup", width: 100, height: 40, tab: tabPlaylists})
 	m.ui.trackPopupOpen = true
-	m.ui.trackPopupList = newTrackPopupList(m.ui.width, m.ui.height)
+	m.ui.trackPopupList = newTrackPopupList(m.styles, m.nowPlaying, m.ui.width, m.ui.height)
 	m.ui.trackPopupWidth = m.ui.trackPopupList.Width() - 4
 	qi := make([]spotify.QueueItem, 0, 80)
 	for i := range 80 {

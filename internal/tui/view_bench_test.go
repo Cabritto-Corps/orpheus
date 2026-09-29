@@ -73,4 +73,17 @@ func BenchmarkViewAlbums(b *testing.B) {
 	benchView(b, benchModelTab(b, 0, tabAlbums))
 }
 
+// BenchmarkBuildThemeStyles bounds the live-preview path: the theme
+// editor rebuilds the whole bundle on every keypress, so this must stay
+// far below a frame budget (the old applyTheme did the same work through
+// globals; the bundle adds two tiny cache allocations).
+func BenchmarkBuildThemeStyles(b *testing.B) {
+	state := themePresetState("default")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = buildThemeStyles(state)
+	}
+}
+
 var _ = tea.Quit

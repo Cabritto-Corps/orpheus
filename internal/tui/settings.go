@@ -435,7 +435,7 @@ func (m model) settingsKeysTable(w, h int) *table.Model {
 			table.WithRows(rows),
 			table.WithHeight(h),
 		)
-		t.SetStyles(tableStyles())
+		t.SetStyles(m.styles.tableStyles())
 		s.keysTable = &t
 		s.keysTableDirty = false
 	}
@@ -444,18 +444,18 @@ func (m model) settingsKeysTable(w, h int) *table.Model {
 	return s.keysTable
 }
 
-func tableStyles() table.Styles {
+func (s *themeStyles) tableStyles() table.Styles {
 	st := table.DefaultStyles()
 	st.Header = st.Header.
 		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(colorDivider).
+		BorderForeground(s.colorDivider).
 		BorderBottom(true).
 		Bold(false).
-		Foreground(colorMutedBlue)
+		Foreground(s.colorMutedBlue)
 	st.Selected = st.Selected.
 		Border(lipgloss.NormalBorder(), false, false, false, false).
-		Foreground(colorSelectionFg).
-		Background(colorSelectionBg)
+		Foreground(s.colorSelectionFg).
+		Background(s.colorSelectionBg)
 	return st
 }
 
@@ -481,21 +481,21 @@ func (m model) themePickerView(modalW, innerH int) string {
 		}
 		bar := swatchBar(themeSwatches(colors))
 		row := " " + marker + " " + padCell(name, 14) + " " + bar
-		rows = append(rows, modalRow(row, "", s.themeCursor == i, modalW))
+		rows = append(rows, m.styles.modalRow(row, "", s.themeCursor == i, modalW))
 		if i < len(settingsThemeOrder)-1 {
-			rows = append(rows, modalRow("", "", false, modalW))
+			rows = append(rows, m.styles.modalRow("", "", false, modalW))
 		}
 	}
 
 	var body strings.Builder
 	body.WriteString("\n" + lipgloss.JoinVertical(lipgloss.Left, rows...) + "\n")
 	k := m.ui.keys
-	hint := hintLine([]key.Binding{
+	hint := m.styles.hintLine([]key.Binding{
 		key.NewBinding(key.WithKeys(k.QueueUp.Keys()...), key.WithHelp(k.QueueUp.Help().Key+"/"+k.QueueDown.Help().Key, "preview")),
 		withDesc(k.Select, "save"),
 		withDesc(k.CloseModal, "revert"),
 	}, modalW-modalContentInset)
-	return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Theme"), hint, body.String(), modalW, innerH)
+	return m.styles.modalFrame(m.ui.width, m.ui.height, m.styles.styleModalTitle.Render("Theme"), hint, body.String(), modalW, innerH)
 }
 
 func (m model) settingsModalView() string {
@@ -511,14 +511,14 @@ func (m model) settingsModalView() string {
 	case settingsModeCapture:
 		var body string
 		if s.pendingKey == "" {
-			body = "\n" + styleTrackPopupLoading.Render("  Press any key to bind \""+settingsActionLabel(s.captureKey)+"\"") + "\n"
+			body = "\n" + m.styles.styleTrackPopupLoading.Render("  Press any key to bind \""+settingsActionLabel(s.captureKey)+"\"") + "\n"
 		} else {
-			pending := styleTrackPopupTitle.Render(shortKeyLabel([]string{s.pendingKey}))
+			pending := m.styles.styleTrackPopupTitle.Render(shortKeyLabel([]string{s.pendingKey}))
 			body = "\n  bind \"" + settingsActionLabel(s.captureKey) + "\" to " + pending + "\n"
 		}
 		// Capture is a 3-line prompt: a full-height box reads as empty.
-		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"),
-			styleModalHint.Render(hintLine([]key.Binding{withDesc(m.ui.keys.Select, "confirm"), withDesc(m.ui.keys.CloseModal, "cancel")}, modalW-modalContentInset)), body, modalW, 7)
+		return m.styles.modalFrame(m.ui.width, m.ui.height, m.styles.styleModalTitle.Render("Settings"),
+			m.styles.styleModalHint.Render(m.styles.hintLine([]key.Binding{withDesc(m.ui.keys.Select, "confirm"), withDesc(m.ui.keys.CloseModal, "cancel")}, modalW-modalContentInset)), body, modalW, 7)
 
 	case settingsModeTheme:
 		return m.themePickerView(modalW, innerH)
@@ -534,53 +534,53 @@ func (m model) settingsModalView() string {
 		shown := 0
 		for _, action := range sortedConflictActions(s.conflicts) {
 			if shown == maxConflictHintLines {
-				body.WriteString(styleError.Render("  ⚠ more conflicts…") + "\n")
+				body.WriteString(m.styles.styleError.Render("  ⚠ more conflicts…") + "\n")
 				break
 			}
-			body.WriteString(styleError.Render("  ⚠ conflict: "+settingsActionLabel(action)) + "\n")
+			body.WriteString(m.styles.styleError.Render("  ⚠ conflict: "+settingsActionLabel(action)) + "\n")
 			shown++
 		}
-		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Keybinds"),
-			styleModalHint.Render(hintLine([]key.Binding{withDesc(m.ui.keys.Select, "rebind"), withDesc(m.ui.keys.CloseModal, "back")}, modalW-modalContentInset)), body.String(), modalW, innerH)
+		return m.styles.modalFrame(m.ui.width, m.ui.height, m.styles.styleModalTitle.Render("Keybinds"),
+			m.styles.styleModalHint.Render(m.styles.hintLine([]key.Binding{withDesc(m.ui.keys.Select, "rebind"), withDesc(m.ui.keys.CloseModal, "back")}, modalW-modalContentInset)), body.String(), modalW, innerH)
 
 	default:
 		crossfadeGauge := ""
 		cacheGauge := ""
 		if s.crossfadeEnabled {
-			crossfadeGauge = " " + gradientBar(s.crossfadeSeconds/30, gaugeW)
+			crossfadeGauge = " " + m.styles.gradientBar(s.crossfadeSeconds/30, gaugeW)
 		}
 		if s.cacheEnabled {
-			cacheGauge = " " + gradientBar(float64(s.cacheSizeMB-64)/float64(4096-64), gaugeW)
+			cacheGauge = " " + m.styles.gradientBar(float64(s.cacheSizeMB-64)/float64(4096-64), gaugeW)
 		}
 		rows := []string{
-			modalRow("Theme", m.themeValue(s.themePreset), s.cursor == 0, modalW),
-			modalRow("Theme options", "edit...", s.cursor == 1, modalW),
-			modalRow("Keybinds", "edit...", s.cursor == 2, modalW),
-			modalRow("Crossfade", settingsCrossfadeLabel(&s)+crossfadeGauge, s.cursor == 3, modalW),
-			modalRow("Audio cache", settingsCacheLabel(&s)+cacheGauge, s.cursor == 4, modalW),
-			modalRow("Images", settingsImageLabel(&s), s.cursor == 5, modalW),
+			m.styles.modalRow("Theme", m.themeValue(s.themePreset), s.cursor == 0, modalW),
+			m.styles.modalRow("Theme options", "edit...", s.cursor == 1, modalW),
+			m.styles.modalRow("Keybinds", "edit...", s.cursor == 2, modalW),
+			m.styles.modalRow("Crossfade", settingsCrossfadeLabel(&s)+crossfadeGauge, s.cursor == 3, modalW),
+			m.styles.modalRow("Audio cache", settingsCacheLabel(&s)+cacheGauge, s.cursor == 4, modalW),
+			m.styles.modalRow("Images", settingsImageLabel(&s), s.cursor == 5, modalW),
 		}
 		var body strings.Builder
 		body.WriteString("\n" + lipgloss.JoinVertical(lipgloss.Left, rows...) + "\n")
-		body.WriteString("\n" + styleModalHint.Render(hintLine([]key.Binding{withDesc(m.ui.keys.Select, "change"), m.ui.keys.VolUp, m.ui.keys.VolDown}, modalW-modalContentInset)) + "\n")
+		body.WriteString("\n" + m.styles.styleModalHint.Render(m.styles.hintLine([]key.Binding{withDesc(m.ui.keys.Select, "change"), m.ui.keys.VolUp, m.ui.keys.VolDown}, modalW-modalContentInset)) + "\n")
 		if s.restartRequiredCrossfade {
-			body.WriteString(styleError.Render("  crossfade applies on restart") + "\n")
+			body.WriteString(m.styles.styleError.Render("  crossfade applies on restart") + "\n")
 		}
 		if s.restartRequiredCache {
-			body.WriteString(styleError.Render("  cache applies on restart") + "\n")
+			body.WriteString(m.styles.styleError.Render("  cache applies on restart") + "\n")
 		}
 		if s.saveErr != "" {
-			body.WriteString(styleError.Render("  ⚠ "+truncate(s.saveErr, modalW-modalContentInset-2)) + "\n")
+			body.WriteString(m.styles.styleError.Render("  ⚠ "+truncate(s.saveErr, modalW-modalContentInset-2)) + "\n")
 		}
 		for i, w := range config.Warnings() {
 			if i == 2 {
-				body.WriteString(styleError.Render("  ⚠ more config warnings…") + "\n")
+				body.WriteString(m.styles.styleError.Render("  ⚠ more config warnings…") + "\n")
 				break
 			}
-			body.WriteString(styleError.Render("  ⚠ "+truncate(w, modalW-modalContentInset-2)) + "\n")
+			body.WriteString(m.styles.styleError.Render("  ⚠ "+truncate(w, modalW-modalContentInset-2)) + "\n")
 		}
-		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"),
-			styleModalHint.Render(hintLine([]key.Binding{m.ui.keys.CloseModal}, modalW-modalContentInset)), body.String(), modalW, innerH)
+		return m.styles.modalFrame(m.ui.width, m.ui.height, m.styles.styleModalTitle.Render("Settings"),
+			m.styles.styleModalHint.Render(m.styles.hintLine([]key.Binding{m.ui.keys.CloseModal}, modalW-modalContentInset)), body.String(), modalW, innerH)
 	}
 }
 
@@ -635,8 +635,8 @@ func (m *model) rethemeBrowseLists() {
 	// Swap the delegates in place: SetDelegate keeps items, cursor and
 	// pagination, so a theme change no longer tears down and rebuilds the
 	// list models (the fresh delegate brings a fresh render cache).
-	m.browse.playlistList.SetDelegate(newCachedPlaylistDelegate())
-	m.browse.albumList.SetDelegate(newCachedPlaylistDelegate())
-	applyListStyles(&m.browse.playlistList)
-	applyListStyles(&m.browse.albumList)
+	m.browse.playlistList.SetDelegate(newCachedPlaylistDelegate(m.styles, m.nowPlaying))
+	m.browse.albumList.SetDelegate(newCachedPlaylistDelegate(m.styles, m.nowPlaying))
+	applyListStyles(&m.browse.playlistList, m.styles)
+	applyListStyles(&m.browse.albumList, m.styles)
 }

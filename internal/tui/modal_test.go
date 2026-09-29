@@ -133,9 +133,10 @@ func openSettingsForTest(m model) model {
 }
 
 func TestModalFrameGoldenParts(t *testing.T) {
-	title := styleModalTitle.Render("Settings")
+	st := buildThemeStyles(themePresetState("default"))
+	title := st.styleModalTitle.Render("Settings")
 	body := "\n  body line\n"
-	out := modalFrame(100, 30, title, styleModalHint.Render("esc: close"), body, 52, 12)
+	out := st.modalFrame(100, 30, title, st.styleModalHint.Render("esc: close"), body, 52, 12)
 
 	if !strings.Contains(out, "Settings") {
 		t.Fatal("title missing")
@@ -161,32 +162,32 @@ func TestModalFrameGoldenParts(t *testing.T) {
 // a page fill — painting page behind the box would reclaim the frame the
 // mode promises to the terminal.
 func TestModalFrameTransparentBackdrop(t *testing.T) {
-	st := themePresetState("default")
-	st.backgrounds.Style = "transparent"
-	applyTheme(st)
+	state := themePresetState("default")
+	state.backgrounds.Style = "transparent"
+	st := buildThemeStyles(state)
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "0")
 	t.Cleanup(func() {
 		t.Setenv("NO_COLOR", "1")
-		applyTheme(themePresetState("default"))
 	})
-	title := styleModalTitle.Render("Settings")
+	title := st.styleModalTitle.Render("Settings")
 	body := "\n  body line\n"
-	out := modalFrame(100, 30, title, styleModalHint.Render("esc: close"), body, 52, 12)
+	out := st.modalFrame(100, 30, title, st.styleModalHint.Render("esc: close"), body, 52, 12)
 	if !strings.Contains(out, "░") {
 		t.Fatal("transparent backdrop lost the dim pattern")
 	}
 	if !strings.Contains(out, "╭") && !strings.Contains(out, "┌") {
 		t.Fatal("transparent modal lost its border")
 	}
-	if pageSeq := bgSequence(colorPage); strings.Contains(out, pageSeq) {
+	if pageSeq := bgSequence(st.colorPage); strings.Contains(out, pageSeq) {
 		t.Fatal("transparent backdrop paints the page background")
 	}
 }
 
 func TestModalRowSelectedAndFallback(t *testing.T) {
-	sel := modalRow("Theme", "default", true, 60)
-	plain := modalRow("Theme", "default", false, 60)
+	st := buildThemeStyles(themePresetState("default"))
+	sel := st.modalRow("Theme", "default", true, 60)
+	plain := st.modalRow("Theme", "default", false, 60)
 	if lipgloss.Width(sel) > 58 || lipgloss.Width(plain) > 58 {
 		t.Fatalf("rows must fit the modal inner width: %d/%d", lipgloss.Width(sel), lipgloss.Width(plain))
 	}
@@ -204,7 +205,7 @@ func TestModalRowSelectedAndFallback(t *testing.T) {
 		t.Fatal("unselected row must be padded to the same width as the highlighted row")
 	}
 
-	fallback := modalRow("Theme", "default", true, 30)
+	fallback := st.modalRow("Theme", "default", true, 30)
 	if !strings.HasPrefix(fallback, ">") {
 		t.Fatal("narrow selected row must fall back to the > marker")
 	}
@@ -214,15 +215,16 @@ func TestModalRowSelectedAndFallback(t *testing.T) {
 }
 
 func TestMiniGaugeBounds(t *testing.T) {
-	full := gradientBar(1, 6)
+	st := buildThemeStyles(themePresetState("default"))
+	full := st.gradientBar(1, 6)
 	if !strings.Contains(full, "█") || strings.Contains(full, "░") {
 		t.Fatalf("full gauge should have no empty blocks: %q", full)
 	}
-	empty := gradientBar(0, 6)
+	empty := st.gradientBar(0, 6)
 	if !strings.Contains(empty, "░") || strings.Contains(empty, "█") {
 		t.Fatalf("empty gauge should have no filled blocks: %q", empty)
 	}
-	half := gradientBar(0.5, 6)
+	half := st.gradientBar(0.5, 6)
 	if strings.Count(half, "█") != 3 {
 		t.Fatalf("half gauge fill count = %d, want 3", strings.Count(half, "█"))
 	}

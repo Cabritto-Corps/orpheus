@@ -41,14 +41,14 @@ func CaptureTerminalBG() {
 // making the release idempotent); leaving it re-applies the page because
 // Last no longer matches. Kept pure so the transitions are unit-testable
 // without emitting escape sequences.
-func terminalBGTarget(page color.Color) string {
+func terminalBGTarget(page color.Color, transparent bool) string {
 	if terminalBGOriginal == "" {
 		return ""
 	}
 	if !colorEnabled() {
 		return ""
 	}
-	if transparentFrame() {
+	if transparent {
 		if terminalBGLast == "" {
 			return ""
 		}
@@ -71,13 +71,13 @@ func terminalBGTarget(page color.Color) string {
 // color: the padding around the grid is painted with the terminal
 // background, so matching it makes the page fill read as whole-window.
 // ANSI-name pages (no hex) and ASCII profiles keep the transparent look.
-func ApplyTerminalBG(page color.Color) {
-	spec := terminalBGTarget(page)
+func ApplyTerminalBG(page color.Color, transparent bool) {
+	spec := terminalBGTarget(page, transparent)
 	if spec == "" {
 		return
 	}
 	fmt.Fprintf(os.Stdout, "\x1b]11;%s\x1b\\", spec)
-	if transparentFrame() {
+	if transparent {
 		terminalBGLast = ""
 	} else {
 		terminalBGLast = spec
@@ -96,10 +96,10 @@ func RestoreTerminalBG() {
 
 // TerminalBGSync re-syncs the terminal background with the page color
 // captured at theme-apply time; theme changes return it as a tea.Cmd so
-// the padding follows the live preview without reading theme globals off
+// the padding follows the live preview without reading theme state off
 // the event loop.
-func TerminalBGSync(page color.Color) tea.Msg {
-	ApplyTerminalBG(page)
+func TerminalBGSync(page color.Color, transparent bool) tea.Msg {
+	ApplyTerminalBG(page, transparent)
 	return nil
 }
 

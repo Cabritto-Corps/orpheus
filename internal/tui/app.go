@@ -47,14 +47,15 @@ type playlistItem struct {
 
 	// nowPlaying is set per render by the delegate wrapper; it makes Title()
 	// carry the now-playing glyph so the delegate cache key changes too.
+	// glyph rides alongside: the marker text comes from the theme bundle
+	// the delegate was built with, never a global.
 	nowPlaying bool
+	glyph      string
 }
 
 func (p playlistItem) Title() string {
-	if p.nowPlaying {
-		if glyph := themeNowPlayingGlyph(); glyph != "" {
-			return p.summary.Name + " " + glyph
-		}
+	if p.nowPlaying && p.glyph != "" {
+		return p.summary.Name + " " + p.glyph
 	}
 	return p.summary.Name
 }
@@ -85,45 +86,45 @@ func (t trackItem) Description() string { return t.item.Artist }
 // newTrackPopupDelegate returns the popup's delegate: the themed default
 // delegate wrapped in the render cache, so the track rows can carry the
 // right-aligned duration while keeping the same styling.
-func newTrackPopupDelegate() cachedDelegate {
+func newTrackPopupDelegate(s *themeStyles, nowPlaying *string) cachedDelegate {
 	c := &delegateCache{entries: make(map[delegateKey]string, 64)}
-	registerDelegateCache(c)
 	d := list.NewDefaultDelegate()
 	d.ShowDescription = true
 	d.SetHeight(2)
 	d.SetSpacing(0)
 
 	d.Styles.SelectedTitle = lipgloss.NewStyle().
-		Bold(themeBoldTitles).
-		Foreground(colorBlue).
+		Bold(s.themeBoldTitles).
+		Foreground(s.colorBlue).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(colorBlue).
+		BorderForeground(s.colorBlue).
 		Padding(0, 0, 0, 1)
 
 	d.Styles.SelectedDesc = lipgloss.NewStyle().
-		Italic(themeItalicDescs).
-		Foreground(colorMutedBlue).
+		Italic(s.themeItalicDescs).
+		Foreground(s.colorMutedBlue).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(colorBlue).
+		BorderForeground(s.colorBlue).
 		Padding(0, 0, 0, 1)
 
 	d.Styles.NormalTitle = lipgloss.NewStyle().
-		Foreground(colorOffWhite).
+		Foreground(s.colorOffWhite).
 		Padding(0, 0, 0, 2)
 
 	d.Styles.NormalDesc = lipgloss.NewStyle().
-		Italic(themeItalicDescs).
-		Foreground(colorMutedBlue).
+		Italic(s.themeItalicDescs).
+		Foreground(s.colorMutedBlue).
 		Padding(0, 0, 0, 2)
 
-	return cachedDelegate{DefaultDelegate: d, cache: c}
+	return cachedDelegate{DefaultDelegate: d, cache: c, glyph: s.themeNowPlayingGlyph(), nowPlaying: nowPlaying}
 }
 
 func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- librespot.ContextTracksResult, ldr *loader.BackgroundLoader) model {
 	state, resolvedPreset := LoadTheme(cfg.Theme, cfg.ThemePath)
-	applyTheme(state)
-	browser := newBrowseList()
-	albums := newBrowseList()
+	styles := buildThemeStyles(state)
+	nowPlaying := new(string)
+	browser := newBrowseList(styles, nowPlaying)
+	albums := newBrowseList(styles, nowPlaying)
 	imageStyle, imageStyleSet := cfg.ImageStyle, config.NormalizeImageStyle(cfg.ImageStyle) != ""
 	if !imageStyleSet {
 		imageStyle, imageStyleSet = config.ExplicitImageStyle(cfg.SettingsPath)
@@ -136,6 +137,8 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 		tuiCmdCh:        tuiCmdCh,
 		contextTracksCh: contextTracksCh,
 		ldr:             ldr,
+		styles:          styles,
+		nowPlaying:      nowPlaying,
 		transport: transportModel{
 			volDebouncePending:  -1,
 			seekDebouncePending: -1,
@@ -152,7 +155,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 		ui: uiModel{
 			activeTab:              tabPlaylists,
 			imgs:                   newImgCacheWithSelection(imageStyle, imageStyleSet, os.Getenv),
-			spinner:                themedSpinner(),
+			spinner:                themedSpinner(styles),
 			startupCoverBoostTicks: 40,
 			cover:                  newCoverManager(),
 			nerdFonts:              cfg.NerdFonts,
@@ -211,7 +214,7 @@ func Run(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.Config
 	// to the theme's page color for the session; restore on exit.
 	CaptureTerminalBG()
 	defer RestoreTerminalBG()
-	ApplyTerminalBG(colorPage)
+	ApplyTerminalBG(m.styles.colorPage, m.styles.transparentFrame())
 	p := tea.NewProgram(m)
 	if playbackStateCh != nil {
 		StartPlaybackStateListener(playbackStateCh, p.Send, ctx)

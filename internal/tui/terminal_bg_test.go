@@ -9,19 +9,18 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// withTerminalBGState pins the terminal-background globals and the style
-// for one decision test; OSC 11 capture belongs to the live session, so
-// tests drive the values directly and restore them after.
-func withTerminalBGState(t *testing.T, original, last, style string) {
+// withTerminalBGState pins the terminal-background globals for one decision
+// test; OSC 11 capture belongs to the live session, so tests drive the
+// values directly and restore them after. Transparency travels as an
+// explicit argument now, not a theme global.
+func withTerminalBGState(t *testing.T, original, last string) {
 	t.Helper()
-	prevOrig, prevLast, prevBg := terminalBGOriginal, terminalBGLast, activeBackgrounds
+	prevOrig, prevLast := terminalBGOriginal, terminalBGLast
 	terminalBGOriginal, terminalBGLast = original, last
-	activeBackgrounds = themeBackgrounds{Style: style}
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "0")
 	t.Cleanup(func() {
 		terminalBGOriginal, terminalBGLast = prevOrig, prevLast
-		activeBackgrounds = prevBg
 		t.Setenv("NO_COLOR", "1")
 	})
 }
@@ -45,8 +44,8 @@ func TestTerminalBGTargetDecisions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			withTerminalBGState(t, tc.original, tc.last, tc.style)
-			if got := terminalBGTarget(lipgloss.Color(tc.page)); got != tc.want {
+			withTerminalBGState(t, tc.original, tc.last)
+			if got := terminalBGTarget(lipgloss.Color(tc.page), tc.style == "transparent"); got != tc.want {
 				t.Fatalf("terminalBGTarget(%q) = %q, want %q", tc.page, got, tc.want)
 			}
 		})
@@ -54,9 +53,9 @@ func TestTerminalBGTargetDecisions(t *testing.T) {
 }
 
 func TestTerminalBGTargetAsciiStaysSilent(t *testing.T) {
-	withTerminalBGState(t, "rgb:0000/0000/0000", "", "solid")
+	withTerminalBGState(t, "rgb:0000/0000/0000", "")
 	t.Setenv("NO_COLOR", "1")
-	if got := terminalBGTarget(lipgloss.Color("#0A0D12")); got != "" {
+	if got := terminalBGTarget(lipgloss.Color("#0A0D12"), false); got != "" {
 		t.Fatalf("ascii profile must stay silent, got %q", got)
 	}
 }
@@ -66,7 +65,7 @@ func TestTerminalBGTargetAsciiStaysSilent(t *testing.T) {
 // the last-set marker clears so later frames stay silent.
 func TestApplyTerminalBGTransparentEntryRestores(t *testing.T) {
 	orig := "rgb:0000/0000/0000"
-	withTerminalBGState(t, orig, "#0A0D12", "transparent")
+	withTerminalBGState(t, orig, "#0A0D12")
 
 	old := os.Stdout
 	r, w, err := os.Pipe()
@@ -74,7 +73,7 @@ func TestApplyTerminalBGTransparentEntryRestores(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stdout = w
-	ApplyTerminalBG(lipgloss.Color("#0A0D12"))
+	ApplyTerminalBG(lipgloss.Color("#0A0D12"), true)
 	w.Close()
 	os.Stdout = old
 	out, err := io.ReadAll(r)

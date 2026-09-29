@@ -95,12 +95,13 @@ func (m *model) openThemeOptions() {
 // and spinner follow. The procedural cover stays out of the live path —
 // its regen dominates a keypress — and syncs on save/exit instead.
 func (m model) themeOptionsApply(state themeState) (tea.Model, tea.Cmd) {
-	applyTheme(state)
+	// Live preview swaps the whole bundle: every cache starts cold, so
+	// no invalidation step runs on the keypress path.
+	m.styles = buildThemeStyles(state)
 	m.rethemeBrowseLists()
-	m.ui.spinner = themedSpinner()
+	m.ui.spinner = themedSpinner(m.styles)
 	m.ui.settings.keysTableDirty = true
-	page := lipgloss.Color(state.colors.Page)
-	return m, func() tea.Msg { return TerminalBGSync(page) }
+	return m, func() tea.Msg { return TerminalBGSync(m.styles.colorPage, m.styles.transparentFrame()) }
 }
 
 // themeOptionsApplyAndRefresh is the settle path for theme changes: it
@@ -260,7 +261,7 @@ func (m model) themeOptionsView(modalW, innerH int) string {
 		if entry.kind == optionCycle {
 			value = m.themeOptionsValue(i)
 		}
-		rows = append(rows, modalRow(entry.label, value, s.optionsCursor == i, modalW))
+		rows = append(rows, m.styles.modalRow(entry.label, value, s.optionsCursor == i, modalW))
 	}
 
 	offset := 0
@@ -272,12 +273,12 @@ func (m model) themeOptionsView(modalW, innerH int) string {
 	var body strings.Builder
 	body.WriteString("\n" + lipgloss.JoinVertical(lipgloss.Left, window...) + "\n")
 	k := m.ui.keys
-	hint := hintLine([]key.Binding{
+	hint := m.styles.hintLine([]key.Binding{
 		key.NewBinding(key.WithKeys(k.QueueUp.Keys()...), key.WithHelp(k.QueueUp.Help().Key+"/"+k.QueueDown.Help().Key, "select")),
 		withDesc(k.VolUp, "next"),
 		withDesc(k.VolDown, "prev"),
 		withDesc(k.Select, "change / save"),
 		withDesc(k.CloseModal, "revert"),
 	}, modalW-modalContentInset)
-	return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Theme options"), hint, body.String(), modalW, innerH)
+	return m.styles.modalFrame(m.ui.width, m.ui.height, m.styles.styleModalTitle.Render("Theme options"), hint, body.String(), modalW, innerH)
 }

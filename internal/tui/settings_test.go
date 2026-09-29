@@ -80,7 +80,6 @@ func TestSettingsModalOpenCloseCursor(t *testing.T) {
 
 func TestSettingsThemePickerLiveAppliesAndPersists(t *testing.T) {
 	m, _, themePath, _ := newSettingsTestModel(t)
-	applyTheme(themePresetState("default"))
 
 	next := openViaKey(m)
 	next = sendEnter(next) // theme row: open the picker
@@ -128,7 +127,6 @@ func TestSettingsThemePickerLiveAppliesAndPersists(t *testing.T) {
 
 func TestSettingsThemePickerEscReverts(t *testing.T) {
 	m, _, _, _ := newSettingsTestModel(t)
-	applyTheme(themePresetState("default"))
 
 	next := openViaKey(m)
 	next = sendEnter(next) // open picker
@@ -147,10 +145,8 @@ func TestSettingsThemePickerEscReverts(t *testing.T) {
 
 func TestSettingsThemePickerDefersArtRegenToSave(t *testing.T) {
 	m, _, _, _ := newSettingsTestModel(t)
-	applyTheme(themePresetState("default"))
 	m.refreshLikedSongsArt()
 	t.Cleanup(func() {
-		applyTheme(themePresetState("default"))
 		m.refreshLikedSongsArt()
 	})
 

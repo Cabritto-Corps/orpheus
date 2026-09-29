@@ -58,15 +58,15 @@ func popupModalSize(termW, termH int) (modalW, listW, listH int) {
 // with a right-aligned (truncated) hint, a separator, the body clipped to
 // the remaining height, all inside the shared box on the themed scrim.
 // Everything below the header dims — modals own the whole frame.
-func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int) string {
+func (s *themeStyles) modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int) string {
 	width, height := modalGeometry(termW, termH, wantedW, wantedH)
 	innerW := max(8, width-modalContentInset)
 
 	header := modalHeader(title, hint, innerW)
-	sep := styleModalHint.Render(strings.Repeat("─", innerW))
+	sep := s.styleModalHint.Render(strings.Repeat("─", innerW))
 	body = lipgloss.NewStyle().MaxHeight(max(2, height-2)).Render(body)
 
-	box := styleModalBox.
+	box := s.styleModalBox.
 		Width(width).
 		Height(height).
 		Render(lipgloss.JoinVertical(lipgloss.Left, header, sep, body))
@@ -74,15 +74,15 @@ func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int
 	// (rows, hints, headers) end with a reset and the border ring is
 	// drawn foreground-only — both would punch holes in the box tone.
 	// Re-assert at line starts and after every reset.
-	if seq := bgSequence(modalBoxBackground()); seq != "" {
+	if seq := bgSequence(s.modalBoxBackground()); seq != "" {
 		box = reassertBgLines(box, seq)
 	}
 
 	// The ░ scrim dims the frame behind the box. In transparent mode the
 	// whitespace keeps no background: the terminal owns the backdrop and
 	// painting page would reclaim the whole frame.
-	wsBg := color.Color(colorPage)
-	if transparentFrame() {
+	wsBg := color.Color(s.colorPage)
+	if s.transparentFrame() {
 		wsBg = lipgloss.NoColor{}
 	}
 	return lipgloss.Place(
@@ -92,7 +92,7 @@ func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int
 		lipgloss.Center,
 		box,
 		lipgloss.WithWhitespaceChars("░"),
-		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Foreground(colorScrim).Background(wsBg)),
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Foreground(s.colorScrim).Background(wsBg)),
 	)
 }
 
@@ -103,7 +103,7 @@ func modalFrame(termW, termH int, title, hint, body string, wantedW, wantedH int
 // exactly one style over the whole row. An empty value lets the label span
 // the row (picker/list entries). Below a minimum width the ">" marker
 // replaces the highlight (small-terminal fallback).
-func modalRow(label, value string, selected bool, width int) string {
+func (s *themeStyles) modalRow(label, value string, selected bool, width int) string {
 	inner := max(12, width-modalContentInset)
 
 	marker := " "
@@ -124,15 +124,15 @@ func modalRow(label, value string, selected bool, width int) string {
 		row += strings.Repeat(" ", pad)
 	}
 	if selected && width >= 40 {
-		rendered := styleModalSelectedRow.Render(row)
+		rendered := s.styleModalSelectedRow.Render(row)
 		// Fragments inside the row (gauges, swatches) end with a reset that
 		// would let the box's background re-assertion split the highlight;
 		// re-assert the selection bg after each so it wins inside the row,
 		// then close the span with the box's own background so the line
 		// never ends with the selection active — a line that ends on the
 		// selection bg spills it onto whatever is drawn after it.
-		return reassertBg(rendered, bgSequence(colorSelectionBg)) +
-			bgSequence(modalBoxBackground())
+		return reassertBg(rendered, bgSequence(s.colorSelectionBg)) +
+			bgSequence(s.modalBoxBackground())
 	}
 	return row
 }
@@ -149,12 +149,12 @@ func alignRight(s string, width int) string {
 // hintLine renders "key desc" pairs through bubbles/help so separators,
 // ellipsis truncation at narrow widths and style handling follow the
 // framework instead of being re-invented per surface.
-func hintLine(bindings []key.Binding, width int) string {
+func (s *themeStyles) hintLine(bindings []key.Binding, width int) string {
 	h := help.New()
 	h.SetWidth(width)
-	h.Styles.ShortKey = styleTrackPopupTitle
-	h.Styles.ShortDesc = styleModalHint
-	h.Styles.ShortSeparator = styleModalHint
+	h.Styles.ShortKey = s.styleTrackPopupTitle
+	h.Styles.ShortDesc = s.styleModalHint
+	h.Styles.ShortSeparator = s.styleModalHint
 	return h.ShortHelpView(bindings)
 }
 

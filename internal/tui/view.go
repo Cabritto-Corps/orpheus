@@ -56,7 +56,7 @@ const (
 func (m model) View() tea.View {
 	if m.ui.width < 40 || m.ui.height < 12 {
 		// No kitty overlay here: the error branch must never emit one.
-		return tea.View{Content: styleError.Render("terminal too small — please resize") + m.kittyOverlay(), AltScreen: true}
+		return tea.View{Content: m.styles.styleError.Render("terminal too small — please resize") + m.kittyOverlay(), AltScreen: true}
 	}
 
 	header := m.headerView()
@@ -85,14 +85,14 @@ func (m model) View() tea.View {
 
 	parts := []string{header, tabBar, body, m.playerBarView()}
 	switch {
-	case transparentFrame():
+	case m.styles.transparentFrame():
 		// No frame paint at all: the terminal's own background shows
 		// through every zone. Selection and modal chrome keep their own
 		// backgrounds (they are overlays, not zones).
 		return tea.View{Content: lipgloss.JoinVertical(lipgloss.Left, parts...) + m.kittyOverlay(), AltScreen: true}
 	default:
 		// Solid — and anything unexpected: one uniform surface.
-		return tea.View{Content: paintPage(lipgloss.JoinVertical(lipgloss.Left, parts...), m.ui.width) + m.kittyOverlay(), AltScreen: true}
+		return tea.View{Content: m.styles.paintPage(lipgloss.JoinVertical(lipgloss.Left, parts...), m.ui.width) + m.kittyOverlay(), AltScreen: true}
 	}
 }
 
@@ -175,8 +175,8 @@ func paintBand(band string, width int, bg color.Color) string {
 // paintPage fills the whole frame with the theme's page tone: every line
 // is padded to the terminal width and drawn on the page background, so a
 // theme owns the full canvas instead of the terminal's default color.
-func paintPage(frame string, width int) string {
-	return paintBand(frame, width, colorPage)
+func (s *themeStyles) paintPage(frame string, width int) string {
+	return paintBand(frame, width, s.colorPage)
 }
 
 type bodyLayout struct {
@@ -249,7 +249,7 @@ func (m model) playPauseGlyphs() (play, pause string) {
 	if m.ui.nerdFonts {
 		return iconPlayNF, iconPauseNF
 	}
-	return themePlayPauseGlyphs()
+	return m.styles.themePlayPauseGlyphs()
 }
 
 func (m model) selectedPlaylist() (playlistItem, bool) {
@@ -265,7 +265,7 @@ func (m model) selectedAlbum() (playlistItem, bool) {
 // gradientBar renders a filled/empty bar through bubbles/progress so the
 // color ramp and width handling follow the framework; colors resolve to the
 // live theme on every render.
-func gradientBar(frac float64, width int) string {
+func (s *themeStyles) gradientBar(frac float64, width int) string {
 	if width <= 0 {
 		return ""
 	}
@@ -273,13 +273,13 @@ func gradientBar(frac float64, width int) string {
 	p := progress.New(
 		progress.WithWidth(width),
 		progress.WithoutPercentage(),
-		progress.WithColors(colorBlue, colorBlueLight),
+		progress.WithColors(s.colorBlue, s.colorBlueLight),
 	)
-	full, empty := themeBarRunes()
+	full, empty := s.themeBarRunes()
 	p.Full, p.Empty = full, empty
 	// bubbles' defaults are hardcoded hexes (#606060 empty); the theme's
 	// own gray keeps the empty track inside the palette.
-	p.EmptyColor = colorGray
+	p.EmptyColor = s.colorGray
 	return p.ViewAs(frac)
 }
 

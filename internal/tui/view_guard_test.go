@@ -67,7 +67,7 @@ func guardModel(tb testing.TB, v frameVariant) model {
 	}
 	if v.playing {
 		// One browse row carries the now-playing glyph.
-		nowPlayingContextURI = "spotify:playlist:pl3"
+		m.setNowPlaying("spotify:playlist:pl3")
 	}
 	m.browse.playlistList.SetItems(items)
 	m.browse.albumList.SetItems(items[:20])
@@ -116,7 +116,7 @@ func guardModel(tb testing.TB, v frameVariant) model {
 		}
 		m.ui.trackPopupItems = items
 		_, listW, listH := popupModalSize(v.width, v.height)
-		popup := list.New(nil, newTrackPopupDelegate(), listW, listH)
+		popup := list.New(nil, newTrackPopupDelegate(m.styles, m.nowPlaying), listW, listH)
 		popup.SetShowTitle(false)
 		popup.SetShowStatusBar(true)
 		popup.SetFilteringEnabled(true)
@@ -164,14 +164,17 @@ func TestViewFrameContract(t *testing.T) {
 }
 
 func TestViewFrameContractAllThemes(t *testing.T) {
-	t.Cleanup(func() { applyTheme(themePresetState("default")) })
 	sizes := [][2]int{{40, 12}, {120, 40}}
 	for _, themeName := range themeRegistryNames() {
-		applyTheme(themePresetState(themeName))
 		for _, size := range sizes {
 			for _, tb := range []tab{tabPlaylists, tabAlbums, tabPlayer} {
 				variant := frameVariant{name: themeName, width: size[0], height: size[1], tab: tb, hasQueue: true}
 				m := guardModel(t, variant)
+				// Swap the bundle after construction and retheme the
+				// lists, so every row (including delegates) renders in
+				// the theme under test — not just the chrome.
+				m.styles = buildThemeStyles(themePresetState(themeName))
+				m.rethemeBrowseLists()
 				name := fmt.Sprintf("%dx%d/%s/%s", size[0], size[1], themeName, tabName(variant.tab))
 				assertFrameContract(t, name, m.View().Content, variant.width, variant.height)
 			}
@@ -180,18 +183,18 @@ func TestViewFrameContractAllThemes(t *testing.T) {
 }
 
 func TestViewFrameContractBackgroundModes(t *testing.T) {
-	t.Cleanup(func() { applyTheme(themePresetState("default")) })
 	sizes := [][2]int{{60, 20}, {120, 40}}
 	for _, style := range backgroundStyleChoices {
 		for _, size := range sizes {
 			for _, tb := range []tab{tabPlaylists, tabAlbums, tabPlayer} {
 				variant := frameVariant{name: "bg-" + style, width: size[0], height: size[1], tab: tb, hasQueue: true}
 				m := guardModel(t, variant)
-				// The style applies after construction: newModel re-applies
-				// the stored theme, and View reads the package styles live.
+				// Styles live on the model: swap the bundle and
+				// retheme the lists before rendering.
 				st := themePresetState("default")
 				st.backgrounds.Style = style
-				applyTheme(st)
+				m.styles = buildThemeStyles(st)
+				m.rethemeBrowseLists()
 				name := fmt.Sprintf("%dx%d/bg-%s/%s", size[0], size[1], style, tabName(variant.tab))
 				assertFrameContract(t, name, m.View().Content, variant.width, variant.height)
 			}

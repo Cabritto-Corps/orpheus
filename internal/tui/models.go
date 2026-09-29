@@ -92,6 +92,13 @@ type model struct {
 	contextTracksCh chan<- librespot.ContextTracksResult
 	ldr             *loader.BackgroundLoader
 
+	// styles is the fully-built theme bundle, swapped wholesale on every
+	// theme change; nowPlaying is the shared context-URI pointer the list
+	// delegates read so the now-playing marker follows track changes.
+	// Both are pointers so bubbletea's by-value model copies stay coherent.
+	styles     *themeStyles
+	nowPlaying *string
+
 	transport transportModel
 	browse    browseModel
 	ui        uiModel

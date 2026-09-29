@@ -109,25 +109,30 @@ func TestMinimalPresetUsesANSIAndNoColor(t *testing.T) {
 	}
 }
 
-func TestApplyThemeAppliesAndIsIdempotent(t *testing.T) {
+func TestBuildThemeStylesAppliesAndIsIdempotent(t *testing.T) {
 	colors := loadThemeColors("minimal", "")
 	state := themeState{colors: colors}
-	applyTheme(state)
-	if colorBlue != lipgloss.Color("7") {
-		t.Fatalf("minimal blue not applied, got %v", colorBlue)
+	first := buildThemeStyles(state)
+	if first.colorBlue != lipgloss.Color("7") {
+		t.Fatalf("minimal blue not applied, got %v", first.colorBlue)
 	}
-	first := colorGray
-	applyTheme(state)
-	if colorGray != first {
-		t.Fatal("applyTheme is not idempotent")
+	second := buildThemeStyles(state)
+	if second.colorGray != first.colorGray {
+		t.Fatal("buildThemeStyles is not idempotent")
+	}
+	if second.tabBar == first.tabBar || second.placeholder == first.placeholder {
+		t.Fatal("bundles must not share memo caches")
 	}
 
-	applyTheme(themePresetState("default"))
-	if c := lipgloss.Color("#4A90D9"); colorBlue != c {
-		t.Fatalf("default restore drifted, colorBlue = %v", colorBlue)
+	def := buildThemeStyles(themePresetState("default"))
+	if c := lipgloss.Color("#4A90D9"); def.colorBlue != c {
+		t.Fatalf("default drifted, colorBlue = %v", def.colorBlue)
 	}
-	if colorGray == first {
-		t.Fatal("restoring default theme produced no color change")
+	if def.colorGray == first.colorGray {
+		t.Fatal("building default theme produced no color change")
+	}
+	if first.colorBlue != lipgloss.Color("7") {
+		t.Fatal("building a second bundle mutated the first")
 	}
 }
 
@@ -221,11 +226,9 @@ func TestThemeJSONInvalidBackgroundStyleIgnored(t *testing.T) {
 }
 
 // TestThemeOptionsBackgroundCycleReachesAllStyles walks the Backgrounds
-// editor row through every choice: each step must live-preview (the
-// package style follows the pending draft) and a full cycle returns to
-// the start.
+// editor row through every choice: each step must live-preview (the model
+// bundle follows the pending draft) and a full cycle returns to the start.
 func TestThemeOptionsBackgroundCycleReachesAllStyles(t *testing.T) {
-	t.Cleanup(func() { applyTheme(themePresetState("default")) })
 	m, _, _, _ := newSettingsTestModel(t)
 	m.openThemeOptions()
 	m.ui.settings.optionsCursor = 3
@@ -236,7 +239,7 @@ func TestThemeOptionsBackgroundCycleReachesAllStyles(t *testing.T) {
 		m = next.(model)
 		style := m.ui.settings.themeStatePending.backgrounds.Style
 		seen[style] = true
-		if activeBackgrounds.Style != style {
+		if m.styles.activeBackgrounds.Style != style {
 			t.Fatalf("preview did not apply cycled style %q", style)
 		}
 	}

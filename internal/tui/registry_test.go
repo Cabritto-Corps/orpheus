@@ -89,11 +89,12 @@ func TestThemeChangePreservesBrowseListState(t *testing.T) {
 
 func TestHintLineRespectsWidth(t *testing.T) {
 	k := newKeys()
+	st := buildThemeStyles(themePresetState("default"))
 	// 14 is the floor modalGeometry produces (16-wide box minus inset):
 	// below it bubbles' ShortHelpView stops truncating because the
 	// ellipsis itself no longer fits, so narrower widths are out of contract.
 	for _, width := range []int{14, 20, 40, 80} {
-		out := hintLine([]key.Binding{k.Select, k.Filter, k.CloseModal, k.ToggleHelp, k.Quit}, width)
+		out := st.hintLine([]key.Binding{k.Select, k.Filter, k.CloseModal, k.ToggleHelp, k.Quit}, width)
 		if w := lipgloss.Width(out); w > width {
 			t.Fatalf("width %d: hint %d wide: %q", width, w, out)
 		}

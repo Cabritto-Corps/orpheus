@@ -12,7 +12,7 @@ import (
 func (m model) playlistsTabView() string {
 	layout := m.bodyLayout()
 	left := m.coverPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
-	divider := verticalDivider(layout.bodyH)
+	divider := m.styles.verticalDivider(layout.bodyH)
 	right := m.playlistBrowserPanel(layout.rightW, layout.bodyH)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
@@ -20,27 +20,27 @@ func (m model) playlistsTabView() string {
 
 func (m model) playlistBrowserPanel(w, h int) string {
 	count := len(m.browse.playlistList.Items())
-	label := styleSectionLabel.Render("Playlists")
-	countStr := styleDimmed.Render(fmt.Sprintf("%d playlists", count))
-	labelLine := label + "\n" + countStr + "\n" + sectionDivider(w-1)
+	label := m.styles.styleSectionLabel.Render("Playlists")
+	countStr := m.styles.styleDimmed.Render(fmt.Sprintf("%d playlists", count))
+	labelLine := label + "\n" + countStr + "\n" + m.styles.sectionDivider(w-1)
 
 	var inner string
 	if m.browse.playlistsErr != nil && len(m.browse.playlistList.Items()) == 0 {
 		errStr := "failed to load: " + m.browse.playlistsErr.Error()
 		rateHint := ""
 		if strings.Contains(m.browse.playlistsErr.Error(), "429") || strings.Contains(strings.ToLower(m.browse.playlistsErr.Error()), "rate limit") {
-			rateHint = "\n" + styleDimmed.Render("Run 'orpheus auth login' to use your own API quota.")
+			rateHint = "\n" + m.styles.styleDimmed.Render("Run 'orpheus auth login' to use your own API quota.")
 		}
-		inner = styleError.Render(truncate(errStr, w-2)) + rateHint + "\n" + styleDimmed.Render("r to retry")
+		inner = m.styles.styleError.Render(truncate(errStr, w-2)) + rateHint + "\n" + m.styles.styleDimmed.Render("r to retry")
 	} else if m.browse.playlistsLoading && len(m.browse.playlistList.Items()) == 0 {
-		inner = styleDimmed.Render(m.ui.spinner.View() + " loading library...")
+		inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " loading library...")
 	} else if len(m.browse.playlistList.Items()) == 0 {
-		inner = styleDimmed.Render("No playlists yet — press r to refresh")
+		inner = m.styles.styleDimmed.Render("No playlists yet — press r to refresh")
 	} else {
 		inner = m.browse.playlistList.View()
 	}
 	if m.browse.albumsForbidden {
-		inner += "\n" + styleDimmed.Render("saved albums unavailable: re-run 'orpheus auth login' (needs user-library-read)")
+		inner += "\n" + m.styles.styleDimmed.Render("saved albums unavailable: re-run 'orpheus auth login' (needs user-library-read)")
 	}
 
 	if m.transport.playbackErr != nil {
@@ -52,7 +52,7 @@ func (m model) playlistBrowserPanel(w, h int) string {
 		if diag.NextStep != "" {
 			errLine += " — " + diag.NextStep
 		}
-		inner = inner + "\n" + styleError.Render(truncate(errLine, max(12, w-2)))
+		inner = inner + "\n" + m.styles.styleError.Render(truncate(errLine, max(12, w-2)))
 	}
 
 	content := labelLine + "\n" + inner
@@ -60,8 +60,8 @@ func (m model) playlistBrowserPanel(w, h int) string {
 }
 
 func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
-	label := styleSectionLabel.Render("Preview")
-	labelLine := label + "\n" + sectionDivider(w)
+	label := m.styles.styleSectionLabel.Render("Preview")
+	labelLine := label + "\n" + m.styles.sectionDivider(w)
 	innerW := w - 2
 
 	var coverStr string
@@ -79,10 +79,10 @@ func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
 			ownerLine = "album by " + truncate(pl.summary.Owner, innerW)
 		}
 		meta = "\n" +
-			stylePlaylistName.Render(truncate(pl.summary.Name, innerW)) + "\n" +
-			stylePlaylistOwner.Render(ownerLine)
+			m.styles.stylePlaylistName.Render(truncate(pl.summary.Name, innerW)) + "\n" +
+			m.styles.stylePlaylistOwner.Render(ownerLine)
 	} else {
-		meta = "\n" + styleDimmed.Render("select an item")
+		meta = "\n" + m.styles.styleDimmed.Render("select an item")
 	}
 
 	content := labelLine + "\n" + coverStr + meta
@@ -92,7 +92,7 @@ func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
 func (m model) playbackScreenView() string {
 	layout := m.bodyLayout()
 	left := m.albumCoverPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
-	divider := verticalDivider(layout.bodyH)
+	divider := m.styles.verticalDivider(layout.bodyH)
 	right := m.queuePanel(layout.rightW, layout.bodyH)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
@@ -101,7 +101,7 @@ func (m model) playbackScreenView() string {
 func (m model) albumsTabView() string {
 	layout := m.bodyLayout()
 	left := m.albumPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
-	divider := verticalDivider(layout.bodyH)
+	divider := m.styles.verticalDivider(layout.bodyH)
 	right := m.albumBrowserPanel(layout.rightW, layout.bodyH)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
@@ -109,20 +109,20 @@ func (m model) albumsTabView() string {
 
 func (m model) albumBrowserPanel(w, h int) string {
 	count := len(m.browse.albumList.Items())
-	label := styleSectionLabel.Render("Albums")
-	countStr := styleDimmed.Render(fmt.Sprintf("%d albums", count))
-	labelLine := label + "\n" + countStr + "\n" + sectionDivider(w-1)
+	label := m.styles.styleSectionLabel.Render("Albums")
+	countStr := m.styles.styleDimmed.Render(fmt.Sprintf("%d albums", count))
+	labelLine := label + "\n" + countStr + "\n" + m.styles.sectionDivider(w-1)
 
 	var inner string
 	if m.browse.playlistsErr != nil && len(m.browse.albumList.Items()) == 0 {
 		errStr := "failed to load: " + m.browse.playlistsErr.Error()
-		inner = styleError.Render(truncate(errStr, w-2)) + "\n" + styleDimmed.Render("r to retry")
+		inner = m.styles.styleError.Render(truncate(errStr, w-2)) + "\n" + m.styles.styleDimmed.Render("r to retry")
 	} else if m.browse.playlistsLoading && len(m.browse.albumList.Items()) == 0 {
-		inner = styleDimmed.Render(m.ui.spinner.View() + " loading albums...")
+		inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " loading albums...")
 	} else if m.browse.albumsForbidden && len(m.browse.albumList.Items()) == 0 {
-		inner = styleDimmed.Render("saved albums unavailable — re-run 'orpheus auth login' (needs user-library-read)")
+		inner = m.styles.styleDimmed.Render("saved albums unavailable — re-run 'orpheus auth login' (needs user-library-read)")
 	} else if len(m.browse.albumList.Items()) == 0 {
-		inner = styleDimmed.Render("No saved albums yet — press r to refresh")
+		inner = m.styles.styleDimmed.Render("No saved albums yet — press r to refresh")
 	} else {
 		inner = m.browse.albumList.View()
 	}
@@ -132,8 +132,8 @@ func (m model) albumBrowserPanel(w, h int) string {
 }
 
 func (m model) albumPreviewPanel(w, h, coverCols, coverRows int) string {
-	label := styleSectionLabel.Render("Preview")
-	labelLine := label + "\n" + sectionDivider(w)
+	label := m.styles.styleSectionLabel.Render("Preview")
+	labelLine := label + "\n" + m.styles.sectionDivider(w)
 	innerW := w - 2
 
 	var coverStr string
@@ -147,10 +147,10 @@ func (m model) albumPreviewPanel(w, h, coverCols, coverRows int) string {
 	meta := ""
 	if alOk {
 		meta = "\n" +
-			stylePlaylistName.Render(truncate(al.summary.Name, innerW)) + "\n" +
-			stylePlaylistOwner.Render("album by "+truncate(al.summary.Owner, innerW))
+			m.styles.stylePlaylistName.Render(truncate(al.summary.Name, innerW)) + "\n" +
+			m.styles.stylePlaylistOwner.Render("album by "+truncate(al.summary.Owner, innerW))
 	} else {
-		meta = "\n" + styleDimmed.Render("select an album")
+		meta = "\n" + m.styles.styleDimmed.Render("select an album")
 	}
 
 	content := labelLine + "\n" + coverStr + meta
@@ -158,8 +158,8 @@ func (m model) albumPreviewPanel(w, h, coverCols, coverRows int) string {
 }
 
 func (m model) albumCoverPanel(w, h, coverCols, coverRows int) string {
-	label := styleSectionLabel.Render("Now Playing")
-	labelLine := label + "\n" + sectionDivider(w-1)
+	label := m.styles.styleSectionLabel.Render("Now Playing")
+	labelLine := label + "\n" + m.styles.sectionDivider(w-1)
 	innerW := w - 2
 
 	var coverStr string
@@ -181,13 +181,13 @@ func (m model) albumCoverPanel(w, h, coverCols, coverRows int) string {
 			artistName = "-"
 		}
 		meta = "\n" +
-			styleTrackName.Render(truncate(trackName, innerW)) + "\n" +
-			styleArtistName.Render(truncate(artistName, innerW))
+			m.styles.styleTrackName.Render(truncate(trackName, innerW)) + "\n" +
+			m.styles.styleArtistName.Render(truncate(artistName, innerW))
 		if albumName != "" {
-			meta += "\n" + styleAlbumName.Render(truncate(albumName, innerW))
+			meta += "\n" + m.styles.styleAlbumName.Render(truncate(albumName, innerW))
 		}
 	} else {
-		meta = "\n" + styleDimmed.Render("nothing playing")
+		meta = "\n" + m.styles.styleDimmed.Render("nothing playing")
 	}
 
 	content := labelLine + "\n" + coverStr + meta
@@ -195,12 +195,12 @@ func (m model) albumCoverPanel(w, h, coverCols, coverRows int) string {
 }
 
 func (m model) queuePanel(w, h int) string {
-	label := styleSectionLabel.Render("Up Next")
-	divLine := sectionDivider(w)
+	label := m.styles.styleSectionLabel.Render("Up Next")
+	divLine := m.styles.sectionDivider(w)
 
 	grid := queueGridFor(w)
-	colHeader := grid.header()
-	colDivider := sectionDivider(w)
+	colHeader := grid.header(m.styles)
+	colDivider := m.styles.sectionDivider(w)
 
 	headerLines := 4 // label, divider, column header, divider
 	errLines := 0
@@ -214,12 +214,12 @@ func (m model) queuePanel(w, h int) string {
 	displayQueue := m.visibleQueue()
 
 	if m.transport.status == nil {
-		lines = append(lines, styleDimmed.Render("  nothing playing"))
+		lines = append(lines, m.styles.styleDimmed.Render("  nothing playing"))
 	}
 
 	if len(displayQueue) == 0 {
 		if m.transport.status != nil {
-			lines = append(lines, styleDimmed.Render("  queue is empty"))
+			lines = append(lines, m.styles.styleDimmed.Render("  queue is empty"))
 		}
 	} else {
 		maxRows := max(0, rowBudget-1) // reserve the "+ more" line
@@ -232,7 +232,7 @@ func (m model) queuePanel(w, h int) string {
 		for i := range window {
 			qi := start + i
 			q := displayQueue[qi]
-			row := grid.row(w, qi+1, q.Name, q.Artist, q.DurationMS, qi == cursor)
+			row := grid.row(m.styles, w, qi+1, q.Name, q.Artist, q.DurationMS, qi == cursor)
 			lines = append(lines, row)
 		}
 
@@ -246,7 +246,7 @@ func (m model) queuePanel(w, h int) string {
 			if notVisible > 0 && !m.transport.queueHasMore {
 				marker = fmt.Sprintf("+ %d more", notVisible)
 			}
-			lines = append(lines, styleDimmed.Render("  "+marker))
+			lines = append(lines, m.styles.styleDimmed.Render("  "+marker))
 		}
 	}
 
@@ -259,7 +259,7 @@ func (m model) queuePanel(w, h int) string {
 		if diag.NextStep != "" {
 			errLine += " — " + diag.NextStep
 		}
-		lines = append(lines, "", styleError.Render(truncate(errLine, max(12, w-2))))
+		lines = append(lines, "", m.styles.styleError.Render(truncate(errLine, max(12, w-2))))
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
@@ -274,11 +274,11 @@ func (m model) coverOrPlaceholder(url string, cols, rows int) string {
 	if m.ui.imgs == nil {
 		return m.placeholderArt(cols, rows)
 	}
-	framed := coverFrameFits(cols, rows)
+	framed := m.styles.coverFrameFits(cols, rows)
 	if m.ui.imgs.protocolForRender() == imageProtocolKitty {
 		if m.ui.imgs.hasKittyEncoding(url) {
 			if framed {
-				return coverFrameBox(cols, rows)
+				return m.styles.coverFrameBox(cols, rows)
 			}
 			return m.blankArt(cols, rows)
 		}
@@ -292,7 +292,7 @@ func (m model) coverOrPlaceholder(url string, cols, rows int) string {
 	}
 	if s, ok := m.ui.imgs.cover(url, artCols, artRows); ok {
 		if framed {
-			return coverFrameBoxWith(s, cols, rows)
+			return m.styles.coverFrameBoxWith(s, cols, rows)
 		}
 		return s
 	}
@@ -301,15 +301,15 @@ func (m model) coverOrPlaceholder(url string, cols, rows int) string {
 
 // coverFrameBox renders the frame with an empty interior: the kitty image
 // is placed over the blank inner cells at the inset offset.
-func coverFrameBox(cols, rows int) string {
-	return coverFrameBoxWith(strings.Repeat(" ", cols-2), cols, rows)
+func (s *themeStyles) coverFrameBox(cols, rows int) string {
+	return s.coverFrameBoxWith(strings.Repeat(" ", cols-2), cols, rows)
 }
 
-func coverFrameBoxWith(art string, cols, rows int) string {
-	border, _ := coverFrameBorder()
+func (s *themeStyles) coverFrameBoxWith(art string, cols, rows int) string {
+	border, _ := s.coverFrameBorder()
 	return lipgloss.NewStyle().
 		Border(border).
-		BorderForeground(colorBlue).
+		BorderForeground(s.colorBlue).
 		Width(cols - 2).
 		Height(rows - 2).
 		Render(art)
@@ -333,18 +333,18 @@ func (m model) placeholderArt(cols, rows int) string {
 	if cols <= 2 || rows <= 2 {
 		return ""
 	}
-	key := placeholderCacheKey{cols, rows, themeEpoch}
-	if cached, ok := placeholderCache.get(key); ok {
+	key := placeholderCacheKey{cols, rows}
+	if cached, ok := m.styles.placeholder.get(key); ok {
 		return cached
 	}
 	// Border accounts for its own 2 cells: Width/Height size the content.
 	out := lipgloss.NewStyle().
-		Border(themeBorder()).
-		BorderForeground(colorDivider).
+		Border(m.styles.themeBorder()).
+		BorderForeground(m.styles.colorDivider).
 		Width(cols - 2).
 		Height(rows - 2).
 		Render("")
-	placeholderCache.put(key, out)
+	m.styles.placeholder.put(key, out)
 	return out
 }
 
@@ -376,19 +376,19 @@ func queueGridFor(w int) queueGrid {
 	return g
 }
 
-func (g queueGrid) header() string {
+func (g queueGrid) header(s *themeStyles) string {
 	var b strings.Builder
-	b.WriteString(styleQueueHeader.Render(strings.Repeat(" ", g.lead+g.idxW+1) + padCell("Title", g.titleW)))
+	b.WriteString(s.styleQueueHeader.Render(strings.Repeat(" ", g.lead+g.idxW+1) + padCell("Title", g.titleW)))
 	if g.artistW > 0 {
-		b.WriteString("  " + styleQueueHeader.Render(padCell("Artist", g.artistW)))
+		b.WriteString("  " + s.styleQueueHeader.Render(padCell("Artist", g.artistW)))
 	}
-	b.WriteString(" " + styleQueueHeader.Render(alignRight("Len", g.durW)))
+	b.WriteString(" " + s.styleQueueHeader.Render(alignRight("Len", g.durW)))
 	return b.String()
 }
 
 // row renders one queue row: unstyled cells padded to the grid, then exactly
 // one style applied over the whole padded row (single-owner selection).
-func (g queueGrid) row(w, num int, title, artist string, durMS int, selected bool) string {
+func (g queueGrid) row(s *themeStyles, w, num int, title, artist string, durMS int, selected bool) string {
 	name := truncate(title, g.titleW)
 	artist = truncate(artist, g.artistW)
 	dur := ""
@@ -414,11 +414,11 @@ func (g queueGrid) row(w, num int, title, artist string, durMS int, selected boo
 	}
 	switch {
 	case selected && w >= 40:
-		return styleQueueSelected.Render(row)
+		return s.styleQueueSelected.Render(row)
 	case selected:
 		content := truncate(strings.TrimRight(row, " "), max(1, w-3))
-		return styleQueueCursor.Render(content + " > ")
+		return s.styleQueueCursor.Render(content + " > ")
 	default:
-		return styleQueueTrack.Render(row)
+		return s.styleQueueTrack.Render(row)
 	}
 }

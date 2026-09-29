@@ -47,19 +47,18 @@ func withPaintTestModel(t *testing.T, w, h int) model {
 }
 
 // withPaintTestModelStyle renders under one background mode: solid is
-// the shipped default, transparent the unpainted one. The theme is restored afterwards so mode switches never
-// leak between tests (newModel re-applies the stored theme anyway).
+// the shipped default, transparent the unpainted one. Styles live on the
+// returned model, so mode switches cannot leak between tests.
 func withPaintTestModelStyle(t *testing.T, w, h int, style string) model {
 	t.Helper()
 	m, _, _, _ := newSettingsTestModel(t)
 	st := themePresetState("default")
 	st.backgrounds.Style = style
-	applyTheme(st)
+	m.styles = buildThemeStyles(st)
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "0")
 	t.Cleanup(func() {
 		t.Setenv("NO_COLOR", "1")
-		applyTheme(themePresetState("default"))
 	})
 	m.ui.width = w
 	m.ui.height = h
@@ -133,7 +132,7 @@ func TestFramePaintNeverLosesBackground(t *testing.T) {
 func TestTransparentFramePaintsNoPageBackground(t *testing.T) {
 	m := withPaintTestModelStyle(t, 100, 40, "transparent")
 	out := m.View().Content
-	pageSeq := bgSequence(colorPage)
+	pageSeq := bgSequence(m.styles.colorPage)
 	if pageSeq == "" {
 		t.Fatal("need TrueColor background sequences")
 	}
@@ -144,7 +143,7 @@ func TestTransparentFramePaintsNoPageBackground(t *testing.T) {
 	// sequence — lipgloss merges the tab highlight's fg+bg into one
 	// combined sequence (the TestSelectedRowKeepsHighlightThroughFragments
 	// pattern).
-	if dimParams := strings.TrimPrefix(bgSequence(colorDimBlue), "\x1b["); !strings.Contains(out, dimParams) {
+	if dimParams := strings.TrimPrefix(bgSequence(m.styles.colorDimBlue), "\x1b["); !strings.Contains(out, dimParams) {
 		t.Fatal("transparent frame lost the active-tab highlight")
 	}
 }
@@ -163,10 +162,10 @@ func TestTransparentModalKeepsChrome(t *testing.T) {
 	if !strings.Contains(out, "╭") && !strings.Contains(out, "┌") {
 		t.Fatal("transparent modal lost its border")
 	}
-	if !strings.Contains(out, bgSequence(colorSelectionBg)) {
+	if !strings.Contains(out, bgSequence(m.styles.colorSelectionBg)) {
 		t.Fatal("transparent modal lost the selection highlight")
 	}
-	if strings.Contains(out, bgSequence(colorPage)) {
+	if strings.Contains(out, bgSequence(m.styles.colorPage)) {
 		t.Fatal("transparent modal paints the page background")
 	}
 }
@@ -176,10 +175,11 @@ func TestSelectedRowKeepsHighlightThroughFragments(t *testing.T) {
 	t.Setenv("NO_COLOR", "0")
 
 	// a styled fragment inside a selected row, like the real gauge bar
-	row := "Crossfade|" + lipgloss.NewStyle().Foreground(colorBlue).Render("██████") + "|end"
-	out := modalRow(row, "", true, 96)
+	st := buildThemeStyles(themePresetState("default"))
+	row := "Crossfade|" + lipgloss.NewStyle().Foreground(st.colorBlue).Render("██████") + "|end"
+	out := st.modalRow(row, "", true, 96)
 
-	selBg := bgSequence(colorSelectionBg)
+	selBg := bgSequence(st.colorSelectionBg)
 	selParams := strings.TrimPrefix(selBg, "\x1b[")
 	reset := "\x1b[0m"
 	if !strings.Contains(out[:80], selParams) {
@@ -215,7 +215,7 @@ func TestTrackPopupPaintNeverLosesBackground(t *testing.T) {
 		m.ui.trackPopupName = "Some Playlist"
 		m.ui.trackPopupItems = items
 		_, listW, listH := popupModalSize(m.ui.width, m.ui.height)
-		m.ui.trackPopupList = newTrackPopupList(m.ui.width, m.ui.height)
+		m.ui.trackPopupList = newTrackPopupList(m.styles, m.nowPlaying, m.ui.width, m.ui.height)
 		m.ui.trackPopupList.SetSize(listW, listH)
 		listItems := make([]list.Item, 0, len(items))
 		for _, it := range items {
