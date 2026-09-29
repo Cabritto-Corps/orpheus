@@ -63,6 +63,23 @@ func TestLoadKeyOverridesUnknownKeyFallsBack(t *testing.T) {
 	}
 }
 
+// TestIsPlausibleKeyNameV2Forms pins the loader vocabulary after the v2
+// migration: canonical modifier combos and legacy aliases load, while
+// garbage still drops. Function keys stay unloadable from keys.json —
+// they never loaded there, and that surface is out of scope here.
+func TestIsPlausibleKeyNameV2Forms(t *testing.T) {
+	for _, name := range []string{"shift+up", "alt+x", "ctrl+shift+enter", "escape", "return", " ", "space", "+"} {
+		if !isPlausibleKeyName(name) {
+			t.Fatalf("%q must load", name)
+		}
+	}
+	for _, name := range []string{"", "mode_broken", "ctrl+", "f24"} {
+		if isPlausibleKeyName(name) {
+			t.Fatalf("%q must not load", name)
+		}
+	}
+}
+
 func TestLoadKeyOverridesEmptyListKeepsDefault(t *testing.T) {
 	if overrides := LoadKeys(writeKeysFile(t, `{"next": []}`)); len(overrides) != 0 {
 		t.Fatalf("empty key list must keep the default binding, got %v", overrides)

@@ -3,8 +3,11 @@ package tui
 import (
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -228,4 +231,237 @@ func joinTopAligned(cols ...[]string) string {
 		out = lipgloss.JoinHorizontal(lipgloss.Top, out, "    ", b)
 	}
 	return out
+}
+
+// Key identity helpers.
+//
+// Dispatch matches keys by v2 identity (modifier flags + base code) instead
+// of comparing rendered strings: each binding string is reduced to the same
+// identity as the pressed key, so aliases ("esc"/"escape",
+// "enter"/"return", " "/"space") and out-of-order modifier lists
+// ("shift+ctrl" vs "ctrl+shift") resolve to one key.
+
+// isQuitSignal is the single guaranteed-quit check: structually Ctrl+C and
+// nothing else. The rebindable quit binding (which also carries "q") must
+// not punch through modals or key capture, so this deliberately does not
+// consult the registry.
+func isQuitSignal(msg tea.KeyPressMsg) bool {
+	k := msg.Key()
+	if k.Mod&tea.ModCtrl == 0 {
+		return false
+	}
+	return k.Code == 'c' || k.Code == 'C' || k.Text == "c" || k.Text == "C"
+}
+
+// isCancelPress and isConfirmPress are the key-capture control keys by
+// identity, so they hold however the close and select actions are rebound.
+func isCancelPress(msg tea.KeyPressMsg) bool {
+	return msg.Key().Code == tea.KeyEscape
+}
+
+func isConfirmPress(msg tea.KeyPressMsg) bool {
+	return msg.Key().Code == tea.KeyEnter
+}
+
+// isModifierCode reports the bare left/right modifier keys, which carry
+// no base key and can never match a binding on their own.
+func isModifierCode(code rune) bool {
+	switch code {
+	case tea.KeyLeftShift, tea.KeyRightShift,
+		tea.KeyLeftAlt, tea.KeyRightAlt,
+		tea.KeyLeftCtrl, tea.KeyRightCtrl,
+		tea.KeyLeftSuper, tea.KeyRightSuper,
+		tea.KeyLeftHyper, tea.KeyRightHyper,
+		tea.KeyLeftMeta, tea.KeyRightMeta:
+		return true
+	}
+	return false
+}
+
+// keySpecModifiers is the canonical modifier vocabulary, in the order v2
+// renders keystrokes.
+var keySpecModifiers = []struct {
+	name string
+	mod  tea.KeyMod
+}{
+	{"ctrl", tea.ModCtrl},
+	{"alt", tea.ModAlt},
+	{"shift", tea.ModShift},
+	{"meta", tea.ModMeta},
+	{"hyper", tea.ModHyper},
+	{"super", tea.ModSuper},
+	{"capslock", tea.ModCapsLock},
+	{"scrolllock", tea.ModScrollLock},
+	{"numlock", tea.ModNumLock},
+}
+
+// keySpecBaseCode maps the named bases a binding string may carry. Aliases
+// share a code, so they match the same press.
+func keySpecBaseCode(name string) (rune, bool) {
+	switch name {
+	case "enter", "return":
+		return tea.KeyEnter, true
+	case "tab":
+		return tea.KeyTab, true
+	case "esc", "escape":
+		return tea.KeyEscape, true
+	case "space":
+		return tea.KeySpace, true
+	case "up":
+		return tea.KeyUp, true
+	case "down":
+		return tea.KeyDown, true
+	case "left":
+		return tea.KeyLeft, true
+	case "right":
+		return tea.KeyRight, true
+	case "home":
+		return tea.KeyHome, true
+	case "end":
+		return tea.KeyEnd, true
+	case "pgup":
+		return tea.KeyPgUp, true
+	case "pgdown":
+		return tea.KeyPgDown, true
+	case "delete":
+		return tea.KeyDelete, true
+	case "backspace":
+		return tea.KeyBackspace, true
+	case "insert":
+		return tea.KeyInsert, true
+	}
+	return 0, false
+}
+
+// keyBaseName renders a base code back to its canonical binding name.
+func keyBaseName(code rune) (string, bool) {
+	switch code {
+	case tea.KeyEnter:
+		return "enter", true
+	case tea.KeyTab:
+		return "tab", true
+	case tea.KeyEscape:
+		return "esc", true
+	case tea.KeyUp:
+		return "up", true
+	case tea.KeyDown:
+		return "down", true
+	case tea.KeyLeft:
+		return "left", true
+	case tea.KeyRight:
+		return "right", true
+	case tea.KeyHome:
+		return "home", true
+	case tea.KeyEnd:
+		return "end", true
+	case tea.KeyPgUp:
+		return "pgup", true
+	case tea.KeyPgDown:
+		return "pgdown", true
+	case tea.KeyDelete:
+		return "delete", true
+	case tea.KeyBackspace:
+		return "backspace", true
+	case tea.KeyInsert:
+		return "insert", true
+	}
+	return "", false
+}
+
+// parseKeySpec reduces one binding string to v2 key identity: modifier
+// flags plus a base code, with the printable text the identity implies.
+// ok=false means the string names no key (loaders drop it).
+func parseKeySpec(spec string) (mod tea.KeyMod, code rune, text string, ok bool) {
+	if spec == "" {
+		return 0, 0, "", false
+	}
+	parts := strings.Split(spec, "+")
+	base := parts[len(parts)-1]
+	modParts := parts[:len(parts)-1]
+	if base == "" {
+		// A trailing "+" means the bound key itself is "+": the lone
+		// "+", or "ctrl++" (the real separator is the previous one).
+		// A lone separator with a named head ("ctrl+") has no key.
+		if len(parts) == 2 && parts[0] != "" {
+			return 0, 0, "", false
+		}
+		base = "+"
+		modParts = parts[:len(parts)-2]
+	}
+	for _, part := range modParts {
+		found := false
+		for _, m := range keySpecModifiers {
+			if part == m.name {
+				mod |= m.mod
+				found = true
+				break
+			}
+		}
+		if !found {
+			return 0, 0, "", false
+		}
+	}
+	if base == " " {
+		code = tea.KeySpace
+	} else if c, named := keySpecBaseCode(base); named {
+		code = c
+	} else if utf8.RuneCountInString(base) == 1 {
+		code, _ = utf8.DecodeRuneInString(base)
+	} else {
+		return 0, 0, "", false
+	}
+	// Printable bases imply their text unless another modifier rides
+	// along — mirrors ultraviolet's matcher so "shift+j" still matches
+	// a "J" press reported without modifier flags.
+	if rest := mod &^ (tea.ModShift | tea.ModCapsLock); rest == 0 && text == "" && unicode.IsPrint(code) {
+		if mod&(tea.ModShift|tea.ModCapsLock) != 0 {
+			text = string(unicode.ToUpper(code))
+		} else {
+			text = string(code)
+		}
+	}
+	return mod, code, text, true
+}
+
+// matchKeySpec compares a pressed key against one binding string by
+// identity: same modifiers and base code, or (for printable keys) the
+// same reported text.
+func matchKeySpec(k tea.Key, spec string) bool {
+	mod, code, text, ok := parseKeySpec(spec)
+	if !ok {
+		return false
+	}
+	return (k.Mod == mod && k.Code == code) || (k.Text != "" && k.Text == text)
+}
+
+// canonicalKeySpec re-emits a binding string in canonical form (modifiers
+// in keystroke order, aliases folded) for comparisons. Unparseable specs
+// pass through unchanged.
+func canonicalKeySpec(spec string) string {
+	mod, code, _, ok := parseKeySpec(spec)
+	if !ok {
+		return spec
+	}
+	var b strings.Builder
+	for _, m := range keySpecModifiers {
+		if mod&m.mod != 0 {
+			b.WriteString(m.name)
+			b.WriteByte('+')
+		}
+	}
+	switch code {
+	case tea.KeySpace:
+		b.WriteString("space")
+	case tea.KeyEnter:
+		b.WriteString("enter")
+	case tea.KeyEscape:
+		b.WriteString("esc")
+	default:
+		if name, named := keyBaseName(code); named {
+			b.WriteString(name)
+		} else {
+			b.WriteRune(code)
+		}
+	}
+	return b.String()
 }

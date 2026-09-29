@@ -229,8 +229,14 @@ func (m model) Init() tea.Cmd {
 	)
 }
 
-func keyMatches(msg tea.KeyMsg, b key.Binding) bool {
-	return key.Matches(msg, b)
+func keyMatches(msg tea.KeyPressMsg, b key.Binding) bool {
+	k := msg.Key()
+	for _, spec := range b.Keys() {
+		if matchKeySpec(k, spec) {
+			return true
+		}
+	}
+	return false
 }
 
 func clampInt(v, lo, hi int) int {

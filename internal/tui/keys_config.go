@@ -93,24 +93,11 @@ func isPlausibleKeyName(k string) bool {
 	if k == "" {
 		return false
 	}
-	runes := []rune(k)
-	if len(runes) == 1 {
-		return true
-	}
-	switch k {
-	case " ", "space", "tab", "esc", "enter", "return", "up", "down", "left", "right",
-		"home", "end", "pgup", "pgdown", "delete", "backspace", "insert", "ctrl+c",
-		"shift+tab", "ctrl+j", "ctrl+k", "ctrl+d", "ctrl+u", "ctrl+a", "ctrl+e":
-		return true
-	}
-	if strings.HasPrefix(k, "ctrl+") || strings.HasPrefix(k, "alt+") {
-		suffix := strings.TrimPrefix(strings.TrimPrefix(k, "ctrl+"), "alt+")
-		if suffix == "" || len([]rune(suffix)) > 3 {
-			return false
-		}
-		return true
-	}
-	return false
+	// One shared parser decides what names a key: v2 identity plus the
+	// legacy aliases it folds (" "/"space", "esc"/"escape",
+	// "enter"/"return"), so loaders accept whatever dispatch matches.
+	_, _, _, ok := parseKeySpec(k)
+	return ok
 }
 
 func applyKeyOverrides(m keyMap, overrides map[string][]string) keyMap {

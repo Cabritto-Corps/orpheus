@@ -56,7 +56,7 @@ func (m model) openSettings() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSettingsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
 
 	switch s.mode {
@@ -73,7 +73,7 @@ func (m model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m model) handleSettingsRoot(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSettingsRoot(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	switch {
 	case keyMatches(msg, k.CloseModal):
@@ -95,7 +95,7 @@ func (m model) handleSettingsRoot(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleSettingsThemeOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSettingsThemeOptions(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
 	k := m.ui.keys
 	switch {
@@ -231,7 +231,7 @@ func (m model) themePreviewApply(name string) (tea.Model, tea.Cmd) {
 	return m.themeOptionsApply(resolveThemeState(name, m.cachedThemeOverrides()))
 }
 
-func (m model) handleSettingsTheme(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSettingsTheme(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
 	k := m.ui.keys
 	switch {
@@ -296,7 +296,7 @@ func (m *model) saveAppSettings() {
 	s.saveErr = ""
 }
 
-func (m model) handleSettingsKeysMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSettingsKeysMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	switch {
 	case keyMatches(msg, k.CloseModal):
@@ -317,9 +317,9 @@ func (m model) handleSettingsKeysMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleSettingsCapture(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSettingsCapture(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
-	if msg.String() == "esc" {
+	if isCancelPress(msg) {
 		s.mode = settingsModeKeys
 		s.captureKey = ""
 		s.pendingKey = ""
@@ -330,7 +330,7 @@ func (m model) handleSettingsCapture(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if s.pendingKey != "" {
 		// Two-step capture: a key is armed; enter confirms, any other key
 		// replaces the pending one, esc cancels.
-		if msg.String() == "enter" {
+		if isConfirmPress(msg) {
 			err := m.applyCapture(s.captureKey, s.pendingKey)
 			s.mode = settingsModeKeys
 			s.captureKey = ""
@@ -385,19 +385,27 @@ func (m *model) applyCapture(action, keyName string) error {
 	return nil
 }
 
-func captureKeyName(msg tea.KeyMsg) string {
-	s := msg.String()
-	// tea.KeyMsg is an interface in v2; the alt modifier lives on the
-	// concrete press. (Full key-model redesign is a later slice.)
-	if kp, ok := msg.(tea.KeyPressMsg); ok && kp.Mod&tea.ModAlt != 0 {
-		s = "alt+" + s
-	}
-	switch s {
-	case "", "enter", "esc":
+func captureKeyName(msg tea.KeyPressMsg) string {
+	k := msg.Key()
+	// Esc cancels and Enter confirms the pending rebind, so neither is
+	// capturable; identity keeps this true however the close and select
+	// actions are rebound.
+	if k.Code == tea.KeyEscape || k.Code == tea.KeyEnter {
 		return ""
 	}
-	return s
+	// A lone modifier carries no base key and can never match a binding.
+	if isModifierCode(k.Code) {
+		return ""
+	}
+	if k.Mod == 0 {
+		return msg.String()
+	}
+	// Modified keys render in canonical modifier order, so an
+	// alt-modified key never gains a second "alt+" prefix.
+	return msg.Keystroke()
 }
+
+// isModifierCode reports the bare left/right modifier keys.
 
 func keyContains(keys []string, want string) bool {
 	return slices.Contains(keys, want)

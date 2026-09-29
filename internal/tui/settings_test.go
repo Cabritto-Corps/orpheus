@@ -34,7 +34,7 @@ func newSettingsTestModel(t *testing.T) (model, string, string, string) {
 	return newModel(context.Background(), nil, cfg, nil, make(chan librespot.ContextTracksResult, 1), nil), keysPath, themePath, configPath
 }
 
-func send(m model, msg tea.KeyMsg) model {
+func send(m model, msg tea.KeyPressMsg) model {
 	next, _ := m.handleSettingsKey(msg)
 	return next.(model)
 }

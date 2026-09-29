@@ -21,7 +21,7 @@ func isQuitCmd(cmd tea.Cmd) bool {
 	return reflect.ValueOf(cmd).Pointer() == reflect.ValueOf(tea.Quit).Pointer()
 }
 
-func sendTop(m model, msg tea.KeyMsg) (model, tea.Cmd) {
+func sendTop(m model, msg tea.KeyPressMsg) (model, tea.Cmd) {
 	next, cmd := m.handleKey(msg)
 	return next.(model), cmd
 }

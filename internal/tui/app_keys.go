@@ -13,7 +13,7 @@ import (
 	"orpheus/internal/spotify"
 )
 
-func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// See syncListFilterBinding: the key-capture flow replaces m.ui.keys wholesale.
 	m.syncListFilterBinding()
 	k := m.ui.keys
@@ -21,7 +21,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// ctrl+c is quit's guaranteed key: it punches through modals, key
 	// capture and filter mode alike.
-	if msg.String() == "ctrl+c" {
+	if isQuitSignal(msg) {
 		return m, tea.Quit
 	}
 
@@ -105,7 +105,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m model) handlePlaylistKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handlePlaylistKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	if m.browse.playlistList.FilterState() == list.Filtering {
 		prevURL := selectedImageURLFromList(m.browse.playlistList)
@@ -151,7 +151,7 @@ func (m model) handlePlaylistKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m model) handleAlbumKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleAlbumKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	if m.browse.albumList.FilterState() == list.Filtering {
 		prevURL := selectedImageURLFromList(m.browse.albumList)
@@ -207,7 +207,7 @@ func (m model) isFiltering() bool {
 // handleQueueKey handles the up-next panel's interaction keys (player tab).
 // Cursor positions and command payloads use the visible-view addressing the
 // backend expects: position 0 is the entry the panel shows first.
-func (m *model) handleQueueKey(msg tea.KeyMsg) tea.Cmd {
+func (m *model) handleQueueKey(msg tea.KeyPressMsg) tea.Cmd {
 	q := m.visibleQueue()
 	if len(q) == 0 {
 		return nil
@@ -260,7 +260,7 @@ func (m *model) syncListFilterBinding() {
 	m.ui.trackPopupList.KeyMap.Filter = m.ui.keys.Filter
 }
 
-func (m model) matchGlobalPlaybackKey(msg tea.KeyMsg) playbackInputKind {
+func (m model) matchGlobalPlaybackKey(msg tea.KeyPressMsg) playbackInputKind {
 	k := m.ui.keys
 	switch {
 	case keyMatches(msg, k.VolUp):
@@ -272,7 +272,7 @@ func (m model) matchGlobalPlaybackKey(msg tea.KeyMsg) playbackInputKind {
 	}
 }
 
-func (m model) handlePlaybackKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handlePlaybackKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	if cmd := m.handleQueueKey(msg); cmd != nil {
 		return m, cmd
@@ -380,7 +380,7 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleTrackPopupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleTrackPopupKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	if m.ui.trackPopupList.FilterState() == list.Filtering {
 		// While searching inside the popup everything goes to the filter:

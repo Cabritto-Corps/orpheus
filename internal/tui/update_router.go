@@ -40,8 +40,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleTrackPopupItemsMsg(msg)
 	case list.FilterMatchesMsg:
 		return m.handleFilterMatchesMsg(msg)
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case tea.KeyReleaseMsg:
+		// Key releases carry no action: a release must never re-fire the
+		// press it follows (especially while a modal owns the keys), so
+		// releases are ignored explicitly rather than falling through.
+		return m, nil
 	default:
 		return m, nil
 	}

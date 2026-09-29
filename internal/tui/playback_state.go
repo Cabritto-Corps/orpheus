@@ -129,7 +129,7 @@ func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
 	m.syncExecutorState()
 }
 
-func (m *model) shouldBlockTransportInput(msg tea.KeyMsg) bool {
+func (m *model) shouldBlockTransportInput(msg tea.KeyPressMsg) bool {
 	if !m.transport.transition.Pending() {
 		return false
 	}

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"image/color"
-	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/help"
@@ -214,7 +213,10 @@ func keyConflictActions(k keyMap) map[string]bool {
 		}
 		filtered := make([]string, 0, len(keys))
 		for _, kk := range keys {
-			if kk == "ctrl+c" || kk == "enter" || kk == "return" {
+			// Canonical aliases fold here too, so "escape"/"return"
+			// skip the scan exactly like "esc"/"enter" do.
+			switch canonicalKeySpec(kk) {
+			case "ctrl+c", "enter", "esc":
 				continue
 			}
 			filtered = append(filtered, kk)
@@ -252,9 +254,14 @@ func sortedConflictActions(conflicts map[string]bool) []string {
 }
 
 func keyListOverlap(a, b []string) bool {
+	// Compare canonical identities so alias spellings ("esc" vs
+	// "escape") still collide.
 	for _, x := range a {
-		if slices.Contains(b, x) {
-			return true
+		cx := canonicalKeySpec(x)
+		for _, y := range b {
+			if cx == canonicalKeySpec(y) {
+				return true
+			}
 		}
 	}
 	return false
