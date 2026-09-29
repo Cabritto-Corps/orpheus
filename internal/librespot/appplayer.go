@@ -270,12 +270,16 @@ func (p *AppPlayer) handleDealerMessage(ctx context.Context, msg dealer.Message)
 		if err := proto.Unmarshal(msg.Payload, &clusterUpdate); err != nil {
 			return fmt.Errorf("failed unmarshalling ClusterUpdate: %w", err)
 		}
-		stopBeingActive := p.state.active && clusterUpdate.Cluster.ActiveDeviceId != p.runtime.DeviceId && clusterUpdate.Cluster.PlayerState.Timestamp > p.state.lastTransferTimestamp
+		cluster := clusterUpdate.GetCluster()
+		if cluster == nil {
+			return nil
+		}
+		stopBeingActive := p.state.active && cluster.GetActiveDeviceId() != p.runtime.DeviceId && cluster.GetPlayerState().GetTimestamp() > p.state.lastTransferTimestamp
 		if !stopBeingActive {
 			return nil
 		}
 		name := " "
-		if device := clusterUpdate.Cluster.Device[clusterUpdate.Cluster.ActiveDeviceId]; device != nil {
+		if device := cluster.GetDevice()[cluster.GetActiveDeviceId()]; device != nil {
 			name = device.Name
 		}
 		p.runtime.Log.Infof("playback was transferred to %s", name)
@@ -301,6 +305,9 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		if transferState.Options == nil {
 			transferState.Options = &connectpb.ContextPlayerOptions{}
 		}
+		if transferState.Playback == nil {
+			return fmt.Errorf("transfer state without playback")
+		}
 		p.state.lastTransferTimestamp = transferState.Playback.Timestamp
 		ctxTracks, err := tracks.NewTrackListFromContext(ctx, p.runtime.Log, p.sess.Spclient(), transferState.CurrentSession.Context, 0)
 		if err != nil {
@@ -324,6 +331,9 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		p.state.player.PositionAsOfTimestamp = int64(transferState.Playback.PositionAsOfTimestamp)
 		golibrespot.SetPaused(p.state.player, pause)
 		p.state.player.PlayOrigin = transferState.CurrentSession.PlayOrigin
+		if p.state.player.PlayOrigin == nil {
+			p.state.player.PlayOrigin = &connectpb.PlayOrigin{}
+		}
 		p.state.player.PlayOrigin.DeviceIdentifier = req.SentByDeviceId
 		p.state.player.ContextUri = transferState.CurrentSession.Context.Uri
 		p.state.player.ContextUrl = transferState.CurrentSession.Context.Url
@@ -333,9 +343,13 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		maps.Copy(p.state.player.ContextMetadata, transferState.CurrentSession.Context.Metadata)
 		maps.Copy(p.state.player.ContextMetadata, ctxTracks.Metadata())
 		contextSpotType := golibrespot.InferSpotifyIdTypeFromContextUri(p.state.player.ContextUri)
-		currentTrack := golibrespot.ContextTrackToProvidedTrack(contextSpotType, transferState.Playback.CurrentTrack)
-		if err := ctxTracks.TrySeek(ctx, tracks.ProvidedTrackComparator(contextSpotType, currentTrack)); err != nil {
-			return fmt.Errorf("failed seeking to track: %w", err)
+		// A transfer without a named track starts the context from the top
+		// (ContextTrackToProvidedTrack panics on unnamed entries).
+		if current := transferState.Playback.CurrentTrack; current != nil && (len(current.Uri) > 0 || len(current.Gid) > 0) {
+			currentTrack := golibrespot.ContextTrackToProvidedTrack(contextSpotType, current)
+			if err := ctxTracks.TrySeek(ctx, tracks.ProvidedTrackComparator(contextSpotType, currentTrack)); err != nil {
+				return fmt.Errorf("failed seeking to track: %w", err)
+			}
 		}
 		if err := ctxTracks.ToggleShuffle(ctx, transferState.Options.ShufflingContext); err != nil {
 			return fmt.Errorf("failed shuffling context")
@@ -372,6 +386,9 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		}
 		p.state.setActive(true)
 		p.state.player.PlayOrigin = req.Command.PlayOrigin
+		if p.state.player.PlayOrigin == nil {
+			p.state.player.PlayOrigin = &connectpb.PlayOrigin{}
+		}
 		p.state.player.PlayOrigin.DeviceIdentifier = req.SentByDeviceId
 		p.state.player.Suppressions = req.Command.Options.Suppressions
 		if p.state.player.Options == nil {
@@ -448,23 +465,23 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 			p.runtime.Log.Warnf("unsupported set_repeating_context value type: %T", req.Command.Value)
 			return nil
 		}
-		return p.setOptions(ctx, &val, nil, nil)
+		return p.setOptions(ctx, &val, nil, nil, nil)
 	case "set_repeating_track":
 		val, ok := req.Command.Value.(bool)
 		if !ok {
 			p.runtime.Log.Warnf("unsupported set_repeating_track value type: %T", req.Command.Value)
 			return nil
 		}
-		return p.setOptions(ctx, nil, &val, nil)
+		return p.setOptions(ctx, nil, &val, nil, nil)
 	case "set_shuffling_context":
 		val, ok := req.Command.Value.(bool)
 		if !ok {
 			p.runtime.Log.Warnf("unsupported set_shuffling_context value type: %T", req.Command.Value)
 			return nil
 		}
-		return p.setOptions(ctx, nil, nil, &val)
+		return p.setOptions(ctx, nil, nil, &val, nil)
 	case "set_options":
-		return p.setOptions(ctx, req.Command.RepeatingContext, req.Command.RepeatingTrack, req.Command.ShufflingContext)
+		return p.setOptions(ctx, req.Command.RepeatingContext, req.Command.RepeatingTrack, req.Command.ShufflingContext, req.Command.Modes)
 	case "set_queue":
 		p.setQueue(ctx, req.Command.PrevTracks, req.Command.NextTracks)
 		return nil

@@ -832,10 +832,7 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	// staged for exactly this moment. Callers encode intent in the pre-rebase
 	// value: 0 on advance/skip/transfer, setPlayerPositionAtNow for output-
 	// failure reloads.
-	trackPosition := p.state.player.PositionAsOfTimestamp
-	if trackPosition < 0 {
-		trackPosition = 0
-	}
+	trackPosition := max(p.state.player.PositionAsOfTimestamp, 0)
 	golibrespot.UpdateTimestamp(p.state.player, 0)
 	if p.state.player.PositionAsOfTimestamp < 0 {
 		p.state.player.PositionAsOfTimestamp = 0
@@ -916,10 +913,18 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	return nil
 }
 
-func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repeatingTrack *bool, shufflingContext *bool) error {
+func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repeatingTrack *bool, shufflingContext *bool, modes map[string]string) error {
 	var scheduleQueueTopUp bool
-	if p == nil || p.state == nil || p.state.player == nil || p.state.player.Options == nil {
+	if p == nil || p.state == nil || p.state.player == nil {
 		return nil
+	}
+	if p.state.player.Options == nil {
+		// A set_options can carry nothing but modes; there is nothing to
+		// resolve for repeat/shuffle without existing options.
+		if len(modes) == 0 {
+			return nil
+		}
+		p.state.player.Options = &connectpb.ContextPlayerOptions{}
 	}
 	curr := playbackdomain.TraversalOptions{
 		RepeatContext: p.state.player.Options.RepeatingContext,
@@ -959,6 +964,17 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 	}
 	if next.Shuffle != curr.Shuffle {
 		requiresUpdate = true
+	}
+	// Modes (e.g. a Jam being on or off) arrive as bare key/value pairs and
+	// merge into the player options; the state push announces the change.
+	for k, v := range modes {
+		if p.state.player.Options.Modes[k] != v {
+			if p.state.player.Options.Modes == nil {
+				p.state.player.Options.Modes = map[string]string{}
+			}
+			p.state.player.Options.Modes[k] = v
+			requiresUpdate = true
+		}
 	}
 	if requiresUpdate {
 		p.logRepeatShuffleInvariant("set_options")

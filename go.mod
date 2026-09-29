@@ -9,7 +9,7 @@ require (
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886
 	github.com/charmbracelet/x/ansi v0.11.8
-	github.com/elxgy/go-librespot v0.0.0-20260928180041-673b13b1e49f
+	github.com/elxgy/go-librespot v0.0.0-20260929180312-92ef9f73bcaf
 	github.com/joho/godotenv v1.5.1
 	github.com/muesli/termenv v0.16.0
 	github.com/sirupsen/logrus v1.10.2
