@@ -165,13 +165,22 @@ func TestHandleImageLoadedMsgForCurrentPlayerCoverForcesKittyRedraw(t *testing.T
 	m.ui.activeTab = tabPlayer
 	m.ui.imgs.protocol = imageProtocolKitty
 	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	intent := overlayIntent{tab: tabPlayer, url: "u1"}
+	if emit, _, _ := m.ui.imgs.commitOverlayIntent(intent); !emit {
+		t.Fatal("expected initial overlay commit to emit")
+	}
+	if emit, _, _ := m.ui.imgs.commitOverlayIntent(intent); emit {
+		t.Fatal("expected unchanged overlay to suppress redraw before the load")
+	}
 
 	nextModel, cmd := m.handleImageLoadedMsg(imageLoadedMsg{url: "u1"})
 	got := nextModel.(model)
 	if cmd != nil {
 		t.Fatal("expected no follow-up command on successful image load")
 	}
-	if !got.ui.imgs.kittyForceRedraw {
+	// The load forces retransmission: the same intent must emit again so
+	// the newly available encoding actually reaches the terminal.
+	if emit, _, _ := got.ui.imgs.commitOverlayIntent(intent); !emit {
 		t.Fatal("expected successful current player cover load to force kitty redraw")
 	}
 }
@@ -181,10 +190,14 @@ func TestHandleImageLoadedMsgForOtherURLDoesNotForceKittyRedraw(t *testing.T) {
 	m.ui.activeTab = tabPlayer
 	m.ui.imgs.protocol = imageProtocolKitty
 	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	intent := overlayIntent{tab: tabPlayer, url: "u1"}
+	if emit, _, _ := m.ui.imgs.commitOverlayIntent(intent); !emit {
+		t.Fatal("expected initial overlay commit to emit")
+	}
 
 	nextModel, _ := m.handleImageLoadedMsg(imageLoadedMsg{url: "u2"})
 	got := nextModel.(model)
-	if got.ui.imgs.kittyForceRedraw {
+	if emit, _, _ := got.ui.imgs.commitOverlayIntent(intent); emit {
 		t.Fatal("expected unrelated image load success not to force kitty redraw")
 	}
 }
@@ -562,7 +575,7 @@ func TestKittyOverlayDeletesOnceWhenImageDisappears(t *testing.T) {
 	m.transport.status.AlbumImageURL = ""
 
 	overlay := m.kittyOverlay()
-	if !strings.Contains(overlay, kittyDeleteAll) {
+	if !strings.Contains(overlay, "a=d,d=i") {
 		t.Fatal("expected delete-all when image disappears")
 	}
 	if again := m.kittyOverlay(); again != "" {
@@ -585,10 +598,10 @@ func TestKittyOverlayDeletesWhenHelpOpens(t *testing.T) {
 	m.ui.helpOpen = true
 
 	overlay := m.kittyOverlay()
-	if !strings.Contains(overlay, kittyDeleteAll) {
+	if !strings.Contains(overlay, "a=d,d=i") {
 		t.Fatal("expected help modal to clear Kitty image")
 	}
-	if again := m.kittyOverlay(); !strings.Contains(again, kittyDeleteAll) {
+	if again := m.kittyOverlay(); !strings.Contains(again, "a=d,d=i") {
 		t.Fatalf("expected help-open state to keep emitting delete-all, got %q", again)
 	}
 }
@@ -607,10 +620,10 @@ func TestKittyOverlayDeletesWhenSettingsOpen(t *testing.T) {
 	}
 	m.ui.settings.open = true
 
-	if overlay := m.kittyOverlay(); !strings.Contains(overlay, kittyDeleteAll) {
+	if overlay := m.kittyOverlay(); !strings.Contains(overlay, "a=d,d=i") {
 		t.Fatal("expected settings modal to clear Kitty image")
 	}
-	if again := m.kittyOverlay(); !strings.Contains(again, kittyDeleteAll) {
+	if again := m.kittyOverlay(); !strings.Contains(again, "a=d,d=i") {
 		t.Fatalf("expected settings-open state to keep emitting delete-all, got %q", again)
 	}
 }
@@ -629,10 +642,10 @@ func TestKittyOverlayDeletesWhenTrackPopupOpen(t *testing.T) {
 	}
 	m.ui.trackPopupOpen = true
 
-	if overlay := m.kittyOverlay(); !strings.Contains(overlay, kittyDeleteAll) {
+	if overlay := m.kittyOverlay(); !strings.Contains(overlay, "a=d,d=i") {
 		t.Fatal("expected track popup to clear Kitty image")
 	}
-	if again := m.kittyOverlay(); !strings.Contains(again, kittyDeleteAll) {
+	if again := m.kittyOverlay(); !strings.Contains(again, "a=d,d=i") {
 		t.Fatalf("expected popup-open state to keep emitting delete-all, got %q", again)
 	}
 }
@@ -650,7 +663,7 @@ func TestKittyOverlayRestoresAfterModalCloses(t *testing.T) {
 		t.Fatal("expected initial overlay render")
 	}
 	m.ui.helpOpen = true
-	if overlay := m.kittyOverlay(); !strings.Contains(overlay, kittyDeleteAll) {
+	if overlay := m.kittyOverlay(); !strings.Contains(overlay, "a=d,d=i") {
 		t.Fatal("expected delete while modal open")
 	}
 
@@ -659,10 +672,10 @@ func TestKittyOverlayRestoresAfterModalCloses(t *testing.T) {
 	if restored == "" {
 		t.Fatal("expected overlay to retransmit after modal closes")
 	}
-	if strings.Contains(restored, kittyDeleteAll) {
+	if strings.Contains(restored, "a=d,") {
 		t.Fatalf("expected restore without spurious delete-all, got %q", restored)
 	}
-	if !strings.Contains(restored, "\x1b_Ga=T") {
+	if !strings.Contains(restored, "a=T") {
 		t.Fatalf("expected a kitty transmission on restore, got %q", restored)
 	}
 	if again := m.kittyOverlay(); again != "" {
@@ -686,7 +699,7 @@ func TestKittyOverlayPlayerClearsPreviousImageWhileNextLoads(t *testing.T) {
 	m.transport.status.AlbumImageURL = "u2"
 
 	loading := m.kittyOverlay()
-	if !strings.Contains(loading, kittyDeleteAll) {
+	if !strings.Contains(loading, "a=d,d=i") {
 		t.Fatal("expected stale player image to be cleared while next cover is loading")
 	}
 }
@@ -706,7 +719,7 @@ func TestKittyOverlayPlayerClearsWhileTransportTransitionPending(t *testing.T) {
 	m.transport.transition.Begin(time.Now(), "track-1")
 	m.transport.status.AlbumImageURL = "u2"
 	loading := m.kittyOverlay()
-	if !strings.Contains(loading, kittyDeleteAll) {
+	if !strings.Contains(loading, "a=d,d=i") {
 		t.Fatal("expected kitty overlay to clear while transport transition is pending")
 	}
 }
@@ -810,7 +823,7 @@ func TestKittyOverlayPlayerSameCoverDifferentTrackStillRedraws(t *testing.T) {
 	if second == first {
 		t.Fatal("expected redraw payload to differ for same-cover track transition")
 	}
-	if strings.Contains(second, kittyDeleteAll) {
+	if strings.Contains(second, "a=d,d=A") {
 		t.Fatal("expected same-cover redraw not to clear globally before drawing")
 	}
 }
@@ -859,7 +872,7 @@ func TestKittyOverlaySameURLWithoutEncodingKeepsCurrentImage(t *testing.T) {
 	delete(m.ui.imgs.encoded, "u1")
 
 	loading := m.kittyOverlay()
-	if strings.Contains(loading, kittyDeleteAll) {
+	if strings.Contains(loading, "a=d,d=i") {
 		t.Fatal("expected same-url missing encoding to keep current kitty image visible")
 	}
 }
@@ -887,7 +900,7 @@ func TestKittyOverlayClearsStaleImageOnTabSwitchWithoutEncodedCover(t *testing.T
 	m.browse.albumList.Select(0)
 
 	overlay := m.kittyOverlay()
-	if !strings.Contains(overlay, kittyDeleteAll) {
+	if !strings.Contains(overlay, "a=d,d=i") {
 		t.Fatal("expected stale kitty image to clear when switched tab cover is not yet encoded")
 	}
 }
@@ -912,7 +925,7 @@ func TestKittyOverlayPlayerDeletesOldImageWhenURLChangesAtSamePlacement(t *testi
 	if second == "" {
 		t.Fatal("expected redraw when player cover URL changes")
 	}
-	if !strings.Contains(second, kittyDeleteAll) {
+	if !strings.Contains(second, "a=d,") {
 		t.Fatal("expected old kitty image to be explicitly deleted before drawing new cover at the same placement")
 	}
 	if !strings.Contains(second, "ZmFrZQ==") {
@@ -938,7 +951,7 @@ func TestKittyOverlayPlayerSameURLRedrawOmitsDeleteAll(t *testing.T) {
 	if second == "" {
 		t.Fatal("expected redraw on epoch bump")
 	}
-	if strings.Contains(second, kittyDeleteAll) {
+	if strings.Contains(second, "a=d,d=A") {
 		t.Fatal("expected same-URL epoch redraw not to globally delete (no URL change)")
 	}
 }

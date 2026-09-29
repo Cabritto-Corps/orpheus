@@ -83,10 +83,10 @@ func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.
 	progressRewind := sameURL && prevProgress >= 0 && nextProgress >= 0 && prevProgress > nextProgress+progressRewindThresholdMS
 	shouldAdvance := subjectChanged || trackChanged || queueHeadChanged || progressRewind
 	if shouldAdvance {
+		// The epoch bump alone drives overlay retransmission: the typed
+		// intent carries it as the revision, so the commit path re-emits
+		// without a force flag (which would only duplicate the emission).
 		m.transport.playerCoverEpoch++
-		if m.ui.imgs != nil && m.ui.imgs.protocolForRender() == imageProtocolKitty {
-			m.ui.imgs.forceKittyRedraw()
-		}
 	}
 }
 
@@ -109,9 +109,9 @@ func (m *model) beginTransportTransition() {
 		fromTrack = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
 	}
 	m.transport.transition.Begin(time.Now(), fromTrack)
-	if m.ui.imgs != nil && m.ui.imgs.protocolForRender() == imageProtocolKitty {
-		m.ui.imgs.forceKittyRedraw()
-	}
+	// No overlay force here: the content is identical and the terminal keeps
+	// showing it; the header's transition marker changes the frame text, so
+	// any needed emission rides the normal frame diff.
 	m.syncExecutorState()
 }
 
@@ -120,9 +120,7 @@ func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
 	if event == transportEventNone {
 		return
 	}
-	if m.ui.imgs != nil && m.ui.imgs.protocolForRender() == imageProtocolKitty {
-		m.ui.imgs.forceKittyRedraw()
-	}
+	// Same as begin: clearing needs no overlay force of its own.
 	if event == transportEventStuck {
 		m.transport.playbackErr = errors.New("track didn't start — skip again")
 	}

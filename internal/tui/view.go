@@ -201,19 +201,17 @@ func (s *themeStyles) paintPage(frame string, width int) string {
 }
 
 type bodyLayout struct {
-	bodyH         int
-	leftW         int
-	rightW        int
-	coverCols     int
-	coverRows     int
-	coverStartRow int
-	coverStartCol int
+	bodyH     int
+	leftW     int
+	rightW    int
+	coverCols int
+	coverRows int
 }
 
 func (m model) bodyLayout() bodyLayout {
 	bodyH := m.ui.height - chromeH
 	if m.ui.width <= 0 || m.ui.height <= 0 {
-		return bodyLayout{bodyH: bodyH, leftW: minLeftW, rightW: m.ui.width - minLeftW, coverStartRow: bodyStartRow1Based + 2, coverStartCol: 1}
+		return bodyLayout{bodyH: bodyH, leftW: minLeftW, rightW: m.ui.width - minLeftW}
 	}
 	metaLines := 3
 	availH := max(bodyH-2-2-metaLines, 1)
@@ -236,13 +234,11 @@ func (m model) bodyLayout() bodyLayout {
 	}
 	rightW := max(m.ui.width-leftW, 0)
 	return bodyLayout{
-		bodyH:         bodyH,
-		leftW:         leftW,
-		rightW:        rightW,
-		coverCols:     coverCols,
-		coverRows:     coverRows,
-		coverStartRow: bodyStartRow1Based + 2,
-		coverStartCol: 1,
+		bodyH:     bodyH,
+		leftW:     leftW,
+		rightW:    rightW,
+		coverCols: coverCols,
+		coverRows: coverRows,
 	}
 }
 

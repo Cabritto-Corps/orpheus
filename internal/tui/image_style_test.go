@@ -131,7 +131,7 @@ func TestForcedPixelatedNeverUsesKitty(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	img.SetRGBA(0, 0, color.RGBA{R: 255, A: 255})
 	img.SetRGBA(1, 1, color.RGBA{G: 255, A: 255})
-	rendered := renderCover(cache.protocolForRender(), img, "", 4, 2)
+	rendered := renderCover(img, 4, 2)
 	if !strings.Contains(rendered, "▀") {
 		t.Fatalf("expected half-block output, got %q", rendered)
 	}
@@ -153,7 +153,7 @@ func TestManagedRenderedFallsBackToHalfBlockWithoutKitty(t *testing.T) {
 	}
 
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	rendered := renderCover(cache.protocolForRender(), img, "", 4, 2)
+	rendered := renderCover(img, 4, 2)
 	if !strings.Contains(rendered, "▀") {
 		t.Fatalf("expected half-block fallback output, got %q", rendered)
 	}
@@ -234,10 +234,11 @@ func TestApplyImageStyleClearsKittyStateAndRecovery(t *testing.T) {
 	m.ui.imgs.covers.Set(key, "stale kitty render")
 	m.ui.imgs.coverKeysByURL[key.url] = map[coverKey]struct{}{key: {}}
 	m.ui.imgs.encoded[key.url] = "stale encoding"
-	m.ui.imgs.kittyChunks[key.url] = []string{"stale chunk"}
-	m.ui.imgs.kittyChunkOrder = []string{key.url}
-	m.ui.imgs.kittyVisible = true
-	m.ui.imgs.lastKittyURL = key.url
+	// Display the stale cover through the overlay slot, then verify the
+	// style switch tears the whole slot down.
+	if emit, _, _ := m.ui.imgs.commitOverlayIntent(overlayIntent{url: key.url}); !emit {
+		t.Fatal("expected initial overlay commit to emit")
+	}
 	m.ui.cover.kittyFellBack = true
 	m.ui.cover.kittyRecoveryStreak = 3
 	m.ui.cover.playerCoverFailStreak = 2
@@ -251,11 +252,16 @@ func TestApplyImageStyleClearsKittyStateAndRecovery(t *testing.T) {
 	if _, ok := next.ui.imgs.covers.Get(key); ok {
 		t.Fatal("stale rendered covers must be invalidated on style change")
 	}
-	if len(next.ui.imgs.coverKeysByURL) != 0 || len(next.ui.imgs.encoded) != 0 || len(next.ui.imgs.kittyChunks) != 0 || len(next.ui.imgs.kittyChunkOrder) != 0 {
-		t.Fatal("style-specific encoded and chunk state must be invalidated on style change")
+	if len(next.ui.imgs.coverKeysByURL) != 0 || len(next.ui.imgs.encoded) != 0 {
+		t.Fatal("style-specific encoded state must be invalidated on style change")
 	}
-	if next.ui.imgs.kittyVisible || !next.ui.imgs.kittyForceRedraw {
-		t.Fatal("style change must reset the kitty overlay state")
+	if next.ui.imgs.overlayShownID() != 0 {
+		t.Fatal("style change must clear the displayed overlay image")
+	}
+	// The reset forces retransmission: the same intent must emit again so a
+	// terminal holding the stale image gets the new-protocol content.
+	if emit, _, _ := next.ui.imgs.commitOverlayIntent(overlayIntent{url: key.url}); !emit {
+		t.Fatal("style change must force overlay retransmission")
 	}
 	if next.ui.cover.kittyFellBack || next.ui.cover.kittyRecoveryStreak != 0 || next.ui.cover.playerCoverFailStreak != 0 {
 		t.Fatal("style change must clear stale kitty supervision state")

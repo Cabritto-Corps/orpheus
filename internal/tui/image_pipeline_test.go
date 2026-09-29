@@ -154,8 +154,9 @@ func TestSetProtocolInvalidatesAndRespectsOverride(t *testing.T) {
 	c.setProtocol(imageProtocolKitty)
 	c.encoded["u1"] = "enc"
 	c.covers.Set(coverKey{url: "u1", cols: 10, rows: 10}, "rendered")
-	c.kittyVisible = true
-	c.lastKittyURL = "u1"
+	if emit, _, _ := c.commitOverlayIntent(overlayIntent{url: "u1"}); !emit {
+		t.Fatal("expected initial overlay commit to emit")
+	}
 
 	c.setProtocol(imageProtocolNone)
 	if c.protocol != imageProtocolNone {
@@ -164,11 +165,13 @@ func TestSetProtocolInvalidatesAndRespectsOverride(t *testing.T) {
 	if _, ok := c.covers.Get(coverKey{url: "u1", cols: 10, rows: 10}); ok {
 		t.Fatal("expected rendered covers invalidated on protocol switch")
 	}
-	if c.kittyVisible {
-		t.Fatal("expected overlay state reset on protocol switch")
+	if c.overlayShownID() != 0 {
+		t.Fatal("expected displayed overlay image cleared on protocol switch")
 	}
-	if !c.kittyForceRedraw {
-		t.Fatal("expected forced redraw on protocol switch")
+	// The reset forces retransmission: the same intent must emit again so
+	// the terminal converges on the new-protocol content.
+	if emit, _, _ := c.commitOverlayIntent(overlayIntent{url: "u1"}); !emit {
+		t.Fatal("expected forced retransmit after protocol-switch reset")
 	}
 
 	c.protocolExplicit = true

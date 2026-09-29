@@ -356,8 +356,10 @@ func TestAdvancePlayerCoverEpochOnQueueHeadChange(t *testing.T) {
 	if m.transport.playerCoverEpoch == 0 {
 		t.Fatal("expected player cover epoch to advance when queue head changes")
 	}
-	if !m.ui.imgs.kittyForceRedraw {
-		t.Fatal("expected kitty redraw to be forced when epoch advances")
+	// Retransmission flows through the intent revision, not a force flag:
+	// the overlay commit path re-emits on the epoch change by itself.
+	if m.ui.imgs.overlay.force {
+		t.Fatal("expected no force flag when epoch advances; the revision drives retransmission")
 	}
 }
 
@@ -371,7 +373,7 @@ func TestAdvancePlayerCoverEpochNoChangeWhenSignalsMissing(t *testing.T) {
 	if m.transport.playerCoverEpoch != 0 {
 		t.Fatal("expected player cover epoch to remain unchanged")
 	}
-	if m.ui.imgs.kittyForceRedraw {
+	if m.ui.imgs.overlay.force {
 		t.Fatal("expected no kitty redraw force when transition signals are absent")
 	}
 }
@@ -386,8 +388,8 @@ func TestAdvancePlayerCoverEpochOnTrackChangeEvenWithEmptyURL(t *testing.T) {
 	if m.transport.playerCoverEpoch == 0 {
 		t.Fatal("expected player cover epoch to advance on track change even when next push lacks an AlbumImageURL")
 	}
-	if !m.ui.imgs.kittyForceRedraw {
-		t.Fatal("expected kitty redraw to be forced on track change with empty URL")
+	if m.ui.imgs.overlay.force {
+		t.Fatal("expected no force flag on track change with empty URL; the clear path handles it")
 	}
 }
 

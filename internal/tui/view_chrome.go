@@ -272,19 +272,15 @@ func (m model) kittyOverlay() string {
 	}
 	// Kitty graphics sit on a terminal layer above text and persist until
 	// deleted, so any popup would render beneath them. Hide the overlay for
-	// the whole time a modal is open and retransmit on the first unblocked
-	// frame via forceKittyRedraw.
+	// the whole time a modal is open; the intent is kept, so the first
+	// unblocked frame retransmits.
 	if m.modalActive() {
-		m.ui.imgs.forceKittyRedraw()
-		return kittyDeleteAll
+		return m.ui.imgs.hideOverlayForModal()
 	}
 	layout := m.bodyLayout()
-	if layout.coverCols <= 0 || layout.coverRows <= 0 {
-		_, shouldDelete, _, _ := m.ui.imgs.beginKittyOverlayState("", "")
-		if shouldDelete {
-			return kittyDeleteAll
-		}
-		return ""
+	rect := m.coverArt(layout.coverCols, layout.coverRows)
+	if rect.empty() {
+		return deleteKittyImage(m.ui.imgs.clearOverlayIntent())
 	}
 
 	var url, subjectID string
@@ -309,11 +305,7 @@ func (m model) kittyOverlay() string {
 		}
 	}
 	if url == "" {
-		_, shouldDelete, _, _ := m.ui.imgs.beginKittyOverlayState("", "")
-		if shouldDelete {
-			return kittyDeleteAll
-		}
-		return ""
+		return deleteKittyImage(m.ui.imgs.clearOverlayIntent())
 	}
 
 	encoded := m.ui.imgs.encodedFor(url)
@@ -322,45 +314,32 @@ func (m model) kittyOverlay() string {
 		target := strings.TrimSpace(url)
 		shouldClear := displayed != "" && displayed != target
 		if shouldClear {
-			_, shouldDelete, _, _ := m.ui.imgs.beginKittyOverlayState("", "")
-			if shouldDelete {
-				return kittyDeleteAll
-			}
+			return deleteKittyImage(m.ui.imgs.clearOverlayIntent())
 		}
 		return ""
 	}
 
-	if m.ui.activeTab == tabPlayer && m.transport.status != nil && url != "" {
-		displayed := strings.TrimSpace(m.ui.imgs.kittyDisplayedURL())
-		target := strings.TrimSpace(url)
-		if displayed != "" && displayed != target {
-			m.ui.imgs.forceKittyRedraw()
-		}
-	}
-	playerEpoch := uint64(0)
+	revision := uint64(0)
 	if m.ui.activeTab == tabPlayer {
-		playerEpoch = m.transport.playerCoverEpoch
+		revision = m.transport.playerCoverEpoch
 	}
-	// With a cover frame the art insets inside the frame's inner ring: the
-	// panel text draws the border, the image lands one cell in.
-	artCols, artRows := layout.coverCols, layout.coverRows
-	startRow, startCol := layout.coverStartRow, layout.coverStartCol
-	if m.styles.coverFrameFits(artCols, artRows) {
-		artCols, artRows = artCols-2, artRows-2
-		startRow, startCol = startRow+1, startCol+1
-	}
-	key := fmt.Sprintf("%d:%d:%d:%d:%s:%s:%s:%d", startRow, startCol, artCols, artRows, m.ui.activeTab, subjectID, url, playerEpoch)
-	changed, shouldDelete, placementChanged, urlChanged := m.ui.imgs.beginKittyOverlayState(key, url)
-	if !changed {
+	emit, transmitID, displacedID := m.ui.imgs.commitOverlayIntent(overlayIntent{
+		art:      rect,
+		tab:      m.ui.activeTab,
+		subject:  subjectID,
+		url:      url,
+		revision: revision,
+	})
+	if !emit {
 		return ""
 	}
-	payload := m.ui.imgs.buildKittyPayload(url, encoded, artCols, artRows, m.ui.imgs.nextKittyImageID())
+	payload := buildKittyPayload(encoded, rect.cols, rect.rows, transmitID)
 	if payload == "" {
-		return kittyDeleteAll
+		return deleteKittyImage(displacedID)
 	}
-	out := fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", startRow, startCol, payload)
-	if shouldDelete && (placementChanged || urlChanged) {
-		return kittyDeleteAll + out
-	}
-	return out
+	// C=1 (DoNotMoveCursor) keeps the cursor where CUP put it, so the old
+	// save/restore dance is gone. The hidden alt-screen cursor makes
+	// C=1-ignoring terminals harmless, and bubbletea repositions the cursor
+	// itself whenever input needs it (filter mode).
+	return fmt.Sprintf("\x1b[%d;%dH%s%s", rect.row, rect.col, deleteKittyImage(displacedID), payload)
 }

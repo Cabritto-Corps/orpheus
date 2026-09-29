@@ -263,30 +263,26 @@ func (m model) queuePanel(w, h int) string {
 
 // coverOrPlaceholder resolves a panel's cover cell: kitty overlays blank
 // the cell once the image is placed, ANSI panels show cached art or the
-// placeholder box. The single accessor reads the protocol under the cache
+// placeholder box. The art rectangle and frame decision both come from the
+// single coverArt derivation, so the ANSI cell and the kitty placement can
+// never disagree. The single accessor reads the protocol under the cache
 // lock instead of every render site racing on the field.
 func (m model) coverOrPlaceholder(url string, cols, rows int) string {
+	rect := m.coverArt(cols, rows)
 	if m.ui.imgs == nil {
 		return m.placeholderArt(cols, rows)
 	}
-	framed := m.styles.coverFrameFits(cols, rows)
 	if m.ui.imgs.protocolForRender() == imageProtocolKitty {
 		if m.ui.imgs.hasKittyEncoding(url) {
-			if framed {
+			if rect.framed {
 				return m.styles.coverFrameBox(cols, rows)
 			}
 			return m.blankArt(cols, rows)
 		}
 		return m.placeholderArt(cols, rows)
 	}
-	artCols, artRows := cols, rows
-	if framed {
-		// The frame lives on the cell's outer ring; the art insets inside
-		// so the panel layout never shifts when the frame toggles.
-		artCols, artRows = cols-2, rows-2
-	}
-	if s, ok := m.ui.imgs.cover(url, artCols, artRows); ok {
-		if framed {
+	if s, ok := m.ui.imgs.cover(url, rect.cols, rect.rows); ok {
+		if rect.framed {
 			return m.styles.coverFrameBoxWith(s, cols, rows)
 		}
 		return s
