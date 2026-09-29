@@ -30,6 +30,8 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+.zed/
+#
 crashes/
 /orpheus
 *.bin
