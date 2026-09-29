@@ -3,6 +3,7 @@ package spotify
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -10,6 +11,10 @@ import (
 )
 
 func IsTransientAPIError(err error) bool {
+	var rateLimitErr *RateLimitError
+	if errors.As(err, &rateLimitErr) {
+		return false
+	}
 	if apiErr, ok := errors.AsType[spotifyapi.Error](err); ok {
 		return apiErr.Status == 429 || apiErr.Status >= 500
 	}
@@ -22,6 +27,87 @@ func IsTransientAPIError(err error) bool {
 
 func IsRateLimitError(err error) bool {
 	return isRateLimitError(err)
+}
+
+// rateLimitMaxWait caps how long rateLimitTransport will sleep inside one
+// RoundTrip. Waits beyond this are multi-minute server penalties, not burst
+// coalescing: sleeping them out can only end in the caller's context
+// deadline, which then masks the 429 as a timeout downstream. Failing fast
+// with RateLimitError keeps the penalty visible so callers and the UI can
+// say "rate limited" instead of "api error".
+const rateLimitMaxWait = 30 * time.Second
+
+// RateLimitError is returned when Spotify answers 429 and the Retry-After
+// wait cannot be absorbed: it exceeds the request's remaining deadline or
+// the rateLimitMaxWait ceiling. Short waits keep the old coalescing
+// behavior; this type exists for the waits that must surface instead.
+type RateLimitError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	return fmt.Sprintf("spotify rate limited, retry after %s", formatRetryAfter(e.RetryAfter))
+}
+
+// failFastRateLimit reports whether sleeping out wait would outlive the
+// request: either wait exceeds the remaining context deadline, or it
+// exceeds the rateLimitMaxWait ceiling for requests without a deadline.
+// A nil return means the wait fits and the caller should sleep as before.
+func failFastRateLimit(ctx context.Context, wait time.Duration) error {
+	if wait <= 0 {
+		return nil
+	}
+	if wait > rateLimitMaxWait {
+		return &RateLimitError{RetryAfter: wait}
+	}
+	if dl, ok := ctx.Deadline(); ok && wait > time.Until(dl) {
+		return &RateLimitError{RetryAfter: wait}
+	}
+	return nil
+}
+
+func formatRetryAfter(d time.Duration) string {
+	if d <= 0 {
+		return "0s"
+	}
+	switch {
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh", int64(d/time.Hour))
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm", int64(d/time.Minute))
+	default:
+		return fmt.Sprintf("%ds", int64(d/time.Second))
+	}
+}
+
+func rateLimitNextStep(d time.Duration) string {
+	if d >= time.Minute {
+		return "rate limited — retry in about " + formatRetryAfter(d)
+	}
+	return "wait a few seconds and retry"
+}
+
+// RateLimitRetryAfter extracts the server's wait from a rate-limit failure.
+func RateLimitRetryAfter(err error) (time.Duration, bool) {
+	var rateLimitErr *RateLimitError
+	if errors.As(err, &rateLimitErr) {
+		return rateLimitErr.RetryAfter, true
+	}
+	return 0, false
+}
+
+// RateLimitHint returns user-facing guidance for a rate-limit failure:
+// the server's own wait for multi-minute penalties, the existing quota
+// hint for short burst throttles.
+func RateLimitHint(err error) (string, bool) {
+	wait, ok := RateLimitRetryAfter(err)
+	if !ok {
+		return "", false
+	}
+	if wait >= time.Minute {
+		return "rate limited — retry in about " + formatRetryAfter(wait), true
+	}
+	return "Run 'orpheus auth login' to use your own API quota.", true
 }
 
 func IsForbidden(err error) bool {
@@ -91,6 +177,10 @@ func retryDelayForAPIError(attempt int) time.Duration {
 }
 
 func isRateLimitError(err error) bool {
+	var rateLimitErr *RateLimitError
+	if errors.As(err, &rateLimitErr) {
+		return true
+	}
 	var apiErr spotifyapi.Error
 	if errors.As(err, &apiErr) && apiErr.Status == 429 {
 		return true

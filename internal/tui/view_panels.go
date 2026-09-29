@@ -28,8 +28,8 @@ func (m model) playlistBrowserPanel(w, h int) string {
 	if m.browse.playlistsErr != nil && len(m.browse.playlistList.Items()) == 0 {
 		errStr := "failed to load: " + m.browse.playlistsErr.Error()
 		rateHint := ""
-		if strings.Contains(m.browse.playlistsErr.Error(), "429") || strings.Contains(strings.ToLower(m.browse.playlistsErr.Error()), "rate limit") {
-			rateHint = "\n" + m.styles.styleDimmed.Render("Run 'orpheus auth login' to use your own API quota.")
+		if hint, ok := spotify.RateLimitHint(m.browse.playlistsErr); ok {
+			rateHint = "\n" + m.styles.styleDimmed.Render(hint)
 		}
 		inner = m.styles.styleError.Render(truncate(errStr, w-2)) + rateHint + "\n" + m.styles.styleDimmed.Render("r to retry")
 	} else if m.browse.playlistsLoading && len(m.browse.playlistList.Items()) == 0 {

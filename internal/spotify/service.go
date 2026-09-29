@@ -156,6 +156,14 @@ func DiagnoseError(err error) ErrorDiagnosis {
 		return ErrorDiagnosis{Category: "canceled"}
 	}
 
+	var rateLimitErr *RateLimitError
+	if errors.As(err, &rateLimitErr) {
+		return ErrorDiagnosis{
+			Category: "rate-limit",
+			NextStep: rateLimitNextStep(rateLimitErr.RetryAfter),
+		}
+	}
+
 	if apiErr, ok := errors.AsType[spotifyapi.Error](err); ok {
 		diag := ErrorDiagnosis{
 			Category:   "api-error",
@@ -288,6 +296,9 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 		t.mu.Unlock()
 
 		if d := time.Until(waitUntil); d > 0 {
+			if failErr := failFastRateLimit(req.Context(), d); failErr != nil {
+				return nil, failErr
+			}
 			if err := sleepWithContext(req.Context(), d); err != nil {
 				return nil, err
 			}
@@ -321,6 +332,10 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 			t.waitUntil = next
 		}
 		t.mu.Unlock()
+
+		if failErr := failFastRateLimit(req.Context(), delay); failErr != nil {
+			return nil, failErr
+		}
 
 		if err := sleepWithContext(req.Context(), delay); err != nil {
 			return nil, err
