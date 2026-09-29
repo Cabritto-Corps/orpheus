@@ -75,22 +75,27 @@ func (m model) handleSettingsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleSettingsRoot(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
+	s := &m.ui.settings
 	switch {
 	case keyMatches(msg, k.CloseModal):
-		m.ui.settings.open = false
+		s.open = false
 		return m, nil
 	case keyMatches(msg, k.QueueUp):
-		m.ui.settings.cursor = (m.ui.settings.cursor + 5) % 6
+		s.cursor = (s.cursor + len(settingsRootRows) - 1) % len(settingsRootRows)
 		return m, nil
 	case keyMatches(msg, k.QueueDown):
-		m.ui.settings.cursor = (m.ui.settings.cursor + 1) % 6
+		s.cursor = (s.cursor + 1) % len(settingsRootRows)
 		return m, nil
 	case keyMatches(msg, k.Select):
-		return m.settingsActivate()
+		return settingsRootRows[s.cursor].activate(m)
 	case keyMatches(msg, k.VolUp):
-		return m.settingsAdjust(1)
+		if adjust := settingsRootRows[s.cursor].adjust; adjust != nil {
+			return adjust(m, 1)
+		}
 	case keyMatches(msg, k.VolDown):
-		return m.settingsAdjust(-1)
+		if adjust := settingsRootRows[s.cursor].adjust; adjust != nil {
+			return adjust(m, -1)
+		}
 	}
 	return m, nil
 }
@@ -123,52 +128,146 @@ func (m model) handleSettingsThemeOptions(msg tea.KeyPressMsg) (tea.Model, tea.C
 	return m, nil
 }
 
-func (m model) settingsActivate() (tea.Model, tea.Cmd) {
-	s := &m.ui.settings
-	switch s.cursor {
-	case 0: // theme: open the live-preview picker
-		m.openThemePicker()
-	case 1: // theme options: open the theming editor
-		m.openThemeOptions()
-	case 2: // keybinds: open the action list
-		s.mode = settingsModeKeys
-		s.keysCursor = 0
-		s.captureKey = ""
-	case 3: // crossfade: toggle; +/- edits seconds
-		s.crossfadeEnabled = !s.crossfadeEnabled
-		s.restartRequiredCrossfade = true
-		m.saveAppSettings()
-	case 4: // audio cache: toggle; +/- edits size
-		s.cacheEnabled = !s.cacheEnabled
-		s.restartRequiredCache = true
-		m.saveAppSettings()
-	case 5: // images: cycle the render style and apply it without a restart
-		s.imageStyle = cycleImageStyle(s.imageStyle, 1)
-		s.imageStyleSet = true
-		m.saveAppSettings()
-		return m.applyImageStyle()
-	}
-	return m, nil
+// settingsRowKind classifies a settings root row: open rows lead to a
+// submenu and ignore the volume keys; adjustable rows act on Select
+// and step on the volume keys.
+type settingsRowKind int
+
+const (
+	settingsRowOpen settingsRowKind = iota
+	settingsRowAdjustable
+)
+
+// settingsRow describes one settings root row: label, right-column
+// value (gauges and suffixes included), what Select does, what the
+// volume keys do (nil = ignored), and an optional bottom warning.
+// The menu reads this table everywhere — cursor wrap, rendering and
+// key dispatch — so adding a row is one entry here.
+type settingsRow struct {
+	label    string
+	kind     settingsRowKind
+	value    func(m model) string
+	activate func(m model) (tea.Model, tea.Cmd)
+	adjust   func(m model, step int) (tea.Model, tea.Cmd)
+	notice   func(s *settingsModel) string
 }
 
-func (m model) settingsAdjust(step int) (tea.Model, tea.Cmd) {
-	s := &m.ui.settings
-	switch s.cursor {
-	case 3:
-		s.crossfadeSeconds = clampCrossfadeSeconds(s.crossfadeSeconds + float64(step))
-		s.restartRequiredCrossfade = true
-		m.saveAppSettings()
-	case 4:
-		s.cacheSizeMB = clampCacheSizeMB(s.cacheSizeMB + int64(step)*256)
-		s.restartRequiredCache = true
-		m.saveAppSettings()
-	case 5:
-		s.imageStyle = cycleImageStyle(s.imageStyle, step)
-		s.imageStyleSet = true
-		m.saveAppSettings()
-		return m.applyImageStyle()
-	}
-	return m, nil
+var settingsRootRows = []settingsRow{
+	{
+		label: "Theme",
+		kind:  settingsRowOpen,
+		value: func(m model) string { return m.themeValue(m.ui.settings.themePreset) },
+		activate: func(m model) (tea.Model, tea.Cmd) {
+			m.openThemePicker()
+			return m, nil
+		},
+	},
+	{
+		label: "Theme options",
+		kind:  settingsRowOpen,
+		value: func(m model) string { return "edit..." },
+		activate: func(m model) (tea.Model, tea.Cmd) {
+			m.openThemeOptions()
+			return m, nil
+		},
+	},
+	{
+		label: "Keybinds",
+		kind:  settingsRowOpen,
+		value: func(m model) string { return "edit..." },
+		activate: func(m model) (tea.Model, tea.Cmd) {
+			m.ui.settings.mode = settingsModeKeys
+			m.ui.settings.keysCursor = 0
+			m.ui.settings.captureKey = ""
+			return m, nil
+		},
+	},
+	{
+		label: "Crossfade",
+		kind:  settingsRowAdjustable,
+		value: func(m model) string {
+			s := m.ui.settings
+			gauge := ""
+			if s.crossfadeEnabled {
+				gauge = " " + m.styles.gradientBar(s.crossfadeSeconds/30, gaugeW)
+			}
+			return settingsCrossfadeLabel(&s) + gauge
+		},
+		activate: func(m model) (tea.Model, tea.Cmd) {
+			s := &m.ui.settings
+			s.crossfadeEnabled = !s.crossfadeEnabled
+			s.restartRequiredCrossfade = true
+			m.saveAppSettings()
+			return m, nil
+		},
+		adjust: func(m model, step int) (tea.Model, tea.Cmd) {
+			s := &m.ui.settings
+			s.crossfadeSeconds = clampCrossfadeSeconds(s.crossfadeSeconds + float64(step))
+			s.restartRequiredCrossfade = true
+			m.saveAppSettings()
+			return m, nil
+		},
+		notice: func(s *settingsModel) string {
+			if s.restartRequiredCrossfade {
+				return "crossfade applies on restart"
+			}
+			return ""
+		},
+	},
+	{
+		label: "Audio cache",
+		kind:  settingsRowAdjustable,
+		value: func(m model) string {
+			s := m.ui.settings
+			gauge := ""
+			if s.cacheEnabled {
+				gauge = " " + m.styles.gradientBar(float64(s.cacheSizeMB-64)/float64(4096-64), gaugeW)
+			}
+			return settingsCacheLabel(&s) + gauge
+		},
+		activate: func(m model) (tea.Model, tea.Cmd) {
+			s := &m.ui.settings
+			s.cacheEnabled = !s.cacheEnabled
+			s.restartRequiredCache = true
+			m.saveAppSettings()
+			return m, nil
+		},
+		adjust: func(m model, step int) (tea.Model, tea.Cmd) {
+			s := &m.ui.settings
+			s.cacheSizeMB = clampCacheSizeMB(s.cacheSizeMB + int64(step)*256)
+			s.restartRequiredCache = true
+			m.saveAppSettings()
+			return m, nil
+		},
+		notice: func(s *settingsModel) string {
+			if s.restartRequiredCache {
+				return "cache applies on restart"
+			}
+			return ""
+		},
+	},
+	{
+		label: "Images",
+		kind:  settingsRowAdjustable,
+		value: func(m model) string {
+			s := m.ui.settings
+			return settingsImageLabel(&s)
+		},
+		activate: func(m model) (tea.Model, tea.Cmd) {
+			s := &m.ui.settings
+			s.imageStyle = cycleImageStyle(s.imageStyle, 1)
+			s.imageStyleSet = true
+			m.saveAppSettings()
+			return m.applyImageStyle()
+		},
+		adjust: func(m model, step int) (tea.Model, tea.Cmd) {
+			s := &m.ui.settings
+			s.imageStyle = cycleImageStyle(s.imageStyle, step)
+			s.imageStyleSet = true
+			m.saveAppSettings()
+			return m.applyImageStyle()
+		},
+	},
 }
 
 var imageStyleChoices = []string{config.ImageStyleRendered, config.ImageStylePixelated}
@@ -541,30 +640,20 @@ func (m model) settingsModalView() string {
 			m.styles.styleModalHint.Render(m.styles.hintLine([]key.Binding{withDesc(m.ui.keys.Select, "rebind"), withDesc(m.ui.keys.CloseModal, "back")}, modalW-modalContentInset)), body.String(), modalW, innerH)
 
 	default:
-		crossfadeGauge := ""
-		cacheGauge := ""
-		if s.crossfadeEnabled {
-			crossfadeGauge = " " + m.styles.gradientBar(s.crossfadeSeconds/30, gaugeW)
-		}
-		if s.cacheEnabled {
-			cacheGauge = " " + m.styles.gradientBar(float64(s.cacheSizeMB-64)/float64(4096-64), gaugeW)
-		}
-		rows := []string{
-			m.styles.modalRow("Theme", m.themeValue(s.themePreset), s.cursor == 0, modalW),
-			m.styles.modalRow("Theme options", "edit...", s.cursor == 1, modalW),
-			m.styles.modalRow("Keybinds", "edit...", s.cursor == 2, modalW),
-			m.styles.modalRow("Crossfade", settingsCrossfadeLabel(&s)+crossfadeGauge, s.cursor == 3, modalW),
-			m.styles.modalRow("Audio cache", settingsCacheLabel(&s)+cacheGauge, s.cursor == 4, modalW),
-			m.styles.modalRow("Images", settingsImageLabel(&s), s.cursor == 5, modalW),
+		rows := make([]string, 0, len(settingsRootRows))
+		for i, row := range settingsRootRows {
+			rows = append(rows, m.styles.modalRow(row.label, row.value(m), s.cursor == i, modalW))
 		}
 		var body strings.Builder
 		body.WriteString("\n" + lipgloss.JoinVertical(lipgloss.Left, rows...) + "\n")
 		body.WriteString("\n" + m.styles.styleModalHint.Render(m.styles.hintLine([]key.Binding{withDesc(m.ui.keys.Select, "change"), m.ui.keys.VolUp, m.ui.keys.VolDown}, modalW-modalContentInset)) + "\n")
-		if s.restartRequiredCrossfade {
-			body.WriteString(m.styles.styleError.Render("  crossfade applies on restart") + "\n")
-		}
-		if s.restartRequiredCache {
-			body.WriteString(m.styles.styleError.Render("  cache applies on restart") + "\n")
+		for _, row := range settingsRootRows {
+			if row.notice == nil {
+				continue
+			}
+			if hint := row.notice(&s); hint != "" {
+				body.WriteString(m.styles.styleError.Render("  "+hint) + "\n")
+			}
 		}
 		if s.saveErr != "" {
 			body.WriteString(m.styles.styleError.Render("  ⚠ "+truncate(s.saveErr, modalW-modalContentInset-2)) + "\n")

@@ -17,32 +17,114 @@ const (
 	optionReset
 )
 
-// themeOptionsRowsList drives the theming editor: order is the menu order,
-// kind marks the save/reset action rows.
-var themeOptionsRowsList = []struct {
+// themeOptionRow describes one theming-editor row: its kind, its label,
+// how the current value renders, and how a +/- step mutates the pending
+// draft (nil for the save/reset action rows). The editor reads this
+// table everywhere — cursor wrap, rendering, cycling — so adding a
+// control is one entry here.
+type themeOptionRow struct {
 	kind  optionKind
 	label string
-}{
-	{optionCycle, "Base palette"},
-	{optionCycle, "Page tone"},
-	{optionCycle, "Accent"},
-	{optionCycle, "Backgrounds"},
-	{optionCycle, "Border"},
-	{optionCycle, "Now playing"},
-	{optionCycle, "Play/pause"},
-	{optionCycle, "Spinner"},
-	{optionCycle, "Progress bar"},
-	{optionCycle, "Titles bold"},
-	{optionCycle, "Descriptions italic"},
-	{optionCycle, "Cover frame"},
-	{optionSave, "Save to theme.json"},
-	{optionReset, "Reset to preset"},
+	value func(s *settingsModel) string
+	cycle func(s *settingsModel, pending *themeState, step int)
 }
 
-func themeOptionsRow(i int) struct {
-	kind  optionKind
-	label string
-} {
+// themeOptionsRowsList drives the theming editor: order is the menu order,
+// kind marks the save/reset action rows.
+var themeOptionsRowsList = []themeOptionRow{
+	{optionCycle, "Base palette",
+		func(s *settingsModel) string { return s.themeOptionsPreset },
+		func(s *settingsModel, pending *themeState, step int) {
+			names := themeRegistryNames()
+			next := cycleValue(names, s.themeOptionsPreset, step)
+			s.themeOptionsPreset = next
+			// Base change restarts the palette from the new preset but keeps
+			// the glyph/typography/cover/backgrounds edits made so far.
+			base := themePresetState(next)
+			base.glyphs = pending.glyphs
+			base.typography = pending.typography
+			base.cover = pending.cover
+			base.backgrounds = pending.backgrounds
+			*pending = base
+		}},
+	{optionCycle, "Page tone",
+		func(s *settingsModel) string {
+			if s.themeStatePending.colors.Page == themePreset(s.themeOptionsPreset).Page {
+				return "preset"
+			}
+			return s.themeStatePending.colors.Page
+		},
+		func(s *settingsModel, pending *themeState, step int) {
+			presetPage := themePreset(s.themeOptionsPreset).Page
+			pending.colors.Page = cycleColor(pageToneChoices, pending.colors.Page, presetPage, step)
+		}},
+	{optionCycle, "Accent",
+		func(s *settingsModel) string {
+			if s.themeStatePending.colors.Blue == themePreset(s.themeOptionsPreset).Blue {
+				return "preset"
+			}
+			return s.themeStatePending.colors.Blue
+		},
+		func(s *settingsModel, pending *themeState, step int) {
+			presetAccent := themePreset(s.themeOptionsPreset).Blue
+			current := cycleColor(accentChoices, pending.colors.Blue, presetAccent, step)
+			pending.colors.Blue = current
+			if current == presetAccent {
+				pending.colors.BlueLight = themePreset(s.themeOptionsPreset).BlueLight
+			} else if light := mixHex(current, "#FFFFFF", 0.30); light != "" {
+				pending.colors.BlueLight = light
+			}
+		}},
+	{optionCycle, "Backgrounds",
+		func(s *settingsModel) string { return s.themeStatePending.backgrounds.Style },
+		func(s *settingsModel, pending *themeState, step int) {
+			pending.backgrounds.Style = cycleValue(backgroundStyleChoices, pending.backgrounds.Style, step)
+		}},
+	{optionCycle, "Border",
+		func(s *settingsModel) string { return s.themeStatePending.glyphs.Border },
+		func(s *settingsModel, pending *themeState, step int) {
+			pending.glyphs.Border = cycleValue(glyphBorderChoices, pending.glyphs.Border, step)
+		}},
+	{optionCycle, "Now playing",
+		func(s *settingsModel) string { return s.themeStatePending.glyphs.NowPlaying },
+		func(s *settingsModel, pending *themeState, step int) {
+			pending.glyphs.NowPlaying = cycleValue(glyphNowPlayingChoices, pending.glyphs.NowPlaying, step)
+		}},
+	{optionCycle, "Play/pause",
+		func(s *settingsModel) string { return s.themeStatePending.glyphs.PlayPause },
+		func(s *settingsModel, pending *themeState, step int) {
+			pending.glyphs.PlayPause = cycleValue(glyphPlayPauseChoices, pending.glyphs.PlayPause, step)
+		}},
+	{optionCycle, "Spinner",
+		func(s *settingsModel) string { return s.themeStatePending.glyphs.Spinner },
+		func(s *settingsModel, pending *themeState, step int) {
+			pending.glyphs.Spinner = cycleValue(glyphSpinnerChoices, pending.glyphs.Spinner, step)
+		}},
+	{optionCycle, "Progress bar",
+		func(s *settingsModel) string { return s.themeStatePending.glyphs.Bar },
+		func(s *settingsModel, pending *themeState, step int) {
+			pending.glyphs.Bar = cycleValue(glyphBarChoices, pending.glyphs.Bar, step)
+		}},
+	{optionCycle, "Titles bold",
+		func(s *settingsModel) string { return onOff(s.themeStatePending.typography.BoldTitles) },
+		func(s *settingsModel, pending *themeState, step int) {
+			pending.typography.BoldTitles = !pending.typography.BoldTitles
+		}},
+	{optionCycle, "Descriptions italic",
+		func(s *settingsModel) string { return onOff(s.themeStatePending.typography.ItalicDescs) },
+		func(s *settingsModel, pending *themeState, step int) {
+			pending.typography.ItalicDescs = !pending.typography.ItalicDescs
+		}},
+	{optionCycle, "Cover frame",
+		func(s *settingsModel) string { return s.themeStatePending.cover.Frame },
+		func(s *settingsModel, pending *themeState, step int) {
+			pending.cover.Frame = cycleValue(coverFrameChoices, pending.cover.Frame, step)
+		}},
+	{optionSave, "Save to theme.json", nil, nil},
+	{optionReset, "Reset to preset", nil, nil},
+}
+
+func themeOptionsRow(i int) themeOptionRow {
 	return themeOptionsRowsList[i]
 }
 
@@ -117,58 +199,12 @@ func (m model) themeOptionsApplyAndRefresh(state themeState) (tea.Model, tea.Cmd
 
 func (m model) themeOptionsCycle(step int) (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
-	pending := s.themeStatePending
-	preset := themePreset(s.themeOptionsPreset)
-
-	switch s.optionsCursor {
-	case 0:
-		names := themeRegistryNames()
-		next := cycleValue(names, s.themeOptionsPreset, step)
-		s.themeOptionsPreset = next
-		// Base change restarts the palette from the new preset but keeps
-		// the glyph/typography/cover/backgrounds edits made so far.
-		base := themePresetState(next)
-		base.glyphs = pending.glyphs
-		base.typography = pending.typography
-		base.cover = pending.cover
-		base.backgrounds = pending.backgrounds
-		pending = base
-	case 1:
-		presetPage := preset.Page
-		pending.colors.Page = cycleColor(pageToneChoices, pending.colors.Page, presetPage, step)
-	case 2:
-		presetAccent := preset.Blue
-		current := cycleColor(accentChoices, pending.colors.Blue, presetAccent, step)
-		pending.colors.Blue = current
-		if current == presetAccent {
-			pending.colors.BlueLight = preset.BlueLight
-		} else if light := mixHex(current, "#FFFFFF", 0.30); light != "" {
-			pending.colors.BlueLight = light
-		}
-	case 3:
-		pending.backgrounds.Style = cycleValue(backgroundStyleChoices, pending.backgrounds.Style, step)
-	case 4:
-		pending.glyphs.Border = cycleValue(glyphBorderChoices, pending.glyphs.Border, step)
-	case 5:
-		pending.glyphs.NowPlaying = cycleValue(glyphNowPlayingChoices, pending.glyphs.NowPlaying, step)
-	case 6:
-		pending.glyphs.PlayPause = cycleValue(glyphPlayPauseChoices, pending.glyphs.PlayPause, step)
-	case 7:
-		pending.glyphs.Spinner = cycleValue(glyphSpinnerChoices, pending.glyphs.Spinner, step)
-	case 8:
-		pending.glyphs.Bar = cycleValue(glyphBarChoices, pending.glyphs.Bar, step)
-	case 9:
-		pending.typography.BoldTitles = !pending.typography.BoldTitles
-	case 10:
-		pending.typography.ItalicDescs = !pending.typography.ItalicDescs
-	case 11:
-		pending.cover.Frame = cycleValue(coverFrameChoices, pending.cover.Frame, step)
-	default:
+	row := themeOptionsRow(s.optionsCursor)
+	if row.cycle == nil {
 		return m, nil
 	}
-
-	s.themeStatePending = pending
-	return m.themeOptionsApply(pending)
+	row.cycle(s, &s.themeStatePending, step)
+	return m.themeOptionsApply(s.themeStatePending)
 }
 
 func (m model) themeOptionsReset() (tea.Model, tea.Cmd) {
@@ -202,46 +238,6 @@ func (m model) themeOptionsSave() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// themeOptionsValue renders one row's current value for the menu.
-func (m model) themeOptionsValue(i int) string {
-	s := &m.ui.settings
-	pending := s.themeStatePending
-	preset := themePreset(s.themeOptionsPreset)
-	switch i {
-	case 0:
-		return s.themeOptionsPreset
-	case 1:
-		if pending.colors.Page == preset.Page {
-			return "preset"
-		}
-		return pending.colors.Page
-	case 2:
-		if pending.colors.Blue == preset.Blue {
-			return "preset"
-		}
-		return pending.colors.Blue
-	case 3:
-		return pending.backgrounds.Style
-	case 4:
-		return pending.glyphs.Border
-	case 5:
-		return pending.glyphs.NowPlaying
-	case 6:
-		return pending.glyphs.PlayPause
-	case 7:
-		return pending.glyphs.Spinner
-	case 8:
-		return pending.glyphs.Bar
-	case 9:
-		return onOff(pending.typography.BoldTitles)
-	case 10:
-		return onOff(pending.typography.ItalicDescs)
-	case 11:
-		return pending.cover.Frame
-	}
-	return ""
-}
-
 func onOff(v bool) string {
 	if v {
 		return "on"
@@ -258,8 +254,8 @@ func (m model) themeOptionsView(modalW, innerH int) string {
 	for i := 0; i < themeOptionsRowCount(); i++ {
 		entry := themeOptionsRow(i)
 		value := ""
-		if entry.kind == optionCycle {
-			value = m.themeOptionsValue(i)
+		if entry.kind == optionCycle && entry.value != nil {
+			value = entry.value(&m.ui.settings)
 		}
 		rows = append(rows, m.styles.modalRow(entry.label, value, s.optionsCursor == i, modalW))
 	}

@@ -267,3 +267,27 @@ func TestValidColorValue(t *testing.T) {
 		}
 	}
 }
+
+// TestThemeOptionsRowsDriveEditor pins the theming-editor descriptor
+// table: order, per-row behavior class, and that the row count the
+// cursor wraps over is the table itself.
+func TestThemeOptionsRowsDriveEditor(t *testing.T) {
+	wantLabels := []string{"Base palette", "Page tone", "Accent", "Backgrounds", "Border", "Now playing", "Play/pause", "Spinner", "Progress bar", "Titles bold", "Descriptions italic", "Cover frame", "Save to theme.json", "Reset to preset"}
+	if len(themeOptionsRowsList) != len(wantLabels) {
+		t.Fatalf("themeOptionsRowsList has %d rows, want %d", len(themeOptionsRowsList), len(wantLabels))
+	}
+	for i, row := range themeOptionsRowsList {
+		if row.label != wantLabels[i] {
+			t.Fatalf("row %d label = %q, want %q", i, row.label, wantLabels[i])
+		}
+		if row.kind == optionCycle && (row.value == nil || row.cycle == nil) {
+			t.Fatalf("cycle row %q must have value and cycle", row.label)
+		}
+		if (row.kind == optionSave || row.kind == optionReset) && (row.value != nil || row.cycle != nil) {
+			t.Fatalf("action row %q must not carry value/cycle", row.label)
+		}
+	}
+	if themeOptionsRowCount() != len(themeOptionsRowsList) {
+		t.Fatalf("row count = %d, table has %d", themeOptionsRowCount(), len(themeOptionsRowsList))
+	}
+}

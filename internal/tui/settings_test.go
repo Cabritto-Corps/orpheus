@@ -317,3 +317,39 @@ func TestSettingsCaptureEscAndNavigation(t *testing.T) {
 		t.Fatal("esc on root should close the modal")
 	}
 }
+
+// TestSettingsRootRowsDriveMenu pins the settings-root descriptor table:
+// order and behavior class, plus cursor wrap that follows the table
+// length instead of a hardcoded row count. Adding a row is one entry.
+func TestSettingsRootRowsDriveMenu(t *testing.T) {
+	wantLabels := []string{"Theme", "Theme options", "Keybinds", "Crossfade", "Audio cache", "Images"}
+	if len(settingsRootRows) != len(wantLabels) {
+		t.Fatalf("settingsRootRows has %d rows, want %d", len(settingsRootRows), len(wantLabels))
+	}
+	for i, row := range settingsRootRows {
+		if row.label != wantLabels[i] {
+			t.Fatalf("row %d label = %q, want %q", i, row.label, wantLabels[i])
+		}
+		if row.value == nil || row.activate == nil {
+			t.Fatalf("row %q must have value and activate", row.label)
+		}
+		if row.kind == settingsRowOpen && row.adjust != nil {
+			t.Fatalf("open row %q must ignore the volume keys", row.label)
+		}
+		if row.kind == settingsRowAdjustable && row.adjust == nil {
+			t.Fatalf("adjustable row %q must handle the volume keys", row.label)
+		}
+	}
+
+	m, _, _, _ := newSettingsTestModel(t)
+	next := openViaKey(m)
+	next.ui.settings.cursor = 0
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyUp})
+	if next.ui.settings.cursor != len(settingsRootRows)-1 {
+		t.Fatalf("up from 0 wrapped to %d, want %d", next.ui.settings.cursor, len(settingsRootRows)-1)
+	}
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	if next.ui.settings.cursor != 0 {
+		t.Fatalf("down from last wrapped to %d, want 0", next.ui.settings.cursor)
+	}
+}
