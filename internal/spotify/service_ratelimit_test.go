@@ -118,8 +118,7 @@ func TestRateLimitTransportFailsFastOnSharedBackoff(t *testing.T) {
 	err := roundTripOnce(t, tr, ctx)
 	elapsed := time.Since(start)
 
-	var rateLimitErr *RateLimitError
-	if !errors.As(err, &rateLimitErr) {
+	if _, ok := errors.AsType[*RateLimitError](err); !ok {
 		t.Fatalf("expected typed *RateLimitError, got %v", err)
 	}
 	if base.calls != 0 {

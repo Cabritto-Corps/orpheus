@@ -11,8 +11,7 @@ import (
 )
 
 func IsTransientAPIError(err error) bool {
-	var rateLimitErr *RateLimitError
-	if errors.As(err, &rateLimitErr) {
+	if _, ok := errors.AsType[*RateLimitError](err); ok {
 		return false
 	}
 	if apiErr, ok := errors.AsType[spotifyapi.Error](err); ok {
@@ -89,8 +88,7 @@ func rateLimitNextStep(d time.Duration) string {
 
 // RateLimitRetryAfter extracts the server's wait from a rate-limit failure.
 func RateLimitRetryAfter(err error) (time.Duration, bool) {
-	var rateLimitErr *RateLimitError
-	if errors.As(err, &rateLimitErr) {
+	if rateLimitErr, ok := errors.AsType[*RateLimitError](err); ok {
 		return rateLimitErr.RetryAfter, true
 	}
 	return 0, false
@@ -177,8 +175,7 @@ func retryDelayForAPIError(attempt int) time.Duration {
 }
 
 func isRateLimitError(err error) bool {
-	var rateLimitErr *RateLimitError
-	if errors.As(err, &rateLimitErr) {
+	if _, ok := errors.AsType[*RateLimitError](err); ok {
 		return true
 	}
 	var apiErr spotifyapi.Error

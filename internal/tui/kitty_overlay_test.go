@@ -204,8 +204,8 @@ func TestKittyOverlayPayloadSurvivesFrameworkDraw(t *testing.T) {
 	m.ui.imgs.setProtocol(imageProtocolKitty)
 	big := image.NewNRGBA(image.Rect(0, 0, 128, 128))
 	var seed uint32 = 0xabcdef01
-	for y := 0; y < 128; y++ {
-		for x := 0; x < 128; x++ {
+	for y := range 128 {
+		for x := range 128 {
 			seed = seed*1664525 + 1013904223
 			big.Set(x, y, color.NRGBA{R: uint8(seed >> 16), G: uint8(seed >> 8), B: uint8(seed), A: 255})
 		}
@@ -234,8 +234,8 @@ func TestKittyOverlayPayloadSurvivesFrameworkDraw(t *testing.T) {
 	sb := uv.NewScreenBuffer(100, 40)
 	uv.NewStyledString(content).Draw(sb, sb.Bounds())
 	var joined strings.Builder
-	for y := 0; y < 40; y++ {
-		for x := 0; x < 100; x++ {
+	for y := range 40 {
+		for x := range 100 {
 			if c := sb.CellAt(x, y); c != nil {
 				joined.WriteString(c.Content)
 			}
@@ -243,7 +243,7 @@ func TestKittyOverlayPayloadSurvivesFrameworkDraw(t *testing.T) {
 	}
 	var parts []string
 	// NOTE: the ST terminator is ESC + ONE backslash: "\x1b\\" in Go source.
-	for _, seg := range strings.Split(joined.String(), "\x1b\\") {
+	for seg := range strings.SplitSeq(joined.String(), "\x1b\\") {
 		rest := seg
 		// strip a leading CUP ("\x1b[ROW;COLH") before looking for the
 		// payload separator: both contain ";", and base64 itself may

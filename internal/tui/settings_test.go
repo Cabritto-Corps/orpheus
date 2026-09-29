@@ -374,7 +374,7 @@ func TestKeysTableReflectsRebindDirectly(t *testing.T) {
 	m := testListModel()
 	m.ui.settings.keysPath = filepath.Join(t.TempDir(), "keys.json")
 	rowWith := func(out, label string) string {
-		for _, line := range strings.Split(out, "\n") {
+		for line := range strings.SplitSeq(out, "\n") {
 			if strings.Contains(line, label) {
 				return line
 			}

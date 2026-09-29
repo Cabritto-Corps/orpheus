@@ -156,8 +156,7 @@ func DiagnoseError(err error) ErrorDiagnosis {
 		return ErrorDiagnosis{Category: "canceled"}
 	}
 
-	var rateLimitErr *RateLimitError
-	if errors.As(err, &rateLimitErr) {
+	if rateLimitErr, ok := errors.AsType[*RateLimitError](err); ok {
 		return ErrorDiagnosis{
 			Category: "rate-limit",
 			NextStep: rateLimitNextStep(rateLimitErr.RetryAfter),

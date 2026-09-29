@@ -28,12 +28,7 @@ func batchContainsQuit(cmd tea.Cmd) bool {
 		return false
 	}
 	if msg, ok := cmd().(tea.BatchMsg); ok {
-		for _, c := range msg {
-			if batchContainsQuit(c) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(msg, batchContainsQuit)
 	}
 	return isQuitCmd(cmd)
 }
