@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 )
 
 type keyMap struct {
@@ -295,6 +296,23 @@ var keySpecModifiers = []struct {
 	{"numlock", tea.ModNumLock},
 }
 
+// keyModFlag resolves a modifier-segment name to its flag.
+func keyModFlag(s string) (tea.KeyMod, bool) {
+	for _, m := range keySpecModifiers {
+		if s == m.name {
+			return m.mod, true
+		}
+	}
+	return 0, false
+}
+
+// isKeyModName reports whether s names a modifier segment. Shared by the
+// parser and the extended-vocabulary check so both agree on shape.
+func isKeyModName(s string) bool {
+	_, ok := keyModFlag(s)
+	return ok
+}
+
 // keySpecBaseCode maps the named bases a binding string may carry. Aliases
 // share a code, so they match the same press.
 func keySpecBaseCode(name string) (rune, bool) {
@@ -333,41 +351,6 @@ func keySpecBaseCode(name string) (rune, bool) {
 	return 0, false
 }
 
-// keyBaseName renders a base code back to its canonical binding name.
-func keyBaseName(code rune) (string, bool) {
-	switch code {
-	case tea.KeyEnter:
-		return "enter", true
-	case tea.KeyTab:
-		return "tab", true
-	case tea.KeyEscape:
-		return "esc", true
-	case tea.KeyUp:
-		return "up", true
-	case tea.KeyDown:
-		return "down", true
-	case tea.KeyLeft:
-		return "left", true
-	case tea.KeyRight:
-		return "right", true
-	case tea.KeyHome:
-		return "home", true
-	case tea.KeyEnd:
-		return "end", true
-	case tea.KeyPgUp:
-		return "pgup", true
-	case tea.KeyPgDown:
-		return "pgdown", true
-	case tea.KeyDelete:
-		return "delete", true
-	case tea.KeyBackspace:
-		return "backspace", true
-	case tea.KeyInsert:
-		return "insert", true
-	}
-	return "", false
-}
-
 // parseKeySpec reduces one binding string to v2 key identity: modifier
 // flags plus a base code, with the printable text the identity implies.
 // ok=false means the string names no key (loaders drop it).
@@ -389,17 +372,11 @@ func parseKeySpec(spec string) (mod tea.KeyMod, code rune, text string, ok bool)
 		modParts = parts[:len(parts)-2]
 	}
 	for _, part := range modParts {
-		found := false
-		for _, m := range keySpecModifiers {
-			if part == m.name {
-				mod |= m.mod
-				found = true
-				break
-			}
-		}
-		if !found {
+		flag, ok := keyModFlag(part)
+		if !ok {
 			return 0, 0, "", false
 		}
+		mod |= flag
 	}
 	if base == " " {
 		code = tea.KeySpace
@@ -423,20 +400,52 @@ func parseKeySpec(spec string) (mod tea.KeyMod, code rune, text string, ok bool)
 	return mod, code, text, true
 }
 
-// matchKeySpec compares a pressed key against one binding string by
-// identity: same modifiers and base code, or (for printable keys) the
-// same reported text.
+// matchKeySpec compares a pressed key against one binding string. The
+// comparison itself is ultraviolet's; this wrapper only rewrites the two
+// forms uv cannot parse: a "return" base (uv knows just "enter") and
+// a literal "+" base (a trailing "+" is uv's separator, with no
+// escape for naming the plus key itself).
 func matchKeySpec(k tea.Key, spec string) bool {
-	mod, code, text, ok := parseKeySpec(spec)
-	if !ok {
-		return false
+	if isLiteralPlusSpec(spec) {
+		mod, code, text, ok := parseKeySpec(spec)
+		if !ok {
+			return false
+		}
+		// Same comparison ultraviolet performs (mod+code, else text);
+		// kept inline because no uv-parseable spelling names this key.
+		return (k.Mod == mod && k.Code == code) || (k.Text != "" && k.Text == text)
 	}
-	return (k.Mod == mod && k.Code == code) || (k.Text != "" && k.Text == text)
+	return uv.Key(k).MatchString(foldReturnSpec(spec))
+}
+
+// isLiteralPlusSpec reports whether spec binds the literal "+" key: a
+// trailing "+" with no key after it. parseKeySpec stays the authority
+// on the shape (a lone "ctrl+" still names no key).
+func isLiteralPlusSpec(spec string) bool {
+	return strings.HasSuffix(spec, "+")
+}
+
+// foldReturnSpec rewrites a trailing "return" base to "enter":
+// ultraviolet's vocabulary has no "return" alias (ours folds it), and
+// every other spelling parses identically on both sides. Dispatch only
+// ever sees loader-validated specs, whose non-final segments are known
+// modifiers, so the fold cannot rescue a malformed binding.
+func foldReturnSpec(spec string) string {
+	if spec == "return" {
+		return "enter"
+	}
+	if rest, found := strings.CutSuffix(spec, "+return"); found {
+		return rest + "+enter"
+	}
+	return spec
 }
 
 // canonicalKeySpec re-emits a binding string in canonical form (modifiers
 // in keystroke order, aliases folded) for comparisons. Unparseable specs
-// pass through unchanged.
+// pass through unchanged. Base names render through ultraviolet, which
+// folds "esc"/"escape" and "return"/"enter" exactly like the old
+// table; the modifier vocabulary stays local because uv's renderer drops
+// the lock modifiers, which the conflict scan must keep distinct.
 func canonicalKeySpec(spec string) string {
 	mod, code, _, ok := parseKeySpec(spec)
 	if !ok {
@@ -449,19 +458,6 @@ func canonicalKeySpec(spec string) string {
 			b.WriteByte('+')
 		}
 	}
-	switch code {
-	case tea.KeySpace:
-		b.WriteString("space")
-	case tea.KeyEnter:
-		b.WriteString("enter")
-	case tea.KeyEscape:
-		b.WriteString("esc")
-	default:
-		if name, named := keyBaseName(code); named {
-			b.WriteString(name)
-		} else {
-			b.WriteRune(code)
-		}
-	}
+	b.WriteString(uv.Key{Code: code}.Keystroke())
 	return b.String()
 }

@@ -174,3 +174,51 @@ func TestKeyReleasesIgnored(t *testing.T) {
 		t.Fatal("releasing q must not quit")
 	}
 }
+
+// TestKeyMatchesExtendedUVNames pins dispatch for the ultraviolet
+// vocabulary beyond the local aliases: function, keypad and media keys
+// match by code, with modifiers, through the same matcher.
+func TestKeyMatchesExtendedUVNames(t *testing.T) {
+	cases := []struct {
+		name  string
+		msg   tea.KeyPressMsg
+		spec  string
+		match bool
+	}{
+		{"f5", pressKey(tea.KeyF5, "", 0), "f5", true},
+		{"f24", pressKey(tea.KeyF24, "", 0), "f24", true},
+		{"ctrl f5", pressKey(tea.KeyF5, "", tea.ModCtrl), "ctrl+f5", true},
+		{"mute", pressKey(tea.KeyMute, "", 0), "mute", true},
+		{"kpenter", pressKey(tea.KeyKpEnter, "", 0), "kpenter", true},
+		{"begin", pressKey(tea.KeyBegin, "", 0), "begin", true},
+		{"f5 is not f6", pressKey(tea.KeyF6, "", 0), "f5", false},
+		{"unknown f99 never matches", pressKey('j', "j", 0), "f99", false},
+	}
+	for _, tc := range cases {
+		if got := keyMatches(tc.msg, bindKeys(t, tc.spec)); got != tc.match {
+			t.Errorf("%s: keyMatches(%q, %q) = %v, want %v", tc.name, tc.msg.String(), tc.spec, got, tc.match)
+		}
+	}
+}
+
+// TestCanonicalKeySpecRendersExtendedNames pins the canonicalizer on the
+// extended vocabulary: uv-rendered bases fold aliases exactly like the
+// old table, and names outside every vocabulary pass through unchanged.
+func TestCanonicalKeySpecRendersExtendedNames(t *testing.T) {
+	cases := map[string]string{
+		"shift+ctrl+a": "ctrl+shift+a",
+		"return":       "enter",
+		"escape":       "esc",
+		" ":            "space",
+		"ctrl++":       "ctrl++",
+		"f5":           "f5",
+		"shift+f5":     "shift+f5",
+		"mute":         "mute",
+		"mode_broken":  "mode_broken",
+	}
+	for spec, want := range cases {
+		if got := canonicalKeySpec(spec); got != want {
+			t.Errorf("canonicalKeySpec(%q) = %q, want %q", spec, got, want)
+		}
+	}
+}

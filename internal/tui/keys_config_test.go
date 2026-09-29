@@ -65,16 +65,16 @@ func TestLoadKeyOverridesUnknownKeyFallsBack(t *testing.T) {
 }
 
 // TestIsPlausibleKeyNameV2Forms pins the loader vocabulary after the v2
-// migration: canonical modifier combos and legacy aliases load, while
-// garbage still drops. Function keys stay unloadable from keys.json —
-// they never loaded there, and that surface is out of scope here.
+// migration: canonical modifier combos and legacy aliases load, and so do
+// the ultraviolet function/keypad/media names (kitty terminals report
+// them; previously unloadable), while garbage still drops.
 func TestIsPlausibleKeyNameV2Forms(t *testing.T) {
-	for _, name := range []string{"shift+up", "alt+x", "ctrl+shift+enter", "escape", "return", " ", "space", "+"} {
+	for _, name := range []string{"shift+up", "alt+x", "ctrl+shift+enter", "escape", "return", " ", "space", "+", "f1", "f5", "f24", "f63", "mute", "kpenter", "begin", "ctrl+f5"} {
 		if !isPlausibleKeyName(name) {
 			t.Fatalf("%q must load", name)
 		}
 	}
-	for _, name := range []string{"", "mode_broken", "ctrl+", "f24"} {
+	for _, name := range []string{"", "mode_broken", "ctrl+", "f0", "f64", "f99", "kpop", "ctrl", "shift"} {
 		if isPlausibleKeyName(name) {
 			t.Fatalf("%q must not load", name)
 		}

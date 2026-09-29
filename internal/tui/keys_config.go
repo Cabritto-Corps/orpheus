@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/key"
+	uv "github.com/charmbracelet/ultraviolet"
 )
 
 // validKeyActions lists the action names accepted in keys.json, derived from
@@ -96,8 +97,35 @@ func isPlausibleKeyName(k string) bool {
 	// One shared parser decides what names a key: v2 identity plus the
 	// legacy aliases it folds (" "/"space", "esc"/"escape",
 	// "enter"/"return"), so loaders accept whatever dispatch matches.
-	_, _, _, ok := parseKeySpec(k)
-	return ok
+	if _, _, _, ok := parseKeySpec(k); ok {
+		return true
+	}
+	// Beyond the local aliases: the ultraviolet vocabulary (function,
+	// keypad, media keys). uv exposes no validator, and its parser maps
+	// an unknown multi-rune base to text echo — so probing the base AS
+	// pressed text separates named bases (parse to a bare code, never
+	// match the probe) from unknown ones (echo matches). Modifier
+	// segments still validate against the shared vocabulary, and a
+	// modifier-named base stays rejected (a bare modifier is no binding).
+	return isExtendedUVKeyName(k)
+}
+
+// isExtendedUVKeyName accepts binding strings whose base ultraviolet
+// names but the local parser doesn't. Membership is probed through uv
+// itself, so the set can never drift from the matcher: if uv ever
+// extends its vocabulary, the loader follows automatically.
+func isExtendedUVKeyName(k string) bool {
+	parts := strings.Split(k, "+")
+	base := parts[len(parts)-1]
+	if base == "" || isKeyModName(base) {
+		return false
+	}
+	for _, p := range parts[:len(parts)-1] {
+		if !isKeyModName(p) {
+			return false
+		}
+	}
+	return !uv.Key{Text: base}.MatchString(base)
 }
 
 func applyKeyOverrides(m keyMap, overrides map[string][]string) keyMap {
