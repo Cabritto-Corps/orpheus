@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -417,6 +418,23 @@ func (m *model) fireOnSongChange(prev, next *spotify.PlaybackStatus) {
 }
 
 func execCmd(template, trackName, artistName, trackID string) {
+	cmd := newSongChangeCmd(template, trackName, artistName, trackID)
+	if cmd == nil {
+		return
+	}
+	if err := cmd.Run(); err != nil {
+		slog.Warn("on-song-change hook failed", "cmd", template, "error", err)
+	}
+}
+
+// newSongChangeCmd builds the hook command with its output discarded: the
+// child inherits the TUI's tty, and under a cell-diffing renderer anything
+// it prints would persist on screen forever (full repaints used to hide
+// it). Silent scripts want discard — metadata already reaches the hook via
+// args and ORPHEUS_* env, and nothing reads its stdout. A hook that needs
+// the terminal should run suspended through tea.ExecProcess instead; this
+// path deliberately never hands it the screen.
+func newSongChangeCmd(template, trackName, artistName, trackID string) *exec.Cmd {
 	r := strings.NewReplacer(
 		"{track}", trackName,
 		"{artist}", artistName,
@@ -425,7 +443,7 @@ func execCmd(template, trackName, artistName, trackID string) {
 	expanded := r.Replace(template)
 	parts := strings.Fields(expanded)
 	if len(parts) == 0 {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -443,7 +461,7 @@ func execCmd(template, trackName, artistName, trackID string) {
 		"ORPHEUS_ARTIST="+artistName,
 		"ORPHEUS_TRACK_ID="+trackID,
 	)
-	if err := cmd.Run(); err != nil {
-		slog.Warn("on-song-change hook failed", "cmd", template, "error", err)
-	}
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd
 }

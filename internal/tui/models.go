@@ -7,7 +7,6 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/spinner"
-	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/viewport"
 
 	"orpheus/internal/librespot"
@@ -190,7 +189,6 @@ type settingsModel struct {
 	themePath      string
 	configPath     string
 
-	keysTable *table.Model
 	conflicts map[string]bool
 
 	crossfadeEnabled bool
@@ -202,7 +200,6 @@ type settingsModel struct {
 
 	restartRequiredCrossfade bool
 	restartRequiredCache     bool
-	keysTableDirty           bool
 	saveErr                  string
 }
 

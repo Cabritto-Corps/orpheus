@@ -76,7 +76,6 @@ func TestModalPaintNeverLosesBackground(t *testing.T) {
 		}},
 		{"keys", func(m *model) string {
 			m.ui.settings.mode = settingsModeKeys
-			m.ui.settings.keysTableDirty = true
 			return m.settingsModalView()
 		}},
 		{"theme", func(m *model) string {
@@ -181,26 +180,38 @@ func TestSelectedRowKeepsHighlightThroughFragments(t *testing.T) {
 
 	selBg := bgSequence(st.colorSelectionBg)
 	selParams := strings.TrimPrefix(selBg, "\x1b[")
-	reset := "\x1b[0m"
+	// Reset spellings the renderers emit: v1 terminates styles with
+	// \x1b[0m, v2 abbreviates to \x1b[m. Matching one literal passed
+	// vacuously after the migration (the loop below never iterated),
+	// so the guard matches both.
+	nextReset := func(s string) (idx, length int) {
+		idx, length = -1, 0
+		for _, r := range []string{"\x1b[0m", "\x1b[m"} {
+			if i := strings.Index(s, r); i >= 0 && (idx < 0 || i < idx) {
+				idx, length = i, len(r)
+			}
+		}
+		return idx, length
+	}
 	if !strings.Contains(out[:80], selParams) {
 		t.Fatalf("selection bg missing at the row start: %q", out)
 	}
 	pos := 0
 	for {
-		rel := strings.Index(out[pos:], reset)
+		rel, ln := nextReset(out[pos:])
 		if rel < 0 {
 			break
 		}
 		idx := pos + rel
-		after := out[idx+len(reset):]
+		after := out[idx+ln:]
 		segment := after
-		if before, _, ok := strings.Cut(after, reset); ok {
-			segment = before
+		if j, _ := nextReset(after); j >= 0 {
+			segment = after[:j]
 		}
 		if !strings.Contains(segment, selBg) {
 			t.Fatalf("selection bg lost after a fragment reset at %d: %q", idx, out)
 		}
-		pos = idx + len(reset)
+		pos = idx + ln
 	}
 }
 

@@ -116,7 +116,11 @@ func (m model) albumBrowserPanel(w, h int) string {
 	var inner string
 	if m.browse.playlistsErr != nil && len(m.browse.albumList.Items()) == 0 {
 		errStr := "failed to load: " + m.browse.playlistsErr.Error()
-		inner = m.styles.styleError.Render(truncate(errStr, w-2)) + "\n" + m.styles.styleDimmed.Render("r to retry")
+		rateHint := ""
+		if hint, ok := spotify.RateLimitHint(m.browse.playlistsErr); ok {
+			rateHint = "\n" + m.styles.styleDimmed.Render(hint)
+		}
+		inner = m.styles.styleError.Render(truncate(errStr, w-2)) + rateHint + "\n" + m.styles.styleDimmed.Render("r to retry")
 	} else if m.browse.playlistsLoading && len(m.browse.albumList.Items()) == 0 {
 		inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " loading albums...")
 	} else if m.browse.albumsForbidden && len(m.browse.albumList.Items()) == 0 {
@@ -402,7 +406,7 @@ func (g queueGrid) row(s *themeStyles, w, num int, title, artist string, durMS i
 		b.WriteString(padCell(artist, g.artistW))
 	}
 	b.WriteString(" ")
-	b.WriteString(alignRight(dur, g.durW))
+	b.WriteString(alignRight(truncate(dur, g.durW), g.durW))
 
 	row := b.String()
 	if pad := w - lipgloss.Width(row); pad > 0 {

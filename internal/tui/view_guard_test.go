@@ -96,7 +96,6 @@ func guardModel(tb testing.TB, v frameVariant) model {
 		m2, _ := m.openSettings()
 		m = m2.(model)
 		m.ui.settings.mode = settingsModeKeys
-		m.ui.settings.keysTableDirty = true
 	case "settings-capture":
 		m2, _ := m.openSettings()
 		m = m2.(model)

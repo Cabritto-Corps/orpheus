@@ -5,8 +5,11 @@ import (
 	"image/color"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/lipgloss/v2"
+
+	"orpheus/internal/spotify"
 )
 
 func framedCoverTestImage() *image.RGBA {
@@ -60,4 +63,17 @@ func TestCoverPlaceholderKeepsOuterCellDimensions(t *testing.T) {
 	m := framedTestModel()
 	const cols, rows = 30, 15
 	assertBlockDimensions(t, m.placeholderArt(cols, rows), cols, rows)
+}
+
+// The album panel surfaces the same typed rate-limit hint as the playlists
+// panel: a 429 must name its retry window on both tabs, not just one. The
+// assertion targets the styled hint text, not the raw error string (which
+// already carries a duration).
+func TestAlbumPanelShowsRateLimitHint(t *testing.T) {
+	m := testListModel()
+	m.browse.playlistsErr = &spotify.RateLimitError{RetryAfter: 4 * time.Hour}
+	out := m.albumBrowserPanel(80, 20)
+	if !strings.Contains(out, "retry in about") {
+		t.Errorf("album panel hides the rate-limit hint: %q", out)
+	}
 }

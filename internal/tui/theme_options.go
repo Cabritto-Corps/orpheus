@@ -182,7 +182,6 @@ func (m model) themeOptionsApply(state themeState) (tea.Model, tea.Cmd) {
 	m.styles = buildThemeStyles(state)
 	m.rethemeBrowseLists()
 	m.ui.spinner = themedSpinner(m.styles)
-	m.ui.settings.keysTableDirty = true
 	return m, func() tea.Msg { return TerminalBGSync(m.styles.colorPage, m.styles.transparentFrame()) }
 }
 

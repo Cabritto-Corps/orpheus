@@ -52,7 +52,6 @@ func (m model) openSettings() (tea.Model, tea.Cmd) {
 	m.ui.settings.captureKey = ""
 	m.ui.settings.pendingKey = ""
 	m.ui.settings.conflicts = keyConflictActions(m.ui.keys)
-	m.ui.settings.keysTableDirty = true
 	return m, nil
 }
 
@@ -520,7 +519,6 @@ func (m *model) applyCapture(action, keyName string) error {
 
 	m.ui.keys = newKeysFromConfig(overrides)
 	s.conflicts = keyConflictActions(m.ui.keys)
-	s.keysTableDirty = true
 	return nil
 }
 
@@ -551,39 +549,38 @@ func keyContains(keys []string, want string) bool {
 }
 
 func (m model) settingsKeysTable(w, h int) *table.Model {
-	s := &m.ui.settings
-	if s.keysTable == nil || s.keysTableDirty {
-		// Key column sized to the longest real label: a width-derived
-		// column left ~80 empty cells inside full-width modals.
-		keyW := 6
-		for _, entry := range settingsKeyActions {
-			if lw := lipgloss.Width(m.primaryKeyLabel(entry.action)); lw+2 > keyW {
-				keyW = lw + 2
-			}
+	// The table is rebuilt on every render: rows mirror the live keyMap, so
+	// a rebind shows up in the next frame with no dirty flag or cache. (A
+	// memo used to live here, but its writes landed on render-path copies
+	// and could never engage — every frame rebuilt anyway.)
+	// Key column sized to the longest real label: a width-derived
+	// column left ~80 empty cells inside full-width modals.
+	keyW := 6
+	for _, entry := range settingsKeyActions {
+		if lw := lipgloss.Width(m.primaryKeyLabel(entry.action)); lw+2 > keyW {
+			keyW = lw + 2
 		}
-		cols := []table.Column{
-			{Title: "Action", Width: max(24, w-keyW)},
-			{Title: "Key", Width: keyW},
-		}
-		rows := make([]table.Row, 0, len(settingsKeyActions))
-		for _, entry := range settingsKeyActions {
-			rows = append(rows, table.Row{entry.label, m.primaryKeyLabel(entry.action)})
-		}
-		t := table.New(
-			table.WithColumns(cols),
-			table.WithRows(rows),
-			table.WithHeight(h),
-		)
-		t.SetStyles(m.styles.tableStyles())
-		s.keysTable = &t
-		s.keysTableDirty = false
 	}
-	s.keysTable.SetHeight(h)
+	cols := []table.Column{
+		{Title: "Action", Width: max(24, w-keyW)},
+		{Title: "Key", Width: keyW},
+	}
+	rows := make([]table.Row, 0, len(settingsKeyActions))
+	for _, entry := range settingsKeyActions {
+		rows = append(rows, table.Row{entry.label, m.primaryKeyLabel(entry.action)})
+	}
+	t := table.New(
+		table.WithColumns(cols),
+		table.WithRows(rows),
+		table.WithHeight(h),
+	)
+	t.SetStyles(m.styles.tableStyles())
+	t.SetHeight(h)
 	// Width is load-bearing, not cosmetic: the bubbles table renders its
 	// rows through a viewport that drops everything when its width is 0.
-	s.keysTable.SetWidth(w)
-	s.keysTable.SetCursor(s.keysCursor)
-	return s.keysTable
+	t.SetWidth(w)
+	t.SetCursor(m.ui.settings.keysCursor)
+	return &t
 }
 
 func (s *themeStyles) tableStyles() table.Styles {

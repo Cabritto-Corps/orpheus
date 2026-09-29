@@ -4,6 +4,7 @@ import (
 	"errors"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -14,8 +15,8 @@ import (
 )
 
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	// See syncListFilterBinding: the key-capture flow replaces m.ui.keys wholesale.
-	m.syncListFilterBinding()
+	// See syncListKeyMaps: the key-capture flow replaces m.ui.keys wholesale.
+	m.syncListKeyMaps()
 	k := m.ui.keys
 	filtering := m.isFiltering()
 
@@ -260,7 +261,7 @@ func (m *model) handleQueueKey(msg tea.KeyPressMsg) tea.Cmd {
 
 // allFilterLists is every bubbles list the app can filter with. New
 // surfaces register their list here instead of growing the enumeration in
-// syncListFilterBinding.
+// syncListKeyMaps.
 func (m *model) allFilterLists() []*list.Model {
 	return []*list.Model{&m.browse.playlistList, &m.browse.albumList, &m.ui.trackPopupList}
 }
@@ -282,14 +283,52 @@ func (m model) filterableLists() []*list.Model {
 	return nil
 }
 
-// syncListFilterBinding points every list's search binding at the
-// configured filter key. Bubbles dispatches filtering off its own KeyMap,
-// which the repo never otherwise touches, so without this a keys.json
-// rebind of the search action would only change the help text.
-func (m *model) syncListFilterBinding() {
+// Bubbles' default browse bindings, snapshotted once. The per-keypress
+// reconciliation below strips app-owned keys from a stable base instead of
+// from an already-stripped binding, which is what keeps runtime rebinds
+// correct in both directions: claim `l` and paging loses it; release `l`
+// and paging regains it.
+var (
+	defaultListNextPage = list.DefaultKeyMap().NextPage
+	defaultListPrevPage = list.DefaultKeyMap().PrevPage
+)
+
+// syncListKeyMaps reconciles every browse/popup list's KeyMap with the live
+// keyMap so bubbles dispatches nothing the app owns. The key-capture flow
+// replaces m.ui.keys wholesale, so this runs on every keypress: Filter
+// follows the rebound search key; bubbles' built-in quit — `v` since
+// bubbles v2, where v1 bound q/esc — stays disabled (quit is an app action,
+// dispatched before any list ever sees a key); page bindings drop whatever
+// the registry claims (repeat's `l`, queue-remove's `d`), so app keys never
+// turn pages. List cursor/goto bindings are untouched: vertical navigation
+// is the lists' core function.
+func (m *model) syncListKeyMaps() {
+	claimed := make(map[string]struct{}, 64)
+	for _, meta := range actionRegistry {
+		for _, spec := range meta.bind(m.ui.keys).Keys() {
+			claimed[canonicalKeySpec(spec)] = struct{}{}
+		}
+	}
 	for _, l := range m.allFilterLists() {
 		l.KeyMap.Filter = m.ui.keys.Filter
+		l.DisableQuitKeybindings()
+		l.KeyMap.NextPage = unclaimedListKeys(defaultListNextPage, claimed)
+		l.KeyMap.PrevPage = unclaimedListKeys(defaultListPrevPage, claimed)
 	}
+}
+
+// unclaimedListKeys rebuilds a list navigation binding without the keys the
+// action registry owns, keeping bubbles' help text. A binding reduced to
+// nothing stays disabled.
+func unclaimedListKeys(def key.Binding, claimed map[string]struct{}) key.Binding {
+	var keep []string
+	for _, spec := range def.Keys() {
+		if _, ok := claimed[canonicalKeySpec(spec)]; !ok {
+			keep = append(keep, spec)
+		}
+	}
+	help := def.Help()
+	return key.NewBinding(key.WithKeys(keep...), key.WithHelp(help.Key, help.Desc))
 }
 
 func (m model) matchGlobalPlaybackKey(msg tea.KeyPressMsg) playbackInputKind {
@@ -438,8 +477,9 @@ func (m model) handleTrackPopupKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.ui.trackPopupOpen = false
 		return m, nil
 	case keyMatches(msg, k.Quit):
-		// The bubbles list binds q to its own quit; inside the modal
-		// Esc closes and q stays inert (ctrl+c already quit above).
+		// The bubbles list's own quit binding (disabled in syncListKeyMaps)
+		// can never fire here; this case keeps our own quit inert inside
+		// the modal while Esc closes (ctrl+c already quit above).
 		return m, nil
 	case keyMatches(msg, k.Select):
 		sel, ok := m.ui.trackPopupList.SelectedItem().(trackItem)

@@ -366,3 +366,28 @@ func TestKeysTableRendersRows(t *testing.T) {
 		}
 	}
 }
+
+// The keys table always reflects the live keyMap: no dirty flag or cache
+// stands between a rebind and the next render (the old memo could never
+// engage — its writes landed on render-path copies).
+func TestKeysTableReflectsRebindDirectly(t *testing.T) {
+	m := testListModel()
+	m.ui.settings.keysPath = filepath.Join(t.TempDir(), "keys.json")
+	rowWith := func(out, label string) string {
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, label) {
+				return line
+			}
+		}
+		return ""
+	}
+	if row := rowWith(m.settingsKeysTable(100, 20).View(), "repeat"); !strings.Contains(row, "l") {
+		t.Fatalf("expected loop row bound to l before rebind: %q", row)
+	}
+	if err := m.applyCapture("loop", "z"); err != nil {
+		t.Fatalf("applyCapture: %v", err)
+	}
+	if row := rowWith(m.settingsKeysTable(100, 20).View(), "repeat"); !strings.Contains(row, "z") {
+		t.Fatalf("expected loop row bound to z after rebind: %q", row)
+	}
+}

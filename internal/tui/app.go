@@ -164,7 +164,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 		},
 	}
 
-	m.syncListFilterBinding()
+	m.syncListKeyMaps()
 	m.ui.settings.imageStyle = imageStyleOrDefault(imageStyle)
 	m.ui.settings.imageStyleSet = imageStyleSet
 	return m

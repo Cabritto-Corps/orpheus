@@ -79,12 +79,19 @@ func (m model) headerView() string {
 
 func layoutThreeZone(w int, left, center, right string) string {
 	leftW := lipgloss.Width(left)
+
+	// The right zone must always fit: truncate it only when it alone
+	// overflows what the left zone leaves of the row.
+	right = fitCell(right, max(0, w-leftW))
 	rightW := lipgloss.Width(right)
 
 	// The centre zone owns exactly the space left of the fixed-size side
 	// zones; it is truncated BEFORE joining so the row can never exceed the
-	// terminal (a style would wrap instead of clip).
-	centerBudget := max(0, w-leftW-rightW-2)
+	// terminal (a style would wrap instead of clip). The centered title is
+	// positioned absolutely on the terminal, so it must additionally clear
+	// both halves: shrink it until neither side zone reaches into the
+	// centered block, else the row overflows by the overlap.
+	centerBudget := min(max(0, w-leftW-rightW-2), max(0, w-2*leftW), max(0, w-2*rightW))
 	center = fitCell(center, centerBudget)
 	centerW := lipgloss.Width(center)
 
