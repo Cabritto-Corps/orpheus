@@ -12,6 +12,7 @@ import (
 
 	"orpheus/internal/config"
 	"orpheus/internal/loader"
+	"orpheus/internal/spotify"
 )
 
 func imageStyleTestEnv(env map[string]string) func(string) string {
@@ -291,5 +292,52 @@ func TestStartupImageStyleLoadsExplicitConfig(t *testing.T) {
 	}
 	if m.ui.imgs.protocolForRender() != imageProtocolNone || !m.ui.imgs.protocolExplicit {
 		t.Fatal("startup must force half-block rendering for explicit pixelated")
+	}
+}
+
+func TestRenderedStyleSwitchReencodesVisibleCover(t *testing.T) {
+	getenv := imageStyleTestEnv(map[string]string{"KITTY_WINDOW_ID": "1"})
+	m := NewLoaderModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	const url = "https://example.com/current-cover"
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: url}
+	m.ui.imgs = newImgCacheWithSelection(config.ImageStyleRendered, true, getenv)
+
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	m.ui.imgs.setImage(url, img, 8, 8)
+	if m.ui.imgs.encodedFor(url) == "" {
+		t.Fatal("rendered must encode the current cover before the switch")
+	}
+
+	m.ui.settings.imageStyle = config.ImageStylePixelated
+	nextModel, _ := m.applyImageStyleWithEnv(getenv)
+	next := nextModel.(model)
+	if encoded := next.ui.imgs.encodedFor(url); encoded != "" {
+		t.Fatal("pixelated must invalidate the kitty payload")
+	}
+
+	next.ui.settings.imageStyle = config.ImageStyleRendered
+	nextModel, cmd := next.applyImageStyleWithEnv(getenv)
+	next = nextModel.(model)
+	if cmd == nil {
+		t.Fatal("returning to rendered must schedule the visible cover's kitty re-encode")
+	}
+	loadedMsg := cmd()
+	loaded, ok := loadedMsg.(imageLoadedMsg)
+	if !ok {
+		t.Fatalf("expected an image load message, got %T", loadedMsg)
+	}
+	if loaded.err != nil {
+		t.Fatalf("re-encode failed: %v", loaded.err)
+	}
+	nextModel, _ = next.handleImageLoadedMsg(loaded)
+	next = nextModel.(model)
+	if !next.ui.imgs.hasKittyEncoding(url) {
+		t.Fatal("the retained cover must regain its kitty encoding after the switch")
+	}
+	if out := next.kittyOverlay(); !strings.Contains(out, "\x1b_G") {
+		t.Fatalf("expected the re-encoded cover to reach the overlay, got %q", out)
 	}
 }

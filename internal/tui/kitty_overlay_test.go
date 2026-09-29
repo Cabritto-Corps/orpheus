@@ -3,9 +3,12 @@ package tui
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"strings"
 	"testing"
 	"time"
+
+	uv "github.com/charmbracelet/ultraviolet"
 
 	"orpheus/internal/spotify"
 )
@@ -192,5 +195,68 @@ func TestCoverWaitsForInflightRenderInsteadOfSpinning(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("cover() did not return after render completion")
+	}
+}
+
+func TestKittyOverlayPayloadSurvivesFrameworkDraw(t *testing.T) {
+	m := guardModel(t, frameVariant{width: 100, height: 40, tab: tabPlaylists})
+	m.ui.imgs.setProtocol(imageProtocolKitty)
+	big := image.NewNRGBA(image.Rect(0, 0, 128, 128))
+	var seed uint32 = 0xabcdef01
+	for y := 0; y < 128; y++ {
+		for x := 0; x < 128; x++ {
+			seed = seed*1664525 + 1013904223
+			big.Set(x, y, color.NRGBA{R: uint8(seed >> 16), G: uint8(seed >> 8), B: uint8(seed), A: 255})
+		}
+	}
+	const curl = "probe://cover-draw"
+	m.ui.imgs.setImage(curl, big, 40, 20)
+	if err := m.ui.imgs.ensureKittyEncoding(curl, big); err != nil {
+		t.Fatal(err)
+	}
+	enc := m.ui.imgs.encodedFor(curl)
+	if len(enc) <= 4096 {
+		t.Fatalf("probe image too compressible for a multi-chunk test: %d bytes", len(enc))
+	}
+	items := m.browse.playlistList.Items()
+	if pi, ok := items[0].(playlistItem); ok {
+		pi.summary.ImageURL = curl
+		items[0] = pi
+		m.browse.playlistList.SetItems(items)
+	}
+	m.browse.playlistList.Select(0)
+	content := m.View().Content
+	if !strings.Contains(content, "\x1b_G") {
+		t.Fatal("no kitty payload in View content")
+	}
+	// drive the REAL framework draw path, exactly like the v2 flush()
+	sb := uv.NewScreenBuffer(100, 40)
+	uv.NewStyledString(content).Draw(sb, sb.Bounds())
+	var joined strings.Builder
+	for y := 0; y < 40; y++ {
+		for x := 0; x < 100; x++ {
+			if c := sb.CellAt(x, y); c != nil {
+				joined.WriteString(c.Content)
+			}
+		}
+	}
+	var parts []string
+	// NOTE: the ST terminator is ESC + ONE backslash: "\x1b\\" in Go source.
+	for _, seg := range strings.Split(joined.String(), "\x1b\\") {
+		rest := seg
+		// strip a leading CUP ("\x1b[ROW;COLH") before looking for the
+		// payload separator: both contain ";", and base64 itself may
+		// contain "H", so order matters.
+		if i := strings.Index(rest, "\x1b["); i >= 0 {
+			if j := strings.Index(rest[i:], "H"); j >= 0 {
+				rest = rest[i+j+1:]
+			}
+		}
+		if i := strings.LastIndex(rest, ";"); i >= 0 {
+			parts = append(parts, rest[i+1:])
+		}
+	}
+	if got := strings.Join(parts, ""); got != enc {
+		t.Fatalf("payload corrupted by framework draw: reassembled %d of %d base64 bytes", len(got), len(enc))
 	}
 }

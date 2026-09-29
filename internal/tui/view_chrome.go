@@ -266,7 +266,24 @@ func (m model) helpModalView() string {
 		m.styles.styleModalHint.Render(hint), body, modalW, innerH)
 }
 
+// resetOverlayCursor prefixes overlay bytes with a carriage return so the
+// cell-buffer renderer keeps them: overlay bytes append after a full-width
+// frame line, and the renderer's Draw folds out-of-bounds content away
+// instead of writing it. CR resets Draw's column to 0 (it is consumed by
+// the parser, never emitted), so the payload lands in a real cell and
+// reaches the wire. Every non-empty overlay return flows through here.
+func resetOverlayCursor(out string) string {
+	if out == "" {
+		return ""
+	}
+	return "\r" + out
+}
+
 func (m model) kittyOverlay() string {
+	return resetOverlayCursor(m.kittyOverlayBytes())
+}
+
+func (m model) kittyOverlayBytes() string {
 	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() != imageProtocolKitty {
 		return ""
 	}

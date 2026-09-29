@@ -295,7 +295,47 @@ func (m model) applyImageStyleWithEnv(getenv func(string) string) (tea.Model, te
 	m.ui.cover.kittyFellBack = false
 	m.ui.cover.kittyRecoveryStreak = 0
 	m.ui.cover.playerCoverFailStreak = 0
-	return m, nil
+	return m, m.reloadCurrentKittyCoverCmd()
+}
+
+// reloadCurrentKittyCoverCmd re-encodes the visible cover after a style
+// switch clears the kitty payload cache: source images are retained, so
+// the current one can be framed without waiting for a navigation or
+// track change to reload it. Only cached images qualify; anything else
+// keeps the normal cover-loading path.
+func (m model) reloadCurrentKittyCoverCmd() tea.Cmd {
+	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() != imageProtocolKitty {
+		return nil
+	}
+	var url string
+	switch m.ui.activeTab {
+	case tabPlaylists:
+		url = selectedImageURLFromList(m.browse.playlistList)
+	case tabAlbums:
+		url = selectedImageURLFromList(m.browse.albumList)
+	case tabPlayer:
+		if m.transport.status != nil {
+			url = m.transport.status.AlbumImageURL
+		}
+	}
+	if strings.TrimSpace(url) == "" {
+		return nil
+	}
+	img, ok := m.ui.imgs.getImage(url)
+	if !ok {
+		return nil
+	}
+	if cmd := m.loadImageCmd(url, true); cmd != nil {
+		return cmd
+	}
+	// No loader is available in this path (notably tests): encode inline so
+	// the newly selected style still applies to the retained source image.
+	if err := m.ui.imgs.ensureKittyEncoding(url, img); err != nil {
+		slog.Warn("kitty re-encode failed", "url", url, "error", err)
+		return nil
+	}
+	m.ui.imgs.forceKittyRedraw()
+	return nil
 }
 
 func clampCrossfadeSeconds(v float64) float64 {
@@ -539,6 +579,9 @@ func (m model) settingsKeysTable(w, h int) *table.Model {
 		s.keysTableDirty = false
 	}
 	s.keysTable.SetHeight(h)
+	// Width is load-bearing, not cosmetic: the bubbles table renders its
+	// rows through a viewport that drops everything when its width is 0.
+	s.keysTable.SetWidth(w)
 	s.keysTable.SetCursor(s.keysCursor)
 	return s.keysTable
 }

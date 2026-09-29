@@ -298,11 +298,14 @@ func (s *themeStyles) coverFrameBox(cols, rows int) string {
 
 func (s *themeStyles) coverFrameBoxWith(art string, cols, rows int) string {
 	border, _ := s.coverFrameBorder()
+	// lipgloss v2 Width/Height are total block budgets: the cell dims
+	// already include the border ring, so an exactly-sized render must
+	// not be shrunk again (that re-wraps every art row).
 	return lipgloss.NewStyle().
 		Border(border).
 		BorderForeground(s.colorBlue).
-		Width(cols - 2).
-		Height(rows - 2).
+		Width(cols).
+		Height(rows).
 		Render(art)
 }
 
@@ -328,12 +331,14 @@ func (m model) placeholderArt(cols, rows int) string {
 	if cached, ok := m.styles.placeholder.get(key); ok {
 		return cached
 	}
-	// Border accounts for its own 2 cells: Width/Height size the content.
+	// lipgloss v2 Width/Height are total block budgets: the requested cell
+	// already includes the border ring. Render an empty interior and let
+	// the style supply the full cell.
 	out := lipgloss.NewStyle().
 		Border(m.styles.themeBorder()).
 		BorderForeground(m.styles.colorDivider).
-		Width(cols - 2).
-		Height(rows - 2).
+		Width(cols).
+		Height(rows).
 		Render("")
 	m.styles.placeholder.put(key, out)
 	return out

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"orpheus/internal/config"
 	"orpheus/internal/librespot"
@@ -351,5 +352,17 @@ func TestSettingsRootRowsDriveMenu(t *testing.T) {
 	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	if next.ui.settings.cursor != 0 {
 		t.Fatalf("down from last wrapped to %d, want 0", next.ui.settings.cursor)
+	}
+}
+
+func TestKeysTableRendersRows(t *testing.T) {
+	m := guardModel(t, frameVariant{width: 100, height: 40, tab: tabPlaylists})
+	m.ui.settings.open = true
+	m.ui.settings.mode = settingsModeKeys
+	plain := ansi.Strip(m.View().Content)
+	for _, want := range []string{"Action", "play/pause", "volume up", "next track"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("keys menu missing %q; body renders without rows", want)
+		}
 	}
 }
