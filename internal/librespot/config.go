@@ -2,6 +2,7 @@ package librespot
 
 import (
 	"net/http"
+	"runtime"
 
 	golibrespot "github.com/elxgy/go-librespot"
 	"github.com/elxgy/go-librespot/sessionconfig"
@@ -34,11 +35,20 @@ type Config struct {
 	AudioPeriodCount  int
 }
 
+// defaultAudioBackend picks the platform's native output. PulseAudio has
+// no server on macOS; AudioToolbox is its native backend.
+func defaultAudioBackend() string {
+	if runtime.GOOS == "darwin" {
+		return "audio-toolbox"
+	}
+	return "pulseaudio"
+}
+
 func DefaultConfig() *Config {
 	return &Config{
 		DeviceName:        "orpheus",
 		DeviceType:        "computer",
-		AudioBackend:      "pulseaudio",
+		AudioBackend:      defaultAudioBackend(),
 		AudioDevice:       "default",
 		Bitrate:           160,
 		VolumeSteps:       100,
