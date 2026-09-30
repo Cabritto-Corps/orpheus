@@ -84,6 +84,11 @@ func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUp
 	if out.DurationMS <= 0 && p.state.player.Duration > 0 {
 		out.DurationMS = int(p.state.player.Duration)
 	}
+	// Position is derived from PositionAsOfTimestamp + elapsed; a stale
+	// transfer can push the rebase below zero, which the bar must never see.
+	if out.ProgressMS < 0 {
+		out.ProgressMS = 0
+	}
 	return out
 }
 

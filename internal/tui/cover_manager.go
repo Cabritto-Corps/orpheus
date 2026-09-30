@@ -17,6 +17,11 @@ type coverManager struct {
 	resolveInFlight map[string]struct{}
 	queue           *stdlist.List
 	queued          map[string]*stdlist.Element
+	// prefetched remembers kicked up-next covers so repeated state pushes
+	// don't re-evaluate them. A map (not a string): coverManager travels
+	// by value inside the model, so scalar writes from handlers that don't
+	// return the model would be silently dropped; map writes survive.
+	prefetched map[string]struct{}
 	// queue is the FIFO of cover URLs to load; queued maps each URL to
 	// its list element. Element pointers stay valid across pops and
 	// removes, so no index bookkeeping exists that could desync.
@@ -33,6 +38,7 @@ func newCoverManager() coverManager {
 		imageRetryCount: make(map[string]int),
 		imageRetryToken: make(map[string]int),
 		resolveInFlight: make(map[string]struct{}),
+		prefetched:      make(map[string]struct{}),
 		queue:           stdlist.New(),
 		queued:          make(map[string]*stdlist.Element),
 	}
@@ -239,6 +245,38 @@ func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
 		urls = append(urls, url)
 	}
 	return m.loadImagesBatchCmd(urls)
+}
+
+// prefetchNextCoverCmd warms the up-next track's cover so a skip swaps
+// from cache instead of paying fetch+decode on the critical path. The
+// visible queue already hides the currently playing head entry, so its
+// first item is the next track. One URL in flight at a time: re-kicks
+// only when the head changes. shouldQueueLoad (not bare beginLoad) gates
+// the kick so dead URLs pace behind the fail cooldown instead of
+// refetching on every state push.
+func (m *model) prefetchNextCoverCmd() tea.Cmd {
+	if m.ui.imgs == nil {
+		return nil
+	}
+	q := m.visibleQueue()
+	if len(q) == 0 {
+		return nil
+	}
+	url := strings.TrimSpace(q[0].ImageURL)
+	if url == "" {
+		return nil
+	}
+	if _, ok := m.ui.cover.prefetched[url]; ok {
+		return nil
+	}
+	if m.transport.status != nil && url == strings.TrimSpace(m.transport.status.AlbumImageURL) {
+		return nil
+	}
+	if !m.ui.imgs.shouldQueueLoad(url) {
+		return nil
+	}
+	m.ui.cover.prefetched = map[string]struct{}{url: {}}
+	return m.loadImageCmd(url, false)
 }
 
 func (m *model) maybeRecoverKittyProtocol() {

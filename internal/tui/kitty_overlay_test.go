@@ -6,10 +6,6 @@ import (
 	"image/color"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/charmbracelet/colorprofile"
-	uv "github.com/charmbracelet/ultraviolet"
 
 	"orpheus/internal/spotify"
 )
@@ -111,18 +107,26 @@ func TestOverlayDisplacedImageDeletedByID(t *testing.T) {
 	m.ui.imgs.protocol = imageProtocolKitty
 	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
 	m.ui.imgs.encoded["u2"] = "ZmFrZQ=="
-	if first := m.kittyOverlay(); first == "" {
+	first := m.kittyOverlay()
+	if first == "" {
 		t.Fatal("expected initial kitty render")
 	}
-	shownID := m.ui.imgs.overlayShownID()
+	shownID := transmitImageID(t, first)
 	m.transport.status.TrackID = "track-2"
 	m.transport.status.AlbumImageURL = "u2"
 	second := m.kittyOverlay()
 	if second == "" {
 		t.Fatal("expected redraw when player cover URL changes")
 	}
-	if want := fmt.Sprintf("d=i,i=%d", shownID); !strings.Contains(second, want) {
-		t.Fatalf("expected old image explicitly deleted by ID (%q), got %q", want, second)
+	// The old image drops only after the new cover lands fully placed:
+	// terminals can present mid-transmission, and a purge-first order
+	// would flash the gap. Data goes with the drop (nothing re-places
+	// a displaced cover).
+	if want := fmt.Sprintf("d=I,i=%s", shownID); !strings.Contains(second, want) {
+		t.Fatalf("expected old image purged by ID (%q), got %q", want, second)
+	}
+	if pi, ni := strings.Index(second, "d=I,i="+shownID), strings.Index(second, "ZmFrZQ=="); pi < ni {
+		t.Fatalf("expected purge strictly after placement, got %q", second)
 	}
 	if strings.Contains(second, "a=d,d=A") {
 		t.Fatalf("expected no global delete-all on content swap, got %q", second)
@@ -132,132 +136,229 @@ func TestOverlayDisplacedImageDeletedByID(t *testing.T) {
 	}
 }
 
-func TestHideOverlayForModalDeletesOnceKeepsIntent(t *testing.T) {
-	c := newImgCache()
-	intent := overlayIntent{tab: tabPlayer, subject: "track-1", url: "u1"}
-	emit, tx, _ := c.commitOverlayIntent(intent)
-	if !emit || tx == 0 {
-		t.Fatal("expected initial overlay commit to emit")
+// transmitImageID extracts the stored image ID from a transmit emission's
+// a=T packet (options sit between the packet framing and the first ';').
+// It targets the a=T packet specifically: emissions can carry leading
+// delete packets whose own i= names a different image.
+func transmitImageID(t *testing.T, emission string) string {
+	t.Helper()
+	// Split into packets first: a leading delete packet's i= names a
+	// different image, so options must come from the a=T packet alone.
+	for _, pkt := range strings.Split(emission, "\x1b_G")[1:] {
+		opts, _, _ := strings.Cut(pkt, ";")
+		if !strings.Contains(opts, "a=T") {
+			continue
+		}
+		_, after, ok := strings.Cut(opts, "i=")
+		if !ok {
+			t.Fatalf("expected an image ID in %q", emission)
+		}
+		id := after
+		if end := strings.IndexAny(id, ",\x1b"); end >= 0 {
+			id = id[:end]
+		}
+		if id == "" {
+			t.Fatalf("expected an image ID in %q", emission)
+		}
+		return id
 	}
-	// Repeated modal frames keep deleting the same ID (deleting an unknown
-	// ID is a terminal no-op) while the slot is retained.
-	first := c.hideOverlayForModal()
-	if want := fmt.Sprintf("a=d,d=i,i=%d", tx); !strings.Contains(first, want) {
-		t.Fatalf("expected modal delete of shown ID (%q), got %q", want, first)
+	t.Fatalf("expected a transmit packet in %q", emission)
+	return ""
+}
+
+func TestKittyUnchangedIntentReplacesFromStoredData(t *testing.T) {
+	// Renderer repaints erase placements (the art rect is blank in the
+	// text layer and blank runs win the erase optimization), so an
+	// unchanged visible intent must re-place the stored image every
+	// frame instead of emitting nothing: the data stays stored ID-keyed
+	// in the terminal, and a=p restores the placement in ~70 bytes.
+	t.Setenv("TMUX", "")
+	m := framedTestModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	first := m.kittyOverlay()
+	if !strings.Contains(first, "a=T") {
+		t.Fatalf("expected the first emission to transmit, got %q", first)
 	}
-	if again := c.hideOverlayForModal(); again != first {
-		t.Fatalf("expected repeated modal frames to keep deleting, got %q vs %q", again, first)
+	shownID := transmitImageID(t, first)
+	rect := m.coverArt(m.bodyLayout().coverCols, m.bodyLayout().coverRows)
+
+	// Every re-place pre-deletes image-scoped (d=i,i=, placements only —
+	// the data stays stored, which uppercase d=I would purge): it drops
+	// every placement of the one shown image, including orphans from
+	// emissions dropped after they were built, so a dropped frame loses
+	// nothing and the next re-place cleans up. The pre-delete is
+	// unconditional — even the first re-place carries it as a harmless
+	// no-op — so no placement-ID bookkeeping can drift stale.
+	second := m.kittyOverlay()
+	if second == "" {
+		t.Fatal("expected an unchanged intent to re-place, not emit nothing")
 	}
-	// The unblocking frame retransmits the kept intent without a redundant
-	// delete: the modal frames already removed it.
-	emit, tx2, disp := c.commitOverlayIntent(intent)
-	if !emit {
-		t.Fatal("expected retransmit after modal closes")
+	if strings.Contains(second, "a=T") || !strings.Contains(second, "a=p") {
+		t.Fatalf("expected a payload-free re-place, got %q", second)
 	}
-	if disp != 0 {
-		t.Fatalf("expected no redundant delete on modal resume, got %d", disp)
+	for _, want := range []string{
+		fmt.Sprintf("i=%s", shownID),
+		fmt.Sprintf("c=%d,r=%d", rect.cols, rect.rows),
+		fmt.Sprintf("\x1b[%d;%dH", rect.row, rect.col),
+		"z=-1",
+		fmt.Sprintf("d=i,i=%s", shownID),
+	} {
+		if !strings.Contains(second, want) {
+			t.Fatalf("expected re-place to name %q, got %q", want, second)
+		}
 	}
-	if tx2 == tx {
-		t.Fatal("expected a fresh transmission ID on resume")
+	if strings.Contains(second, "d=I") {
+		t.Fatalf("expected the pre-delete to preserve stored data, got %q", second)
+	}
+	// Second re-place: same shape, and a fresh p= takes its place, so
+	// placements stay bounded by one on screen.
+	third := m.kittyOverlay()
+	if !strings.Contains(third, "d=i") || strings.Contains(third, "d=I") {
+		t.Fatalf("expected a placement-only delete on re-place, got %q", third)
+	}
+	if strings.Contains(second, "p=2") || !strings.Contains(third, "p=2") {
+		t.Fatalf("expected the placement ID to advance across frames, got %q then %q", second, third)
 	}
 }
 
-func TestCoverWaitsForInflightRenderInsteadOfSpinning(t *testing.T) {
-	c := newImgCache()
-	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
-	c.setImage("u-wait", img, 0, 0)
-	key := coverKey{url: "u-wait", cols: 8, rows: 8}
-
-	// Simulate an in-flight render owned elsewhere: the waiter must block
-	// on the completion channel, not spin and not render a duplicate.
-	ch := make(chan struct{})
-	c.mu.Lock()
-	c.rendering[key] = ch
-	c.mu.Unlock()
-
-	done := make(chan string, 1)
-	go func() {
-		s, _ := c.cover(key.url, key.cols, key.rows, colorprofile.TrueColor)
-		done <- s
-	}()
-
-	// Complete the render the way renderAndCache does: cache the result,
-	// drop the in-flight marker, then close (broadcast to all waiters).
-	c.mu.Lock()
-	c.covers.Set(key, "rendered")
-	delete(c.rendering, key)
-	c.mu.Unlock()
-	close(ch)
-
-	select {
-	case got := <-done:
-		if got != "rendered" {
-			t.Fatalf("expected waiter to receive the completed render, got %q", got)
+func solidNRGBA(c color.NRGBA) *image.NRGBA {
+	img := image.NewNRGBA(image.Rect(0, 0, 4, 4))
+	for y := range 4 {
+		for x := range 4 {
+			img.Set(x, y, c)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("cover() did not return after render completion")
+	}
+	return img
+}
+
+func payloadSig(t *testing.T, payload string) string {
+	t.Helper()
+	if len(payload) < 96 {
+		t.Fatalf("payload too short for ordering assertions: %d bytes", len(payload))
+	}
+	return payload[len(payload)/3 : len(payload)/3+48]
+}
+
+func assertPurgeAfterPayload(t *testing.T, emission, payload, what string) {
+	t.Helper()
+	sig := payloadSig(t, payload)
+	pi := strings.Index(emission, "a=d,")
+	ni := strings.Index(emission, sig)
+	if ni < 0 {
+		t.Fatalf("%s must carry the new payload, got %q", what, tail(emission, 200))
+	}
+	if pi < 0 {
+		t.Fatalf("%s must drop what it displaces, got %q", what, tail(emission, 200))
+	}
+	if pi < ni {
+		t.Fatalf("%s purges before the replacement is placed (blank window), got %q", what, tail(emission, 200))
 	}
 }
 
-func TestKittyOverlayPayloadSurvivesFrameworkDraw(t *testing.T) {
-	m := guardModel(t, frameVariant{width: 100, height: 40, tab: tabPlaylists})
-	m.ui.imgs.setProtocol(imageProtocolKitty)
-	big := image.NewNRGBA(image.Rect(0, 0, 128, 128))
-	var seed uint32 = 0xabcdef01
-	for y := range 128 {
-		for x := range 128 {
-			seed = seed*1664525 + 1013904223
-			big.Set(x, y, color.NRGBA{R: uint8(seed >> 16), G: uint8(seed >> 8), B: uint8(seed), A: 255})
-		}
+// A cover change is one direct swap: the new cover transmits in the
+// first emission with the slot committing to it immediately — no blend
+// intermediates, nothing pending. The old cover holds until the new one
+// is loaded, then swaps atomically.
+func TestKittyCoverChangeIsOneDirectSwap(t *testing.T) {
+	t.Setenv("TMUX", "")
+	m := framedTestModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.setImage("u1", solidNRGBA(color.NRGBA{R: 200, G: 30, B: 90, A: 255}), 0, 0)
+	m.ui.imgs.setImage("u2", solidNRGBA(color.NRGBA{R: 30, G: 90, B: 200, A: 255}), 0, 0)
+
+	first := m.kittyOverlay()
+	if first == "" {
+		t.Fatal("expected initial kitty render")
 	}
-	const curl = "probe://cover-draw"
-	m.ui.imgs.setImage(curl, big, 40, 20)
-	if err := m.ui.imgs.ensureKittyEncoding(curl, big); err != nil {
-		t.Fatal(err)
+
+	m.transport.status.TrackID = "track-2"
+	m.transport.status.AlbumImageURL = "u2"
+	out := m.kittyOverlay()
+	newPayload := m.ui.imgs.encodedFor("u2")
+	// The slot commits to the new cover in the same emission: anything
+	// still naming the old URL means an intermediate (fade) is pending.
+	if got := m.ui.imgs.kittyDisplayedURL(); got != "u2" {
+		t.Fatalf("cover change must commit immediately, slot still shows %q", got)
 	}
-	enc := m.ui.imgs.encodedFor(curl)
-	if len(enc) <= 4096 {
-		t.Fatalf("probe image too compressible for a multi-chunk test: %d bytes", len(enc))
+	assertPurgeAfterPayload(t, out, newPayload, "cover change")
+	// Transmits sit under the text layer so modal scrims cover them
+	// with no delete/restore dance.
+	if !strings.Contains(out, "z=-1") {
+		t.Fatalf("cover transmit must sit under text (z=-1), got %q", tail(out, 200))
 	}
-	items := m.browse.playlistList.Items()
-	if pi, ok := items[0].(playlistItem); ok {
-		pi.summary.ImageURL = curl
-		items[0] = pi
-		m.browse.playlistList.SetItems(items)
+	if got := strings.Count(out, "a=T"); got != 1 {
+		t.Fatalf("cover change must be exactly one transmit, got %d in %q", got, tail(out, 200))
 	}
-	m.browse.playlistList.Select(0)
-	content := m.View().Content
-	if !strings.Contains(content, "\x1b_G") {
-		t.Fatal("no kitty payload in View content")
+	// Settled: the next frame re-places from stored data, no retransmit.
+	if again := m.kittyOverlay(); strings.Contains(again, "a=T") {
+		t.Fatalf("settled swap must re-place, not retransmit, got %q", tail(again, 200))
 	}
-	// drive the REAL framework draw path, exactly like the v2 flush()
-	sb := uv.NewScreenBuffer(100, 40)
-	uv.NewStyledString(content).Draw(sb, sb.Bounds())
-	var joined strings.Builder
-	for y := range 40 {
-		for x := range 100 {
-			if c := sb.CellAt(x, y); c != nil {
-				joined.WriteString(c.Content)
-			}
-		}
+}
+
+// While the new cover is still loading the old one holds: no delete,
+// no blank — the load completion drives the swap.
+func TestKittyCoverHoldWhileLoading(t *testing.T) {
+	t.Setenv("TMUX", "")
+	m := framedTestModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.setImage("u1", solidNRGBA(color.NRGBA{R: 200, G: 30, B: 90, A: 255}), 0, 0)
+
+	if first := m.kittyOverlay(); first == "" {
+		t.Fatal("expected initial kitty render")
 	}
-	var parts []string
-	// NOTE: the ST terminator is ESC + ONE backslash: "\x1b\\" in Go source.
-	for seg := range strings.SplitSeq(joined.String(), "\x1b\\") {
-		rest := seg
-		// strip a leading CUP ("\x1b[ROW;COLH") before looking for the
-		// payload separator: both contain ";", and base64 itself may
-		// contain "H", so order matters.
-		if i := strings.Index(rest, "\x1b["); i >= 0 {
-			if j := strings.Index(rest[i:], "H"); j >= 0 {
-				rest = rest[i+j+1:]
-			}
-		}
-		if i := strings.LastIndex(rest, ";"); i >= 0 {
-			parts = append(parts, rest[i+1:])
-		}
+	m.transport.status.TrackID = "track-2"
+	m.transport.status.AlbumImageURL = "u2" // never loaded
+	if out := m.kittyOverlay(); out != "" {
+		t.Fatalf("loading cover must hold the old image silently, got %q", tail(out, 200))
 	}
-	if got := strings.Join(parts, ""); got != enc {
-		t.Fatalf("payload corrupted by framework draw: reassembled %d of %d base64 bytes", len(got), len(enc))
+	if got := m.ui.imgs.kittyDisplayedURL(); got != "u1" {
+		t.Fatalf("loading cover must keep the old slot, shows %q", got)
+	}
+}
+
+// Rapid target changes settle on the newest cover with one placement.
+func TestKittyRapidChangesSettleOnNewest(t *testing.T) {
+	t.Setenv("TMUX", "")
+	m := framedTestModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.setImage("u1", solidNRGBA(color.NRGBA{R: 200, G: 30, B: 90, A: 255}), 0, 0)
+	m.ui.imgs.setImage("u2", solidNRGBA(color.NRGBA{R: 30, G: 90, B: 200, A: 255}), 0, 0)
+	m.ui.imgs.setImage("u3", solidNRGBA(color.NRGBA{R: 30, G: 200, B: 90, A: 255}), 0, 0)
+
+	if first := m.kittyOverlay(); first == "" {
+		t.Fatal("expected initial kitty render")
+	}
+	m.transport.status.TrackID = "track-2"
+	m.transport.status.AlbumImageURL = "u2"
+	_ = m.kittyOverlay()
+	m.transport.status.TrackID = "track-3"
+	m.transport.status.AlbumImageURL = "u3"
+	out := m.kittyOverlay()
+	if got := m.ui.imgs.kittyDisplayedURL(); got != "u3" {
+		t.Fatalf("rapid changes must settle on the newest cover, shows %q", got)
+	}
+	if !strings.Contains(out, m.ui.imgs.encodedFor("u3")[:64]) {
+		t.Fatalf("rapid changes must transmit the newest cover, got %q", tail(out, 200))
+	}
+	if got := strings.Count(out, "a=T"); got != 1 {
+		t.Fatalf("settled change must be exactly one transmit, got %d in %q", got, tail(out, 200))
 	}
 }

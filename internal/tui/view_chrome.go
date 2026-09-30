@@ -2,10 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	golibrespot "github.com/elxgy/go-librespot"
 )
@@ -163,13 +165,14 @@ func (m model) playerBarView() string {
 	if m.transport.status.DurationMS > 0 && elapsedMs > m.transport.status.DurationMS {
 		elapsedMs = m.transport.status.DurationMS
 	}
+	if elapsedMs < 0 {
+		elapsedMs = 0
+	}
 
 	pct := 0.0
 	if m.transport.status.DurationMS > 0 {
 		pct = float64(elapsedMs) / float64(m.transport.status.DurationMS)
-		if pct > 1 {
-			pct = 1
-		}
+		pct = max(0, min(1, pct))
 	}
 
 	elapsed := m.styles.stylePlayerTime.Render(fmtDuration(elapsedMs))
@@ -182,6 +185,9 @@ func (m model) playerBarView() string {
 	totalW := lipgloss.Width(total)
 	iconW := lipgloss.Width(stateIcon)
 	progressW := barW - elapsedW - totalW - iconW - playerBarGaps*playerBarGap
+	// Narrow terminals (and the pre-resize startup frame) leave no room
+	// for the bar; a negative width must render empty, never panic Repeat.
+	progressW = max(0, progressW)
 	var progressStr string
 	if m.transport.status.DurationMS <= 0 {
 		_, empty := m.styles.themeBarRunes()
@@ -273,38 +279,112 @@ func (m model) helpModalView() string {
 		m.styles.styleModalHint.Render(hint), body, modalW, innerH)
 }
 
-// resetOverlayCursor prefixes overlay bytes with a carriage return so the
-// cell-buffer renderer keeps them: overlay bytes append after a full-width
-// frame line, and the renderer's Draw folds out-of-bounds content away
-// instead of writing it. CR resets Draw's column to 0 (it is consumed by
-// the parser, never emitted), so the payload lands in a real cell and
-// reaches the wire. Every non-empty overlay return flows through here.
-func resetOverlayCursor(out string) string {
+// kittyOverlay builds this frame's overlay bytes for direct terminal
+// emission via tea.Raw (see kittyOverlayCmd). View content CANNOT carry
+// them: the v2 pipeline parks non-SGR escapes in zero-width cells the
+// repaint engine never writes, and drops mid-text ones outright.
+//
+// Save/restore around the emission keeps the renderer's cursor model
+// exact (CUP moves the physical cursor; DECRC puts it back), and the
+// bytes are SGR-free so the renderer's delta-tracked pen stays exact too.
+// frameKittyBytes wraps built overlay bytes for the wire: save/restore
+// keeps the renderer's cursor model exact (CUP moves the physical
+// cursor; DECRC puts it back), and the bytes are SGR-free so the
+// renderer's delta-tracked pen stays exact too.
+func frameKittyBytes(out string) string {
 	if out == "" {
 		return ""
 	}
-	return "\r" + out
+	framed := "\x1b7" + out + "\x1b8"
+	dumpKittyOverlay(framed)
+	return framed
 }
 
 func (m model) kittyOverlay() string {
-	return resetOverlayCursor(m.kittyOverlayBytes())
+	out, _ := m.kittyOverlayBytes()
+	return frameKittyBytes(out)
 }
 
-func (m model) kittyOverlayBytes() string {
-	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() != imageProtocolKitty {
-		return ""
+// kittyOverlayCmd emits the current overlay bytes straight to the terminal
+// through tea.Raw, which the program serializes with frame flushes (no
+// interleave with repaints). Nil when the frame carries nothing: the byte
+// builders already suppress no-op frames.
+//
+// Content emissions (transmit/re-place) are suppression-guarded at
+// delivery: a modal opened after the bytes were built must not receive
+// them. The closure checks the live slot flag when it executes, not
+// when Update builds the string — a stale re-place built pre-modal is
+// dropped instead of resurrecting the image over the scrim. Pure-delete
+// emissions bypass the guard (stray deletes self-heal via
+// re-place/restore; stray placements corrupt).
+func (m model) kittyOverlayCmd() tea.Cmd {
+	out, content := m.kittyOverlayBytes()
+	if out == "" {
+		return nil
 	}
-	// Kitty graphics sit on a terminal layer above text and persist until
-	// deleted, so any popup would render beneath them. Hide the overlay for
-	// the whole time a modal is open; the intent is kept, so the first
-	// unblocked frame retransmits.
-	if m.modalActive() {
-		return m.ui.imgs.hideOverlayForModal()
+	framed := frameKittyBytes(out)
+	if !content {
+		return tea.Raw(framed)
+	}
+	imgs := m.ui.imgs
+	inner := tea.Raw(framed)
+	return func() tea.Msg {
+		if imgs != nil && imgs.overlaySuppressed() {
+			return nil
+		}
+		return inner()
+	}
+}
+
+// dumpKittyOverlay appends the exact overlay bytes to ORPHEUS_KITTY_DUMP
+// when set: `cat` that file in the same terminal to bisect app bytes
+// versus terminal/tmux handling. Best-effort by design: diagnostics must
+// never break rendering.
+func dumpKittyOverlay(out string) {
+	path := strings.TrimSpace(os.Getenv("ORPHEUS_KITTY_DUMP"))
+	if path == "" || out == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = f.WriteString(out)
+}
+
+// kittyOverlayBytes builds this frame's overlay bytes and reports whether
+// they place image data. content=false means a pure-delete emission (modal
+// hide, surface clear, protocol purge): it bypasses delivery suppression.
+// content=true (transmit, re-place) is suppression-guarded by
+// kittyOverlayCmd — a modal opened after the build drops it on delivery.
+func (m model) kittyOverlayBytes() (string, bool) {
+	if m.ui.imgs == nil {
+		return "", false
+	}
+	if m.ui.imgs.protocolForRender() != imageProtocolKitty {
+		// A protocol switch resets the slot without naming the shown
+		// image for deletion; the pending purge (if any) goes out once
+		// here, then this path stays silent by design.
+		if id := m.ui.imgs.takePendingKittyPurge(); id != 0 {
+			return deleteKittyImageData(id), false
+		}
+		return "", false
+	}
+	if m.modalKind() != modalNone {
+		// An open modal hides the shown image with an image-scoped
+		// delete on every frame while the slot believes it is live —
+		// never once-and-silent, so a missed delete or a resurrected
+		// placement self-heals on the next frame. Placements sit under
+		// the text layer (z=-1) as a bonus only; terminals may show
+		// them through default-background cells. A pending
+		// protocol-switch purge rides the next non-modal frame instead.
+		return m.ui.imgs.hideOverlayWhileModal(), false
 	}
 	layout := m.bodyLayout()
 	rect := m.coverArt(layout.coverCols, layout.coverRows)
 	if rect.empty() {
-		return deleteKittyImage(m.ui.imgs.clearOverlayIntent())
+		return deleteKittyImage(m.ui.imgs.clearOverlayIntent()), false
 	}
 
 	var url, subjectID string
@@ -329,41 +409,63 @@ func (m model) kittyOverlayBytes() string {
 		}
 	}
 	if url == "" {
-		return deleteKittyImage(m.ui.imgs.clearOverlayIntent())
+		return deleteKittyImage(m.ui.imgs.clearOverlayIntent()), false
 	}
 
 	encoded := m.ui.imgs.encodedFor(url)
 	if encoded == "" {
-		displayed := strings.TrimSpace(m.ui.imgs.kittyDisplayedURL())
-		target := strings.TrimSpace(url)
-		shouldClear := displayed != "" && displayed != target
-		if shouldClear {
-			return deleteKittyImage(m.ui.imgs.clearOverlayIntent())
+		// Same surface with content still loading: hold the old cover
+		// instead of flashing a blank gap; the load completion drives
+		// the swap (hold the old, then swap — never blank). A tab
+		// switch is a different surface, so its stale art still clears.
+		if m.ui.imgs.kittyShownTab() == m.ui.activeTab {
+			return "", false
 		}
-		return ""
+		return deleteKittyImage(m.ui.imgs.clearOverlayIntent()), false
 	}
 
 	revision := uint64(0)
 	if m.ui.activeTab == tabPlayer {
 		revision = m.transport.playerCoverEpoch
 	}
-	emit, transmitID, displacedID := m.ui.imgs.commitOverlayIntent(overlayIntent{
+	intent := overlayIntent{
 		art:      rect,
 		tab:      m.ui.activeTab,
 		subject:  subjectID,
 		url:      url,
 		revision: revision,
-	})
+	}
+	return m.kittyTransmitNewCover(intent, rect, encoded)
+}
+
+// kittyTransmitNewCover commits a changed intent and emits one direct
+// swap: the new cover transmits fully, then the displaced image drops.
+// A pending protocol-switch purge (a reset that predates this transmit
+// without an intervening emission) rides along front: the frame carries
+// both, so no stranded image survives a rapid switch round trip.
+func (m model) kittyTransmitNewCover(intent overlayIntent, rect artRect, encoded string) (string, bool) {
+	emit, transmitID, displacedID := m.ui.imgs.commitOverlayIntent(intent)
+	purgePrefix := ""
+	if id := m.ui.imgs.takePendingKittyPurge(); id != 0 {
+		purgePrefix = deleteKittyImageData(id)
+	}
 	if !emit {
-		return ""
+		// Unchanged intent: the image data is already stored ID-keyed in
+		// the terminal, but renderer repaints erase placements (the art
+		// rect is blank in the text layer) and the renderer diff swallows
+		// byte-identical emissions. Re-place with a fresh placement ID
+		// every frame instead of emitting nothing.
+		return purgePrefix + m.ui.imgs.frameOverlayPlacement(rect), true
 	}
 	payload := buildKittyPayload(encoded, rect.cols, rect.rows, transmitID)
 	if payload == "" {
-		return deleteKittyImage(displacedID)
+		return purgePrefix + deleteKittyImage(displacedID), false
 	}
-	// C=1 (DoNotMoveCursor) keeps the cursor where CUP put it, so the old
-	// save/restore dance is gone. The hidden alt-screen cursor makes
-	// C=1-ignoring terminals harmless, and bubbletea repositions the cursor
-	// itself whenever input needs it (filter mode).
-	return fmt.Sprintf("\x1b[%d;%dH%s%s", rect.row, rect.col, deleteKittyImage(displacedID), payload)
+	// The replacement lands fully placed before the displaced image
+	// drops: terminals can present mid-transmission, and a purge-first
+	// order would flash the gap. C=1 (DoNotMoveCursor) keeps the cursor where CUP put
+	// it. The hidden alt-screen cursor makes C=1-ignoring terminals
+	// harmless, and bubbletea repositions the cursor itself whenever
+	// input needs it (filter mode).
+	return purgePrefix + fmt.Sprintf("\x1b[%d;%dH%s%s", rect.row, rect.col, payload, deleteKittyImageData(displacedID)), true
 }

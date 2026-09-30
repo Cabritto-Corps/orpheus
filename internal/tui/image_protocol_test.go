@@ -57,6 +57,7 @@ func TestDetectImageProtocol(t *testing.T) {
 }
 
 func TestEncodeKittyChunksCanonicalFraming(t *testing.T) {
+	t.Setenv("TMUX", "")
 	payload := strings.Repeat("A", 9000)
 	out := encodeKittyChunks(chunkBase64(payload, kitty.MaxChunkSize), 10, 6, 7)
 
@@ -67,15 +68,15 @@ func TestEncodeKittyChunksCanonicalFraming(t *testing.T) {
 			t.Fatalf("first chunk missing %q in %q", want, out[:120])
 		}
 	}
-	if strings.Count(out, "q=2,m=") < 2 {
-		t.Fatal("expected continuation chunks")
+	if strings.Count(out, "\x1b_G") != 3 {
+		t.Fatal("expected three chunk packets")
 	}
-	// Continuations repeat quiet mode plus the more flag; the last one
-	// terminates the transmission.
-	if !strings.Contains(out, "\x1b_Gq=2,m=1;") {
-		t.Fatal("expected middle chunks as quiet continuations")
+	// Continuations carry only the more flag; the last one terminates
+	// the transmission. Quiet mode lives on the first chunk alone.
+	if !strings.Contains(out, "\x1b_Gm=1;") {
+		t.Fatal("expected middle chunks as bare m=1 continuations")
 	}
-	if !strings.HasSuffix(out, "\x1b_Gq=2,m=0;"+strings.Repeat("A", 9000%kitty.MaxChunkSize)+"\x1b\\") {
+	if !strings.HasSuffix(out, "\x1b_Gm=0;"+strings.Repeat("A", 9000%kitty.MaxChunkSize)+"\x1b\\") {
 		t.Fatal("expected last chunk to terminate with m=0")
 	}
 }

@@ -176,8 +176,17 @@ func TestHandleImageLoadedMsgForCurrentPlayerCoverForcesKittyRedraw(t *testing.T
 
 	nextModel, cmd := m.handleImageLoadedMsg(imageLoadedMsg{url: "u1"})
 	got := nextModel.(model)
-	if cmd != nil {
-		t.Fatal("expected no follow-up command on successful image load")
+	// The forced redraw rides the overlay command straight to the wire
+	// instead of waiting for a tick.
+	if cmd == nil {
+		t.Fatal("expected the forced redraw to ride the overlay command")
+	}
+	msg, ok := cmd().(tea.RawMsg)
+	if !ok {
+		t.Fatalf("expected tea.RawMsg, got %T", cmd())
+	}
+	if !strings.Contains(fmt.Sprint(msg.Msg), "d=i") {
+		t.Fatalf("expected the overlay command to carry the redraw, got %q", fmt.Sprint(msg.Msg))
 	}
 	// The load forces retransmission: the same intent must emit again so
 	// the newly available encoding actually reaches the terminal.
@@ -188,6 +197,11 @@ func TestHandleImageLoadedMsgForCurrentPlayerCoverForcesKittyRedraw(t *testing.T
 
 func TestHandleImageLoadedMsgForOtherURLDoesNotForceKittyRedraw(t *testing.T) {
 	m := NewLoaderModel()
+	// A laid-out terminal: at zero width the overlay evaluation inside the
+	// handler would clear the slot via the empty-rect path, which is
+	// correct bookkeeping but not what this test is about.
+	m.ui.width = 120
+	m.ui.height = 40
 	m.ui.activeTab = tabPlayer
 	m.ui.imgs.protocol = imageProtocolKitty
 	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
@@ -529,7 +543,11 @@ func TestLoadImageCmdRepairsMissingKittyEncodingFromCachedImage(t *testing.T) {
 	}
 }
 
-func TestKittyOverlayStateAvoidsRedrawWhenUnchanged(t *testing.T) {
+func TestKittyOverlayReplacesInsteadOfRetransmittingWhenUnchanged(t *testing.T) {
+	// Renderer repaints erase placements, so an unchanged overlay must
+	// re-place the stored image every frame (a=p, tens of bytes) rather
+	// than retransmitting it (a=T, the whole payload) or going silent.
+	t.Setenv("TMUX", "")
 	m := NewLoaderModel()
 	m.ui.width = 120
 	m.ui.height = 40
@@ -543,8 +561,8 @@ func TestKittyOverlayStateAvoidsRedrawWhenUnchanged(t *testing.T) {
 		t.Fatal("expected first overlay render")
 	}
 	second := m.kittyOverlay()
-	if second != "" {
-		t.Fatalf("expected unchanged overlay to skip redraw, got %q", second)
+	if !strings.Contains(second, "a=p") || strings.Contains(second, "a=T") {
+		t.Fatalf("expected unchanged overlay to re-place without retransmitting, got %q", second)
 	}
 	m.ui.imgs.forceKittyRedraw()
 	forced := m.kittyOverlay()
@@ -584,7 +602,89 @@ func TestKittyOverlayDeletesOnceWhenImageDisappears(t *testing.T) {
 	}
 }
 
-func TestKittyOverlayDeletesWhenHelpOpens(t *testing.T) {
+// placementIDOf extracts the placement ID (p=<n>) from a nil-payload
+// placement packet. Re-place and hide packets carry no base64, so the
+// p= is the placement field (the a=p action never pairs p with =).
+func placementIDOf(t *testing.T, packet string) string {
+	t.Helper()
+	idx := strings.LastIndex(packet, "p=")
+	if idx < 0 {
+		t.Fatalf("expected a placement ID in %q", packet)
+	}
+	rest := packet[idx+2:]
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		t.Fatalf("expected digits after p= in %q", packet)
+	}
+	return rest[:end]
+}
+
+func TestKittyOverlayHidesUnderAnyModal(t *testing.T) {
+	// Help, settings, and the track popup all hide the overlay with an
+	// image-scoped delete on every modal frame while the slot believes
+	// an image is live — never once-and-silent, so a missed delete or a
+	// resurrected placement self-heals on the next frame instead of
+	// stranding the image over the modal. The delete names the image
+	// only (no p=): placement IDs churn every frame and Ghostty has
+	// point-delete (d=i,p=) conformance gaps, so targeting a placement
+	// is stale-prone and terminal-fragile. Re-placing during a modal
+	// would draw the cover back over the scrim on every tick (z=-1
+	// shows through default-background cells, so under-text layering
+	// alone does not cover the image).
+	t.Setenv("TMUX", "")
+	cases := []struct {
+		name string
+		open func(*model)
+	}{
+		{"help", func(m *model) { m.ui.helpOpen = true }},
+		{"settings", func(m *model) { m.ui.settings.open = true }},
+		{"track popup", func(m *model) { m.ui.trackPopupOpen = true }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewLoaderModel()
+			m.ui.width = 120
+			m.ui.height = 40
+			m.ui.activeTab = tabPlayer
+			m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+			m.ui.imgs.protocol = imageProtocolKitty
+			m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
+
+			first := m.kittyOverlay()
+			if !strings.Contains(first, "a=T") {
+				t.Fatalf("expected initial transmit, got %q", first)
+			}
+			shownID := transmitImageID(t, first)
+			if placed := m.kittyOverlay(); !strings.Contains(placed, "a=p") {
+				t.Fatalf("expected a re-place, got %q", placed)
+			}
+			tc.open(&m)
+
+			hide := m.kittyOverlay()
+			if !strings.Contains(hide, "a=d,d=i,i="+shownID) {
+				t.Fatalf("expected an image-scoped modal hide, got %q", hide)
+			}
+			if strings.Contains(hide, "p=") {
+				t.Fatalf("expected no placement targeting in the hide, got %q", hide)
+			}
+			if strings.Contains(hide, "d=I") || strings.Contains(hide, "a=T") || strings.Contains(hide, "a=p") {
+				t.Fatalf("expected a placement-only delete with no transmit or re-place, got %q", hide)
+			}
+			if again := m.kittyOverlay(); !strings.Contains(again, "a=d,d=i,i="+shownID) {
+				t.Fatalf("expected the hide to repeat while the modal is open, got %q", again)
+			}
+		})
+	}
+}
+
+func TestKittyOverlayHidesTransmitBeforeFirstReplace(t *testing.T) {
+	// A modal opened between the transmit and the first re-place hides
+	// with the same image-scoped delete (the stored data must survive
+	// for close); the hide repeats while the modal stays open.
+	t.Setenv("TMUX", "")
 	m := NewLoaderModel()
 	m.ui.width = 120
 	m.ui.height = 40
@@ -593,65 +693,27 @@ func TestKittyOverlayDeletesWhenHelpOpens(t *testing.T) {
 	m.ui.imgs.protocol = imageProtocolKitty
 	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
 
-	if m.kittyOverlay() == "" {
-		t.Fatal("expected initial overlay render")
+	if out := m.kittyOverlay(); !strings.Contains(out, "a=T") {
+		t.Fatalf("expected initial transmit, got %q", out)
 	}
 	m.ui.helpOpen = true
-
-	overlay := m.kittyOverlay()
-	if !strings.Contains(overlay, "a=d,d=i") {
-		t.Fatal("expected help modal to clear Kitty image")
+	hide := m.kittyOverlay()
+	if !strings.Contains(hide, "a=d,d=i") || strings.Contains(hide, "d=I") {
+		t.Fatalf("expected a placement-only delete, got %q", hide)
+	}
+	if strings.Contains(hide, "p=") || strings.Contains(hide, "a=T") {
+		t.Fatalf("expected no placement field and no transmit, got %q", hide)
 	}
 	if again := m.kittyOverlay(); !strings.Contains(again, "a=d,d=i") {
-		t.Fatalf("expected help-open state to keep emitting delete-all, got %q", again)
-	}
-}
-
-func TestKittyOverlayDeletesWhenSettingsOpen(t *testing.T) {
-	m := NewLoaderModel()
-	m.ui.width = 120
-	m.ui.height = 40
-	m.ui.activeTab = tabPlayer
-	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
-	m.ui.imgs.protocol = imageProtocolKitty
-	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
-
-	if m.kittyOverlay() == "" {
-		t.Fatal("expected initial overlay render")
-	}
-	m.ui.settings.open = true
-
-	if overlay := m.kittyOverlay(); !strings.Contains(overlay, "a=d,d=i") {
-		t.Fatal("expected settings modal to clear Kitty image")
-	}
-	if again := m.kittyOverlay(); !strings.Contains(again, "a=d,d=i") {
-		t.Fatalf("expected settings-open state to keep emitting delete-all, got %q", again)
-	}
-}
-
-func TestKittyOverlayDeletesWhenTrackPopupOpen(t *testing.T) {
-	m := NewLoaderModel()
-	m.ui.width = 120
-	m.ui.height = 40
-	m.ui.activeTab = tabPlayer
-	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
-	m.ui.imgs.protocol = imageProtocolKitty
-	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
-
-	if m.kittyOverlay() == "" {
-		t.Fatal("expected initial overlay render")
-	}
-	m.ui.trackPopupOpen = true
-
-	if overlay := m.kittyOverlay(); !strings.Contains(overlay, "a=d,d=i") {
-		t.Fatal("expected track popup to clear Kitty image")
-	}
-	if again := m.kittyOverlay(); !strings.Contains(again, "a=d,d=i") {
-		t.Fatalf("expected popup-open state to keep emitting delete-all, got %q", again)
+		t.Fatalf("expected the hide to repeat while the modal is open, got %q", again)
 	}
 }
 
 func TestKittyOverlayRestoresAfterModalCloses(t *testing.T) {
+	// The modal-close frame re-places from the still-stored data (fresh
+	// placement ID, no retransmit): the hide delete was placement-only
+	// precisely so the data survives the modal.
+	t.Setenv("TMUX", "")
 	m := NewLoaderModel()
 	m.ui.width = 120
 	m.ui.height = 40
@@ -660,31 +722,244 @@ func TestKittyOverlayRestoresAfterModalCloses(t *testing.T) {
 	m.ui.imgs.protocol = imageProtocolKitty
 	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
 
-	if m.kittyOverlay() == "" {
-		t.Fatal("expected initial overlay render")
+	if out := m.kittyOverlay(); !strings.Contains(out, "a=T") {
+		t.Fatalf("expected initial transmit, got %q", out)
 	}
+	placed := m.kittyOverlay()
+	oldP := placementIDOf(t, placed)
+
 	m.ui.helpOpen = true
-	if overlay := m.kittyOverlay(); !strings.Contains(overlay, "a=d,d=i") {
-		t.Fatal("expected delete while modal open")
+	hide := m.kittyOverlay()
+	if !strings.Contains(hide, "a=d,d=i") {
+		t.Fatalf("expected the modal hide, got %q", hide)
+	}
+	if strings.Contains(hide, "p=") {
+		t.Fatalf("expected the hide to be image-scoped, got %q", hide)
 	}
 
 	m.ui.helpOpen = false
 	restored := m.kittyOverlay()
 	if restored == "" {
-		t.Fatal("expected overlay to retransmit after modal closes")
+		t.Fatal("expected a re-place on the close frame")
 	}
-	if strings.Contains(restored, "a=d,") {
-		t.Fatalf("expected restore without spurious delete-all, got %q", restored)
+	if strings.Contains(restored, "d=I") {
+		t.Fatalf("expected close without spurious purge, got %q", restored)
 	}
-	if !strings.Contains(restored, "a=T") {
-		t.Fatalf("expected a kitty transmission on restore, got %q", restored)
+	if !strings.Contains(restored, "a=p") || strings.Contains(restored, "a=T") {
+		t.Fatalf("expected close to re-place without retransmitting, got %q", restored)
 	}
-	if again := m.kittyOverlay(); again != "" {
-		t.Fatalf("expected settled overlay to stop transmitting, got %q", again)
+	if newP := placementIDOf(t, restored); newP == oldP {
+		t.Fatalf("expected a fresh placement ID on restore, got reused %s", newP)
+	}
+	if again := m.kittyOverlay(); !strings.Contains(again, "a=p") || strings.Contains(again, "a=T") {
+		t.Fatalf("expected settled overlay to re-place without transmitting, got %q", again)
 	}
 }
 
-func TestKittyOverlayPlayerClearsPreviousImageWhileNextLoads(t *testing.T) {
+// transmitIDOf extracts the image ID (i=<n>) from the transmit (a=T)
+// packet's control section (before its payload ';'): base64 payload
+// bytes — and purge packets riding the same emission — must never be
+// scanned for the ID.
+func transmitIDOf(t *testing.T, emission string) string {
+	t.Helper()
+	for _, seg := range strings.Split(emission, "\x1b_G") {
+		ctrl := seg
+		if i := strings.Index(ctrl, ";"); i >= 0 {
+			ctrl = ctrl[:i]
+		}
+		if !strings.Contains(ctrl, "a=T") {
+			continue
+		}
+		if idx := strings.Index(ctrl, "i="); idx >= 0 {
+			rest := ctrl[idx+2:]
+			end := 0
+			for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+				end++
+			}
+			if end > 0 {
+				return rest[:end]
+			}
+		}
+	}
+	t.Fatalf("expected a transmit packet in %q", emission)
+	return ""
+}
+
+func TestKittyStyleSwitchToPixelatedPurgesShownImage(t *testing.T) {
+	// kitty -> pixelated must purge the shown image's data and placements
+	// exactly once: the switch resets the slot without naming the image,
+	// so the pending purge goes out on the next command and the path
+	// stays silent after (the half-block art underneath is healthy — the
+	// bug was the stranded corpse on top of it).
+	t.Setenv("TMUX", "")
+	m := NewLoaderModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	first := m.kittyOverlay()
+	id := transmitIDOf(t, first)
+
+	m.ui.settings.imageStyle = config.ImageStylePixelated
+	updated, cmd := m.applyImageStyleWithEnv(func(string) string { return "" })
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatalf("expected no cover command on a pixelated switch, got %v", cmd)
+	}
+	if m.ui.imgs.protocolForRender() == imageProtocolKitty {
+		t.Fatal("expected the switch to leave the kitty protocol")
+	}
+
+	purge := m.kittyOverlayCmd()
+	if purge == nil {
+		t.Fatal("expected the pending purge command after the switch")
+	}
+	raw, ok := purge().(tea.RawMsg)
+	if !ok {
+		t.Fatalf("expected tea.RawMsg, got %T", purge())
+	}
+	out := fmt.Sprint(raw.Msg)
+	if !strings.Contains(out, "a=d,d=I") || !strings.Contains(out, "i="+id) {
+		t.Fatalf("expected one data purge of image %s, got %q", id, out)
+	}
+	if strings.Contains(out, "a=T") || strings.Contains(out, "a=p") {
+		t.Fatalf("expected no transmit or re-place on the purge frame, got %q", out)
+	}
+	if again := m.kittyOverlayCmd(); again != nil {
+		t.Fatal("expected silence after the purge")
+	}
+	if out := m.kittyOverlay(); strings.Contains(out, "\x1b_G") {
+		t.Fatalf("expected no graphics bytes after the purge, got %q", out)
+	}
+}
+
+func TestKittyAutoFallbackPurgesShownImage(t *testing.T) {
+	// The automatic kitty -> half-block fallback (repeated player cover
+	// failures) strands the same way a manual style switch does: the
+	// pending purge must land on the next overlay command.
+	t.Setenv("TMUX", "")
+	m := NewLoaderModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
+
+	first := m.kittyOverlay()
+	id := transmitIDOf(t, first)
+
+	m.ui.cover.playerCoverFailStreak = kittyProtocolFallbackFailures
+	m.maybeFallbackFromKittyOnPlayerFailures("u1")
+	if m.ui.imgs.protocolForRender() == imageProtocolKitty {
+		t.Fatal("expected the fallback to leave the kitty protocol")
+	}
+
+	purge := m.kittyOverlayCmd()
+	if purge == nil {
+		t.Fatal("expected the pending purge command after the fallback")
+	}
+	raw, ok := purge().(tea.RawMsg)
+	if !ok {
+		t.Fatalf("expected tea.RawMsg, got %T", purge())
+	}
+	if out := fmt.Sprint(raw.Msg); !strings.Contains(out, "a=d,d=I") || !strings.Contains(out, "i="+id) {
+		t.Fatalf("expected one data purge of image %s, got %q", id, out)
+	}
+	if again := m.kittyOverlayCmd(); again != nil {
+		t.Fatal("expected silence after the purge")
+	}
+}
+
+func TestKittySwitchRoundTripPurgesEveryTransmittedImage(t *testing.T) {
+	// kitty -> pixelated -> kitty -> pixelated with no emissions between
+	// the first two switches: every transmitted ID must appear in a d=I
+	// purge (no leak per round trip), and the stranded purge rides up
+	// front of the round-trip transmit rather than dropping.
+	t.Setenv("TMUX", "")
+	m := NewLoaderModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
+	noEnv := func(string) string { return "" }
+	ghosttyEnv := func(k string) string {
+		if k == "TERM_PROGRAM" {
+			return "ghostty"
+		}
+		return ""
+	}
+
+	first := m.kittyOverlay()
+	id1 := transmitIDOf(t, first)
+
+	m.ui.settings.imageStyle = config.ImageStylePixelated
+	updated, _ := m.applyImageStyleWithEnv(noEnv)
+	m = updated.(model)
+	m.ui.settings.imageStyle = config.ImageStyleRendered
+	updated, _ = m.applyImageStyleWithEnv(ghosttyEnv)
+	m = updated.(model)
+	if m.ui.imgs.protocolForRender() != imageProtocolKitty {
+		t.Fatal("expected the switch-back to restore the kitty protocol")
+	}
+	// Switches clear payload caches; the reload path re-encodes the
+	// retained source image.
+	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
+	second := m.kittyOverlay()
+	id2 := transmitIDOf(t, second)
+	if id2 == id1 {
+		t.Fatalf("expected a fresh image ID after the reset, got reused %s", id1)
+	}
+	if !strings.Contains(second, "a=d,d=I") || !strings.Contains(second, "i="+id1) {
+		t.Fatalf("expected the stranded purge of image %s up front, got %q", id1, second)
+	}
+	if strings.Index(second, "d=I") > strings.Index(second, "a=T") {
+		t.Fatalf("expected the purge to precede the new transmit, got %q", second)
+	}
+
+	m.ui.settings.imageStyle = config.ImageStylePixelated
+	updated, _ = m.applyImageStyleWithEnv(noEnv)
+	m = updated.(model)
+	third := m.kittyOverlay()
+	if !strings.Contains(third, "a=d,d=I") || !strings.Contains(third, "i="+id2) {
+		t.Fatalf("expected the data purge of image %s, got %q", id2, third)
+	}
+	if out := m.kittyOverlay(); out != "" {
+		t.Fatalf("expected silence after the purge, got %q", out)
+	}
+}
+
+func TestPixelatedStartupEmitsNoGraphicsBytes(t *testing.T) {
+	// Explicit pixelated from the start: the overlay path stays silent
+	// across ticks — no transmit, no purge, no placement.
+	t.Setenv("TMUX", "")
+	m := NewLoaderModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
+	m.ui.imgs.protocol = imageProtocolNone
+	m.ui.imgs.protocolExplicit = true
+	for i := 0; i < 5; i++ {
+		if out := m.kittyOverlay(); out != "" {
+			t.Fatalf("expected silence on pixelated tick %d, got %q", i, out)
+		}
+		if cmd := m.kittyOverlayCmd(); cmd != nil {
+			t.Fatalf("expected no command on pixelated tick %d", i)
+		}
+	}
+}
+
+func TestKittyOverlayPlayerHoldsPreviousImageWhileNextLoads(t *testing.T) {
+	// Same surface, content still loading: the old cover stays up until
+	// the new one is ready, so track changes never flash a blank gap.
+	// (A tab switch is a different surface and still clears: see
+	// TestKittyOverlayClearsStaleImageOnTabSwitchWithoutEncodedCover.)
 	m := NewLoaderModel()
 	m.ui.width = 120
 	m.ui.height = 40
@@ -699,13 +974,17 @@ func TestKittyOverlayPlayerClearsPreviousImageWhileNextLoads(t *testing.T) {
 	}
 	m.transport.status.AlbumImageURL = "u2"
 
-	loading := m.kittyOverlay()
-	if !strings.Contains(loading, "a=d,d=i") {
-		t.Fatal("expected stale player image to be cleared while next cover is loading")
+	if loading := m.kittyOverlay(); loading != "" {
+		t.Fatalf("expected the previous image held silently while the next cover loads, got %q", loading)
+	}
+	if got := strings.TrimSpace(m.ui.imgs.kittyDisplayedURL()); got != "u1" {
+		t.Fatalf("expected the displayed URL to stay u1 while u2 loads, got %q", got)
 	}
 }
 
-func TestKittyOverlayPlayerClearsWhileTransportTransitionPending(t *testing.T) {
+func TestKittyOverlayPlayerHoldsWhileTransportTransitionPending(t *testing.T) {
+	// A pending transport transition is still the same surface: hold the
+	// old cover instead of blanking it while the next one loads.
 	m := NewLoaderModel()
 	m.ui.width = 120
 	m.ui.height = 40
@@ -719,9 +998,8 @@ func TestKittyOverlayPlayerClearsWhileTransportTransitionPending(t *testing.T) {
 	}
 	m.transport.transition.Begin(time.Now(), "track-1")
 	m.transport.status.AlbumImageURL = "u2"
-	loading := m.kittyOverlay()
-	if !strings.Contains(loading, "a=d,d=i") {
-		t.Fatal("expected kitty overlay to clear while transport transition is pending")
+	if loading := m.kittyOverlay(); loading != "" {
+		t.Fatalf("expected the previous image held while the transition is pending, got %q", loading)
 	}
 }
 
@@ -830,6 +1108,7 @@ func TestKittyOverlayPlayerSameCoverDifferentTrackStillRedraws(t *testing.T) {
 }
 
 func TestKittyOverlayPlayerEpochForcesRedrawWithSameKeyInputs(t *testing.T) {
+	t.Setenv("TMUX", "")
 	m := NewLoaderModel()
 	m.ui.width = 120
 	m.ui.height = 40
@@ -847,13 +1126,16 @@ func TestKittyOverlayPlayerEpochForcesRedrawWithSameKeyInputs(t *testing.T) {
 	if first == "" {
 		t.Fatal("expected first kitty render")
 	}
-	if second := m.kittyOverlay(); second != "" {
-		t.Fatalf("expected unchanged state to skip redraw, got %q", second)
+	if second := m.kittyOverlay(); !strings.Contains(second, "a=p") || strings.Contains(second, "a=T") {
+		t.Fatalf("expected unchanged state to re-place without redrawing, got %q", second)
 	}
 	m.transport.playerCoverEpoch++
 	third := m.kittyOverlay()
 	if third == "" {
 		t.Fatal("expected epoch increment to force kitty redraw even with same cover/subject")
+	}
+	if strings.Contains(third, "a=d,d=A") {
+		t.Fatalf("expected same-URL epoch redraw never to delete globally, got %q", third)
 	}
 }
 
@@ -926,34 +1208,11 @@ func TestKittyOverlayPlayerDeletesOldImageWhenURLChangesAtSamePlacement(t *testi
 	if second == "" {
 		t.Fatal("expected redraw when player cover URL changes")
 	}
-	if !strings.Contains(second, "a=d,") {
-		t.Fatal("expected old kitty image to be explicitly deleted before drawing new cover at the same placement")
+	if !strings.Contains(second, "d=I") {
+		t.Fatal("expected old kitty image data to be purged once the new cover lands at the same placement")
 	}
 	if !strings.Contains(second, "ZmFrZQ==") {
 		t.Fatal("expected redraw to include the new cover payload")
-	}
-}
-
-func TestKittyOverlayPlayerSameURLRedrawOmitsDeleteAll(t *testing.T) {
-	m := NewLoaderModel()
-	m.ui.width = 120
-	m.ui.height = 40
-	m.ui.activeTab = tabPlayer
-	m.transport.status = &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
-	m.ui.imgs.protocol = imageProtocolKitty
-	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
-
-	if first := m.kittyOverlay(); first == "" {
-		t.Fatal("expected initial kitty render")
-	}
-	m.transport.playerCoverEpoch++
-
-	second := m.kittyOverlay()
-	if second == "" {
-		t.Fatal("expected redraw on epoch bump")
-	}
-	if strings.Contains(second, "a=d,d=A") {
-		t.Fatal("expected same-URL epoch redraw not to globally delete (no URL change)")
 	}
 }
 

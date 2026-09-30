@@ -165,11 +165,9 @@ func TestSetProtocolInvalidatesAndRespectsOverride(t *testing.T) {
 	if _, ok := c.covers.Get(coverKey{url: "u1", cols: 10, rows: 10}); ok {
 		t.Fatal("expected rendered covers invalidated on protocol switch")
 	}
-	if c.overlayShownID() != 0 {
-		t.Fatal("expected displayed overlay image cleared on protocol switch")
-	}
 	// The reset forces retransmission: the same intent must emit again so
-	// the terminal converges on the new-protocol content.
+	// the terminal converges on the new-protocol content. (Emitting also
+	// proves the slot was cleared: an uncleared slot would suppress it.)
 	if emit, _, _ := c.commitOverlayIntent(overlayIntent{url: "u1"}); !emit {
 		t.Fatal("expected forced retransmit after protocol-switch reset")
 	}

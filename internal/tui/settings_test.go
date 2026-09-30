@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"orpheus/internal/config"
@@ -363,6 +364,54 @@ func TestKeysTableRendersRows(t *testing.T) {
 	for _, want := range []string{"Action", "play/pause", "volume up", "next track"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("keys menu missing %q; body renders without rows", want)
+		}
+	}
+}
+
+// The keys table is built to the box content budget: bubbles cells carry
+// their own Padding(0,1), so the columns share (w-4) and every rendered
+// line lands exactly at the budget. Wider lines wrapped inside the box
+// (the header divider's tail spilled into a stray fragment between the
+// column titles and the rows) or were truncated at the viewport width
+// (key labels lost their last characters).
+func TestKeysTableLinesFitBudget(t *testing.T) {
+	m := guardModel(t, frameVariant{width: 100, height: 40, modal: "settings-keys"})
+	for _, w := range []int{12, 24, 40, 80, 120} {
+		out := m.settingsKeysTable(w, 12).View()
+		for line := range strings.SplitSeq(out, "\n") {
+			if got := lipgloss.Width(line); got > w {
+				t.Fatalf("budget %d: table line rendered %d wide, want <= %d: %q", w, got, w, line)
+			}
+		}
+		if !strings.Contains(ansi.Strip(out), "space") {
+			t.Fatalf("budget %d: key label truncated away: %q", w, ansi.Strip(out))
+		}
+	}
+}
+
+// A wrapped table line leaves its overflow on the next screen row: the
+// header divider's dash tail sat between the column titles and the first
+// option. Assert the rendered modal keeps exactly the divider there.
+func TestKeysModalDividerDoesNotWrap(t *testing.T) {
+	for _, width := range []int{80, 100, 140} {
+		m := guardModel(t, frameVariant{width: width, height: 40, modal: "settings-keys"})
+		lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+		idx := -1
+		for i, line := range lines {
+			if strings.Contains(line, "Action") && strings.Contains(line, "Key") {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			t.Fatalf("width %d: keys header row not found", width)
+		}
+		trim := func(s string) string { return strings.TrimSpace(strings.Trim(s, "│░ ")) }
+		if div := trim(lines[idx+1]); div == "" || strings.Trim(div, "─") != "" {
+			t.Fatalf("width %d: expected a divider under the keys header, got %q", width, lines[idx+1])
+		}
+		if next := trim(lines[idx+2]); next == "" || strings.Trim(next, "─") == "" {
+			t.Fatalf("width %d: wrapped divider fragment between the column titles and the options: %q", width, lines[idx+2])
 		}
 	}
 }

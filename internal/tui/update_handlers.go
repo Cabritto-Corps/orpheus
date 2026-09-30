@@ -41,6 +41,7 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 	return m, tea.Batch(
 		m.loadVisiblePlaylistCoversCmd(),
+		m.kittyOverlayCmd(),
 	)
 }
 
@@ -91,8 +92,8 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	cmds := make([]tea.Cmd, 0, 7)
-	cmds = append(cmds, m.tickCmd(), inputCmd)
+	cmds := make([]tea.Cmd, 0, 8)
+	cmds = append(cmds, m.tickCmd(), inputCmd, m.kittyOverlayCmd())
 	if popupTimeoutCmd != nil {
 		cmds = append(cmds, popupTimeoutCmd)
 	}
@@ -255,7 +256,7 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 		}
 		m.maybeRecoverKittyProtocol()
 		m.ui.cover.clearRetry(msg.url)
-		return m, nil
+		return m, m.kittyOverlayCmd()
 	}
 	if m.transport.status != nil && strings.TrimSpace(m.transport.status.AlbumImageURL) == strings.TrimSpace(msg.url) {
 		m.ui.cover.playerCoverFailStreak++
@@ -269,6 +270,12 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 // whose CDN entry went dead. Used by both the single-load and batch paths so
 // queue-loaded covers get the same recovery as priority loads.
 func (m model) handleImageLoadFailure(url string, err error) tea.Cmd {
+	// Release the prefetch memory so the next state push re-evaluates
+	// (paced by the fail cooldown in shouldQueueLoad); otherwise a
+	// failed prefetch would stick until the queue head changes. A map
+	// delete survives this value-receiver copy (delete of a missing key
+	// is a no-op); a scalar write would be silently dropped.
+	delete(m.ui.cover.prefetched, strings.TrimSpace(url))
 	attempt := m.ui.cover.imageRetryCount[url] + 1
 	if attempt > imageLoadRetryMax {
 		m.ui.cover.clearRetry(url)

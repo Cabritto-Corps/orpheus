@@ -157,12 +157,6 @@ func (m model) modalKind() modalKind {
 	return modalNone
 }
 
-// modalActive replaces the per-modal OR-chains (overlay gate, dispatch
-// guard): one predicate, one definition of open.
-func (m model) modalActive() bool {
-	return m.modalKind() != modalNone
-}
-
 type settingsModel struct {
 	open        bool
 	mode        settingsMode

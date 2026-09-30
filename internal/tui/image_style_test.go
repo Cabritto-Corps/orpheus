@@ -258,11 +258,10 @@ func TestApplyImageStyleClearsKittyStateAndRecovery(t *testing.T) {
 	if len(next.ui.imgs.coverKeysByURL) != 0 || len(next.ui.imgs.encoded) != 0 {
 		t.Fatal("style-specific encoded state must be invalidated on style change")
 	}
-	if next.ui.imgs.overlayShownID() != 0 {
-		t.Fatal("style change must clear the displayed overlay image")
-	}
 	// The reset forces retransmission: the same intent must emit again so a
 	// terminal holding the stale image gets the new-protocol content.
+	// (Emitting here also proves the slot was cleared: an uncleared slot
+	// would suppress the identical intent.)
 	if emit, _, _ := next.ui.imgs.commitOverlayIntent(overlayIntent{url: key.url}); !emit {
 		t.Fatal("style change must force overlay retransmission")
 	}

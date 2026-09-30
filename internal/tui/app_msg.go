@@ -194,9 +194,13 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	if m.shouldEnsureAlbumImageLoad(prevStatus, m.transport.status) {
 		cmds = append(cmds, m.loadImageCmd(m.transport.status.AlbumImageURL, true))
 	}
+	if cmd := m.prefetchNextCoverCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if cmd := m.pumpInputExecutor(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
+	cmds = append(cmds, m.kittyOverlayCmd())
 	return m, tea.Batch(cmds...)
 }
 

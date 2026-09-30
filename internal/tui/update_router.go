@@ -5,7 +5,19 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+// Update mirrors the live modal state onto the overlay slot after every
+// message: overlay cmd closures check it at delivery time, so a modal
+// opened after an emission was built drops that stale emission instead
+// of resurrecting the image over the scrim.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	nm, cmd := m.update(msg)
+	if mm, ok := nm.(model); ok && mm.ui.imgs != nil {
+		mm.ui.imgs.setOverlaySuppressed(mm.modalKind() != modalNone)
+	}
+	return nm, cmd
+}
+
+func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m.handleWindowSizeMsg(msg)

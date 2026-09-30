@@ -45,7 +45,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.ui.helpOpen {
 				m.ensureHelpViewport()
 			}
-			return m, nil
+			// Opening hides the cover with the modal frame; closing
+			// re-places it at once instead of waiting for a tick.
+			return m, m.kittyOverlayCmd()
 		}
 	case keyMatches(msg, k.Settings):
 		if !filtering {
@@ -458,7 +460,9 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	} else {
 		m.ui.trackPopupItems = []spotify.QueueItem{}
 	}
-	return m, nil
+	// The popup frame hides the cover at once; the emission is a pure
+	// delete and bypasses delivery suppression.
+	return m, m.kittyOverlayCmd()
 }
 
 func (m model) handleTrackPopupKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

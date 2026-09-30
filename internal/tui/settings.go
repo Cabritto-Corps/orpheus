@@ -52,7 +52,9 @@ func (m model) openSettings() (tea.Model, tea.Cmd) {
 	m.ui.settings.captureKey = ""
 	m.ui.settings.pendingKey = ""
 	m.ui.settings.conflicts = keyConflictActions(m.ui.keys)
-	return m, nil
+	// The settings frame hides the cover at once; the emission is a
+	// pure delete and bypasses delivery suppression.
+	return m, m.kittyOverlayCmd()
 }
 
 func (m model) handleSettingsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -549,16 +551,22 @@ func (m model) settingsKeysTable(w, h int) *table.Model {
 	// a rebind shows up in the next frame with no dirty flag or cache. (A
 	// memo used to live here, but its writes landed on render-path copies
 	// and could never engage — every frame rebuilt anyway.)
-	// Key column sized to the longest real label: a width-derived
-	// column left ~80 empty cells inside full-width modals.
+	// w is the rendered line budget: bubbles cells carry their own
+	// Padding(0,1), so the two columns share w-4 — build wider and the box
+	// wraps the overflow (the header divider's tail spilled into a stray
+	// fragment between the column titles and the rows). Key column sized
+	// to the longest real label: a width-derived column left ~80 empty
+	// cells inside full-width modals.
 	keyW := 6
 	for _, entry := range settingsKeyActions {
 		if lw := lipgloss.Width(m.primaryKeyLabel(entry.action)); lw+2 > keyW {
 			keyW = lw + 2
 		}
 	}
+	colsW := max(2, w-4)
+	keyW = min(keyW, colsW-1)
 	cols := []table.Column{
-		{Title: "Action", Width: max(24, w-keyW)},
+		{Title: "Action", Width: colsW - keyW},
 		{Title: "Key", Width: keyW},
 	}
 	rows := make([]table.Row, 0, len(settingsKeyActions))
@@ -658,9 +666,10 @@ func (m model) settingsModalView() string {
 	case settingsModeKeys:
 		conflictCount := min(len(s.conflicts), maxConflictHintLines)
 		tableH := max(4, innerH-4-conflictCount)
-		// modalW-6: the box content (inset 2) minus the table cells' own
-		// Padding(0,1) on both columns — wider would wrap inside the box.
-		t := m.settingsKeysTable(max(4, modalW-6), tableH)
+		// The box content width is the table's line budget: rows wider
+		// than (width - inset) wrap inside the box.
+		_, _, contentW := modalRect(m.ui.width, m.ui.height, modalW, innerH)
+		t := m.settingsKeysTable(contentW, tableH)
 		var body strings.Builder
 		body.WriteString("\n" + t.View() + "\n")
 		shown := 0

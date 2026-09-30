@@ -144,6 +144,18 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 	}
 }
 
+// clearRenderCachesLocked drops every cached render tied to the previous
+// protocol. Both protocol-switch paths call it under the cache lock so the
+// two resets cannot drift apart again (the encoded payloads are derived
+// from the retained source images and re-encode on demand).
+func (c *imgCache) clearRenderCachesLocked() {
+	c.covers.Clear()
+	for url := range c.coverKeysByURL {
+		delete(c.coverKeysByURL, url)
+	}
+	clear(c.encoded)
+}
+
 func (c *imgCache) setProtocol(protocol imageProtocol) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -151,10 +163,7 @@ func (c *imgCache) setProtocol(protocol imageProtocol) {
 		return
 	}
 	c.protocol = protocol
-	c.covers.Clear()
-	for url := range c.coverKeysByURL {
-		delete(c.coverKeysByURL, url)
-	}
+	c.clearRenderCachesLocked()
 	c.resetKittyOverlayStateLocked()
 }
 
@@ -169,11 +178,7 @@ func (c *imgCache) setImageStyle(style string, managed bool, getenv func(string)
 	// A forced pixelated choice must behave like an environment override:
 	// the automatic fallback and recovery paths must not restore kitty.
 	c.protocolExplicit = explicit
-	c.covers.Clear()
-	for url := range c.coverKeysByURL {
-		delete(c.coverKeysByURL, url)
-	}
-	clear(c.encoded)
+	c.clearRenderCachesLocked()
 	c.resetKittyOverlayStateLocked()
 }
 

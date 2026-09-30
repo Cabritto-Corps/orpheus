@@ -58,9 +58,11 @@ func (m model) View() tea.View {
 		// against a frame that never laid out.
 		return tea.View{Content: m.styles.styleError.Render("terminal too small — please resize"), AltScreen: true}
 	}
-	// Exactly one kittyOverlay append point: a new surface cannot orphan
-	// its emission, and the size-gate branch above stays overlay-free.
-	return tea.View{Content: m.mainView() + m.kittyOverlay(), AltScreen: true}
+	// View content carries no kitty bytes: the v2 pipeline never writes
+	// non-SGR escapes to the wire (zero-width cells are skipped, mid-text
+	// ones dropped). The overlay travels via tea.Raw from Update paths
+	// (kittyOverlayCmd); View must stay graphics-free — pinned by test.
+	return tea.View{Content: m.mainView(), AltScreen: true}
 }
 
 // mainView renders the whole frame without the overlay: the open modal
@@ -276,6 +278,11 @@ func (s *themeStyles) gradientBar(frac float64, width int) string {
 }
 
 func fmtDuration(ms int) string {
+	// Dealer payloads (stale transfers, past-end starts) can carry
+	// negative positions; rendering must never show negative time.
+	if ms < 0 {
+		ms = 0
+	}
 	s := ms / 1000
 	if s >= 3600 {
 		return fmt.Sprintf("%d:%02d:%02d", s/3600, (s/60)%60, s%60)
