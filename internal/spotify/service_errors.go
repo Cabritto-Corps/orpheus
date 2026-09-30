@@ -28,18 +28,12 @@ func IsRateLimitError(err error) bool {
 	return isRateLimitError(err)
 }
 
-// rateLimitMaxWait caps how long rateLimitTransport will sleep inside one
-// RoundTrip. Waits beyond this are multi-minute server penalties, not burst
-// coalescing: sleeping them out can only end in the caller's context
-// deadline, which then masks the 429 as a timeout downstream. Failing fast
-// with RateLimitError keeps the penalty visible so callers and the UI can
-// say "rate limited" instead of "api error".
+// rateLimitMaxWait caps per-RoundTrip backoff sleep: longer waits are server
+// penalties, and sleeping them out masks the 429 as a downstream timeout.
 const rateLimitMaxWait = 30 * time.Second
 
-// RateLimitError is returned when Spotify answers 429 and the Retry-After
-// wait cannot be absorbed: it exceeds the request's remaining deadline or
-// the rateLimitMaxWait ceiling. Short waits keep the old coalescing
-// behavior; this type exists for the waits that must surface instead.
+// RateLimitError surfaces a 429 wait too long to absorb; short waits keep
+// the coalescing behavior.
 type RateLimitError struct {
 	RetryAfter time.Duration
 }
@@ -49,9 +43,7 @@ func (e *RateLimitError) Error() string {
 }
 
 // failFastRateLimit reports whether sleeping out wait would outlive the
-// request: either wait exceeds the remaining context deadline, or it
-// exceeds the rateLimitMaxWait ceiling for requests without a deadline.
-// A nil return means the wait fits and the caller should sleep as before.
+// request deadline or the rateLimitMaxWait ceiling; nil means sleep as before.
 func failFastRateLimit(ctx context.Context, wait time.Duration) error {
 	if wait <= 0 {
 		return nil
@@ -86,7 +78,6 @@ func rateLimitNextStep(d time.Duration) string {
 	return "wait a few seconds and retry"
 }
 
-// RateLimitRetryAfter extracts the server's wait from a rate-limit failure.
 func RateLimitRetryAfter(err error) (time.Duration, bool) {
 	if rateLimitErr, ok := errors.AsType[*RateLimitError](err); ok {
 		return rateLimitErr.RetryAfter, true
@@ -94,9 +85,6 @@ func RateLimitRetryAfter(err error) (time.Duration, bool) {
 	return 0, false
 }
 
-// RateLimitHint returns user-facing guidance for a rate-limit failure:
-// the server's own wait for multi-minute penalties, the existing quota
-// hint for short burst throttles.
 func RateLimitHint(err error) (string, bool) {
 	wait, ok := RateLimitRetryAfter(err)
 	if !ok {

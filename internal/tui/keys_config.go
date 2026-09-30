@@ -13,8 +13,6 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 )
 
-// validKeyActions lists the action names accepted in keys.json, derived from
-// the shared registry.
 var validKeyActions = func() map[string]struct{} {
 	out := make(map[string]struct{}, len(actionRegistry))
 	for _, meta := range actionRegistry {
@@ -23,9 +21,7 @@ var validKeyActions = func() map[string]struct{} {
 	return out
 }()
 
-// LoadKeyOverrides reads a keys.json file mapping action names to one or more
-// key strings. A missing file is not an error: bindings stay at defaults.
-// A malformed file warns and falls back to defaults entirely.
+// A missing keys.json is not an error; a malformed one warns and falls back to defaults.
 func LoadKeyOverrides(path string) (map[string][]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -94,26 +90,16 @@ func isPlausibleKeyName(k string) bool {
 	if k == "" {
 		return false
 	}
-	// One shared parser decides what names a key: v2 identity plus the
-	// legacy aliases it folds (" "/"space", "esc"/"escape",
-	// "enter"/"return"), so loaders accept whatever dispatch matches.
+	// Accept whatever dispatch matches.
 	if _, _, _, ok := parseKeySpec(k); ok {
 		return true
 	}
-	// Beyond the local aliases: the ultraviolet vocabulary (function,
-	// keypad, media keys). uv exposes no validator, and its parser maps
-	// an unknown multi-rune base to text echo — so probing the base AS
-	// pressed text separates named bases (parse to a bare code, never
-	// match the probe) from unknown ones (echo matches). Modifier
-	// segments still validate against the shared vocabulary, and a
-	// modifier-named base stays rejected (a bare modifier is no binding).
+	// uv exposes no validator and maps unknown bases to text echo, so probe the
+	// base as pressed text: named bases never match, unknown ones do.
 	return isExtendedUVKeyName(k)
 }
 
-// isExtendedUVKeyName accepts binding strings whose base ultraviolet
-// names but the local parser doesn't. Membership is probed through uv
-// itself, so the set can never drift from the matcher: if uv ever
-// extends its vocabulary, the loader follows automatically.
+// Membership is probed through uv itself, so the loader follows its vocabulary automatically.
 func isExtendedUVKeyName(k string) bool {
 	parts := strings.Split(k, "+")
 	base := parts[len(parts)-1]
@@ -133,9 +119,6 @@ func applyKeyOverrides(m keyMap, overrides map[string][]string) keyMap {
 		if len(keys) == 0 {
 			continue
 		}
-		// The registry decides which actions are rebindable: an unknown
-		// action matches nothing and is ignored, like the old switch's
-		// implicit default.
 		for i := range actionRegistry {
 			if actionRegistry[i].action == action {
 				actionRegistry[i].set(&m, keys)
@@ -170,8 +153,6 @@ func newKeysFromConfig(overrides map[string][]string) keyMap {
 	return applyKeyOverrides(newKeys(), overrides)
 }
 
-// defaultKeysForAction resolves an action name to its live key strings via
-// the shared registry.
 func defaultKeysForAction(k keyMap, action string) ([]string, bool) {
 	for _, meta := range actionRegistry {
 		if meta.action == action {
@@ -181,9 +162,7 @@ func defaultKeysForAction(k keyMap, action string) ([]string, bool) {
 	return nil, false
 }
 
-// SaveKeys writes the full override map back to keys.json. Values that equal
-// the default bindings are omitted so the file only carries actual user
-// customizations.
+// Values equal to defaults are omitted so the file only carries customizations.
 func SaveKeys(path string, overrides map[string][]string) error {
 	if path == "" {
 		return fmt.Errorf("no keys file path configured")
@@ -216,7 +195,6 @@ func SaveKeys(path string, overrides map[string][]string) error {
 	return os.Rename(tmp, path)
 }
 
-// LoadKeys reads the user's keys.json (or defaults when absent/malformed).
 func LoadKeys(path string) map[string][]string {
 	overrides, err := LoadKeyOverrides(path)
 	if err != nil {

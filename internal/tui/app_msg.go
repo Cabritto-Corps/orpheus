@@ -139,10 +139,7 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	if inVolSettle && msg.status != nil && prevStatus != nil {
 		msg.status.Volume = prevStatus.Volume
 	}
-	// The committed-target pin only applies once the burst is off the wire:
-	// while a new target is still pending the display already holds the
-	// optimistic value, and pinning to the previous commit would yank the
-	// bar backwards on every push.
+	// Pin to the sent target only after the burst leaves the wire; while pending, the display is already optimistic.
 	if inVolSettle && m.transport.volDebouncePending < 0 && msg.status != nil && m.transport.volSentTarget >= 0 {
 		msg.status.Volume = m.transport.volSentTarget
 	}
@@ -260,8 +257,7 @@ func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 		}
 	}
 
-	// Selection changed: drop now-off-screen URLs so the visible window is
-	// not queued behind stale entries.
+	// Drop off-screen URLs so the visible window is not queued behind stale entries.
 	keep := make(map[string]struct{}, len(urls))
 	for _, u := range urls {
 		keep[u] = struct{}{}
@@ -320,8 +316,7 @@ func (m *model) loadLibraryCoversCmd(limit int) tea.Cmd {
 		add(al.summary.ImageURL)
 	}
 
-	// Drain at most one batch so the first cover renders while the chained
-	// drain in handleImagesBatchLoadedMsg walks the rest of the queue.
+	// Drain one batch so the first cover renders while the chained drain continues.
 	if added > coverQueueDrainBatch {
 		added = coverQueueDrainBatch
 	}
@@ -409,8 +404,7 @@ func (m *model) fireOnSongChange(prev, next *spotify.PlaybackStatus) {
 		return
 	}
 	m.transport.lastPlayedID = nextID
-	// Single-flight: a slow hook must not stack goroutines when the user
-	// skips through tracks faster than the hook finishes.
+	// Single-flight: a slow hook must not stack goroutines during fast skips.
 	if !m.transport.songChangeInFlight.CompareAndSwap(false, true) {
 		return
 	}
@@ -431,13 +425,8 @@ func execCmd(template, trackName, artistName, trackID string) {
 	}
 }
 
-// newSongChangeCmd builds the hook command with its output discarded: the
-// child inherits the TUI's tty, and under a cell-diffing renderer anything
-// it prints would persist on screen forever (full repaints used to hide
-// it). Silent scripts want discard — metadata already reaches the hook via
-// args and ORPHEUS_* env, and nothing reads its stdout. A hook that needs
-// the terminal should run suspended through tea.ExecProcess instead; this
-// path deliberately never hands it the screen.
+// newSongChangeCmd discards hook output: the child inherits the TUI tty, and a cell-diffing renderer
+// would persist anything it prints. Metadata travels via args/env; terminal access needs tea.ExecProcess.
 func newSongChangeCmd(template, trackName, artistName, trackID string) *exec.Cmd {
 	r := strings.NewReplacer(
 		"{track}", trackName,
@@ -451,8 +440,7 @@ func newSongChangeCmd(template, trackName, artistName, trackID string) *exec.Cmd
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	// The hook command is the user's own config, not external input; track
-	// metadata only feeds args/env and never a shell, so parts cannot chain.
+	// User-configured command only: metadata feeds args/env, never a shell.
 	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 	var cmd *exec.Cmd
 	if len(parts) > 1 {

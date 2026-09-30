@@ -76,8 +76,7 @@ func (noopEventManager) OnPlayerSkipBackward(*player.Stream, int64)      {}
 func (noopEventManager) OnPlayerEnd(*player.Stream, int64)               {}
 func (noopEventManager) Close()                                          {}
 
-// newPipeBackedPlayer builds a real player whose output writes to a file, so
-// the stream-slot bookkeeping runs exactly as it does in production.
+// newPipeBackedPlayer runs stream-slot bookkeeping exactly as in production.
 func newPipeBackedPlayer(t *testing.T) *player.Player {
 	t.Helper()
 
@@ -179,10 +178,8 @@ func waitClosed(t *testing.T, src *fakeAudioSource) {
 	}
 }
 
-// A manual skip lands on the prefetched track mid-track, before the audio
-// source has auto-promoted it. Promoting it must not close it: clearing the
-// player's secondary slot first closes the displaced source, which is the
-// very stream being promoted.
+// A manual skip lands on the prefetched stream before auto-promotion: clearing
+// the secondary slot first would close the very stream being promoted.
 func TestSkipNextKeepsPrefetchedStreamAlive(t *testing.T) {
 	currentURI := "spotify:track:0000000000000000000000"
 	nextURI := "spotify:track:0000000000000000000001"
@@ -193,8 +190,7 @@ func TestSkipNextKeepsPrefetchedStreamAlive(t *testing.T) {
 	prefetched, prefetchedSrc := newSkipTestStream(t, nextURI, 30_000)
 	p.primaryStream = current
 	p.secondaryStream = prefetched
-	// Mirror handlePrefetchResult: the prefetched stream is aliased into the
-	// player's secondary slot while the current track is still playing.
+	// Mirror handlePrefetchResult: alias the prefetched stream into the secondary slot.
 	p.player.SetSecondaryStream(prefetched.Source)
 
 	if err := p.skipNext(context.Background(), nil); err != nil {
@@ -213,8 +209,7 @@ func TestSkipNextKeepsPrefetchedStreamAlive(t *testing.T) {
 	waitClosed(t, currentSrc)
 }
 
-// A skip whose load fails must still push playback state: the TUI holds a
-// transport transition open and only releases it when an update arrives.
+// A failed skip must still push state; the TUI releases transitions only on update.
 func TestSkipNextEmitsStateWhenLoadFails(t *testing.T) {
 	currentURI := "spotify:track:0000000000000000000000"
 
@@ -301,10 +296,8 @@ type testWrappingError struct{ err error }
 func (e *testWrappingError) Error() string { return "wrapped: " + e.err.Error() }
 func (e *testWrappingError) Unwrap() error { return e.err }
 
-// A context with more dead tracks ahead than the skip cap must still reach
-// the live track: known-dead tracks are stepped over without a load attempt
-// and without burning skip attempts. Without the memory the loop gives up
-// after maxRetries and the live track never plays.
+// Dead tracks past the skip cap must still reach the live track: known-dead
+// tracks step over without attempts, or the loop gives up after maxRetries.
 func TestAdvanceNextSkipsKnownDeadWithoutBurningAttempts(t *testing.T) {
 	const liveIdx = 12
 	var uris []string
@@ -325,8 +318,7 @@ func TestAdvanceNextSkipsKnownDeadWithoutBurningAttempts(t *testing.T) {
 			t.Fatalf("seed cache for %s", uris[i])
 		}
 	}
-	// Eleven dead tracks ahead with a cap of ten skip attempts: only the
-	// no-burn memory can cross them.
+	// Eleven dead tracks with a ten-attempt cap: only no-burn memory crosses.
 	for i := 1; i < liveIdx; i++ {
 		p.rememberDeadTrack(uris[i])
 	}
@@ -351,11 +343,9 @@ func TestAdvanceNextSkipsKnownDeadWithoutBurningAttempts(t *testing.T) {
 	}
 }
 
-// A playing state with a slightly stale clock must still take the staged
-// stream on a fresh start. The wall-clock rebase in loadCurrentTrack inflates
-// the position, and deriving "fresh start" from the inflated value cold-loads
-// instead — panicking here on the test session's nil spclient, and in
-// production wasting a double fetch and losing the gapless transition.
+// A stale clock must still take the staged stream on fresh start: the rebase
+// inflates the position, and deriving "fresh start" from it cold-loads instead —
+// panicking on the test nil spclient, losing the gapless transition in prod.
 func TestLoadCurrentTrackTakesStagedStreamWithStaleClock(t *testing.T) {
 	uri := "spotify:track:0000000000000000000007"
 	p, _ := newSkipTestPlayer(t, newPipeBackedPlayer(t), []string{uri})

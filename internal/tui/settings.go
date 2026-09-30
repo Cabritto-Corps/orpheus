@@ -15,10 +15,7 @@ import (
 	"orpheus/internal/config"
 )
 
-// newSettingsModel seeds the settings state from the config; the preset
-// name is the one the theme loader actually resolved (the theme.json
-// marker wins over orpheus_theme), so the picker and editor always
-// operate on the theme that is really running.
+// resolvedPreset is the theme actually running, so picker and editor operate on it.
 func newSettingsModel(cfg config.Config, resolvedPreset string) settingsModel {
 	return settingsModel{
 		themePreset:      resolvedPreset,
@@ -34,9 +31,6 @@ func newSettingsModel(cfg config.Config, resolvedPreset string) settingsModel {
 	}
 }
 
-// cachedThemeOverrides returns the parsed theme.json overrides: the cache
-// populated on the update paths (settings open, saves) so per-frame view
-// paths do not re-read the file at the 200ms tick.
 func (m model) cachedThemeOverrides() map[string]any {
 	if o := m.ui.settings.themeOverrides; o != nil {
 		return o
@@ -52,8 +46,7 @@ func (m model) openSettings() (tea.Model, tea.Cmd) {
 	m.ui.settings.captureKey = ""
 	m.ui.settings.pendingKey = ""
 	m.ui.settings.conflicts = keyConflictActions(m.ui.keys)
-	// The settings frame hides the cover at once; the emission is a
-	// pure delete and bypasses delivery suppression.
+	// Hide the cover at once with a pure delete.
 	return m, m.kittyOverlayCmd()
 }
 
@@ -129,9 +122,6 @@ func (m model) handleSettingsThemeOptions(msg tea.KeyPressMsg) (tea.Model, tea.C
 	return m, nil
 }
 
-// settingsRowKind classifies a settings root row: open rows lead to a
-// submenu and ignore the volume keys; adjustable rows act on Select
-// and step on the volume keys.
 type settingsRowKind int
 
 const (
@@ -139,11 +129,7 @@ const (
 	settingsRowAdjustable
 )
 
-// settingsRow describes one settings root row: label, right-column
-// value (gauges and suffixes included), what Select does, what the
-// volume keys do (nil = ignored), and an optional bottom warning.
-// The menu reads this table everywhere — cursor wrap, rendering and
-// key dispatch — so adding a row is one entry here.
+// Adding a row is one entry here.
 type settingsRow struct {
 	label    string
 	kind     settingsRowKind
@@ -291,19 +277,14 @@ func (m model) applyImageStyleWithEnv(getenv func(string) string) (tea.Model, te
 	}
 	style := imageStyleOrDefault(m.ui.settings.imageStyle)
 	m.ui.imgs.setImageStyle(style, true, getenv)
-	// Style-specific supervision belongs to the previous attempt: clear it
-	// so a stored kitty failure cannot override the newly selected style.
+	// Clear so a stored kitty failure cannot override the newly selected style.
 	m.ui.cover.kittyFellBack = false
 	m.ui.cover.kittyRecoveryStreak = 0
 	m.ui.cover.playerCoverFailStreak = 0
 	return m, m.reloadCurrentKittyCoverCmd()
 }
 
-// reloadCurrentKittyCoverCmd re-encodes the visible cover after a style
-// switch clears the kitty payload cache: source images are retained, so
-// the current one can be framed without waiting for a navigation or
-// track change to reload it. Only cached images qualify; anything else
-// keeps the normal cover-loading path.
+// Re-encodes the retained source image so the new style applies without waiting for a reload.
 func (m model) reloadCurrentKittyCoverCmd() tea.Cmd {
 	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() != imageProtocolKitty {
 		return nil
@@ -329,8 +310,7 @@ func (m model) reloadCurrentKittyCoverCmd() tea.Cmd {
 	if cmd := m.loadImageCmd(url, true); cmd != nil {
 		return cmd
 	}
-	// No loader is available in this path (notably tests): encode inline so
-	// the newly selected style still applies to the retained source image.
+	// No loader here (notably tests): encode inline.
 	if err := m.ui.imgs.ensureKittyEncoding(url, img); err != nil {
 		slog.Warn("kitty re-encode failed", "url", url, "error", err)
 		return nil
@@ -395,9 +375,7 @@ func (m model) handleSettingsTheme(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.refreshLikedSongsArt()
 		return m, nil
 	case keyMatches(msg, k.CloseModal):
-		// Revert to the theme that was active when the picker opened.
-		// The mode must be set before the preview apply: value receivers
-		// copy the model, so the returned copy must already carry it.
+		// Set the mode first: value receivers copy the model.
 		s.mode = settingsModeRoot
 		s.themePreset = s.themeBackup
 		return m.themeOptionsApplyAndRefresh(resolveThemeState(s.themeBackup, m.cachedThemeOverrides()))
@@ -468,16 +446,13 @@ func (m model) handleSettingsCapture(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	keyName := captureKeyName(msg)
 	if s.pendingKey != "" {
-		// Two-step capture: a key is armed; enter confirms, any other key
-		// replaces the pending one, esc cancels.
+
 		if isConfirmPress(msg) {
 			err := m.applyCapture(s.captureKey, s.pendingKey)
 			s.mode = settingsModeKeys
 			s.captureKey = ""
 			s.pendingKey = ""
 			if err != nil {
-				// Save failure drops back to the list; the rebind is still
-				// live for the session.
 				slog.Warn("rebind not persisted", "error", err)
 			}
 			return m, nil
@@ -502,7 +477,6 @@ func (m *model) applyCapture(action, keyName string) error {
 		overrides = map[string][]string{}
 	}
 	if action == "quit" {
-		// ctrl+c always quits: keep it in the stored list like the loader does.
 		if !slices.Contains(overrides[action], "ctrl+c") {
 			overrides[action] = append(append([]string{}, overrides[action]...), "ctrl+c")
 		}
@@ -526,37 +500,21 @@ func (m *model) applyCapture(action, keyName string) error {
 
 func captureKeyName(msg tea.KeyPressMsg) string {
 	k := msg.Key()
-	// Esc cancels and Enter confirms the pending rebind, so neither is
-	// capturable; identity keeps this true however the close and select
-	// actions are rebound.
+	// Esc cancels and Enter confirms, so neither is capturable — by identity, however close/select are rebound.
 	if k.Code == tea.KeyEscape || k.Code == tea.KeyEnter {
 		return ""
 	}
-	// A lone modifier carries no base key and can never match a binding.
 	if isModifierCode(k.Code) {
 		return ""
 	}
 	if k.Mod == 0 {
 		return msg.String()
 	}
-	// Modified keys render in canonical modifier order, so an
-	// alt-modified key never gains a second "alt+" prefix.
 	return msg.Keystroke()
 }
 
-// isModifierCode reports the bare left/right modifier keys.
-
 func (m model) settingsKeysTable(w, h int) *table.Model {
-	// The table is rebuilt on every render: rows mirror the live keyMap, so
-	// a rebind shows up in the next frame with no dirty flag or cache. (A
-	// memo used to live here, but its writes landed on render-path copies
-	// and could never engage — every frame rebuilt anyway.)
-	// w is the rendered line budget: bubbles cells carry their own
-	// Padding(0,1), so the two columns share w-4 — build wider and the box
-	// wraps the overflow (the header divider's tail spilled into a stray
-	// fragment between the column titles and the rows). Key column sized
-	// to the longest real label: a width-derived column left ~80 empty
-	// cells inside full-width modals.
+	// Rows mirror the live keyMap — no cache.
 	keyW := 6
 	for _, entry := range settingsKeyActions {
 		if lw := lipgloss.Width(m.primaryKeyLabel(entry.action)); lw+2 > keyW {
@@ -580,8 +538,7 @@ func (m model) settingsKeysTable(w, h int) *table.Model {
 	)
 	t.SetStyles(m.styles.tableStyles())
 	t.SetHeight(h)
-	// Width is load-bearing, not cosmetic: the bubbles table renders its
-	// rows through a viewport that drops everything when its width is 0.
+	// Width is load-bearing: a zero-width viewport drops every row.
 	t.SetWidth(w)
 	t.SetCursor(m.ui.settings.keysCursor)
 	return &t
@@ -607,8 +564,6 @@ func (m model) themePickerView(modalW, innerH int) string {
 	overrides := m.cachedThemeOverrides()
 	listH := max(3, innerH-6)
 
-	// Scrolling window over the registry rows; a blank row between entries
-	// keeps the swatch rows from reading as one joined block.
 	entries := (listH + 1) / 2
 	shown, offset := scrollRows(settingsThemeOrder, s.themeCursor, entries)
 	var rows []string
@@ -656,7 +611,6 @@ func (m model) settingsModalView() string {
 			pending := m.styles.styleTrackPopupTitle.Render(shortKeyLabel([]string{s.pendingKey}))
 			body = "\n  bind \"" + settingsActionLabel(s.captureKey) + "\" to " + pending + "\n"
 		}
-		// Capture is a 3-line prompt: a full-height box reads as empty.
 		return m.styles.modalFrame(m.ui.width, m.ui.height, m.styles.styleModalTitle.Render("Settings"),
 			m.styles.styleModalHint.Render(m.styles.hintLine([]key.Binding{withDesc(m.ui.keys.Select, "confirm"), withDesc(m.ui.keys.CloseModal, "cancel")}, modalW-modalContentInset)), body, modalW, 7)
 
@@ -666,8 +620,6 @@ func (m model) settingsModalView() string {
 	case settingsModeKeys:
 		conflictCount := min(len(s.conflicts), maxConflictHintLines)
 		tableH := max(4, innerH-4-conflictCount)
-		// The box content width is the table's line budget: rows wider
-		// than (width - inset) wrap inside the box.
 		_, _, contentW := modalRect(m.ui.width, m.ui.height, modalW, innerH)
 		t := m.settingsKeysTable(contentW, tableH)
 		var body strings.Builder
@@ -761,11 +713,8 @@ func (m model) primaryKeyLabel(action string) string {
 
 const maxConflictHintLines = 3
 
-// rethemeBrowseLists re-styles both browser lists for a new palette.
 func (m *model) rethemeBrowseLists() {
-	// Swap the delegates in place: SetDelegate keeps items, cursor and
-	// pagination, so a theme change no longer tears down and rebuilds the
-	// list models (the fresh delegate brings a fresh render cache).
+	// In-place: SetDelegate keeps items, cursor and pagination (no teardown).
 	m.browse.playlistList.SetDelegate(newCachedPlaylistDelegate(m.styles, m.nowPlaying))
 	m.browse.albumList.SetDelegate(newCachedPlaylistDelegate(m.styles, m.nowPlaying))
 	applyListStyles(&m.browse.playlistList, m.styles)

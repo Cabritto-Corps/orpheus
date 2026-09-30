@@ -79,20 +79,15 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	}
 }
 
-// actionRegistry is the single ordered source for every bindable action:
-// keys.json validity, the settings keys menu, the key-conflict scan and the
-// help modal groups all derive from it, so the four copies that could drift
-// are gone. Order defines the help modal's group order and the settings
-// menu row order.
+// actionRegistry is the single ordered source for every bindable action;
+// order defines help group and settings menu order.
 type actionMeta struct {
 	action string
 	group  string
 	label  string
 	desc   string
 	bind   func(keyMap) key.Binding
-	// set applies a keys.json override to the matching field, so the
-	// registry — not a parallel switch — decides which actions are rebindable.
-	set func(*keyMap, []string)
+	set    func(*keyMap, []string)
 }
 
 var actionRegistry = []actionMeta{
@@ -126,7 +121,6 @@ var actionRegistry = []actionMeta{
 	{"queue_move_down", "Queue", "move queue row down", "move row down", func(k keyMap) key.Binding { return k.QueueMoveDown }, func(m *keyMap, keys []string) { m.QueueMoveDown = overrideBinding(m.QueueMoveDown, keys) }},
 }
 
-// helpGroupsLayout derives the help modal's titled rows from the registry.
 var helpGroupsLayout = func() []struct {
 	title  string
 	action string
@@ -147,12 +141,7 @@ var helpGroupsLayout = func() []struct {
 	return out
 }()
 
-// helpGroupLines renders one group as label……key lines. Labels are padded
-// in display cells; keys come from the live keyMap so rebinds reflect.
-// helpGroupLines renders one group: title, then label/key rows with the key
-// right-aligned at the column's own edge instead of trailing the label
-// column. colW is the column's allotted share of the modal width, so the
-// three columns spread across the full body instead of hugging the left.
+// Keys right-align at their column's edge and come from the live keyMap so rebinds reflect.
 func (m model) helpGroupLines(title string, labelWidth, colW int) []string {
 	lines := []string{m.styles.styleSectionLabel.Render(title)}
 	for _, g := range helpGroupsLayout {
@@ -169,8 +158,6 @@ func (m model) helpGroupLines(title string, labelWidth, colW int) []string {
 	return lines
 }
 
-// helpGroupTitles derives the help modal's group order from the registry
-// (dedup in registry order), so a new group renders instead of vanishing.
 func helpGroupTitles() []string {
 	titles := []string{}
 	for _, meta := range actionRegistry {
@@ -193,11 +180,6 @@ func (m model) helpGroupedBody(contentW, availH int) string {
 	labelWidth += 4
 
 	const gutter = 4
-	// Three columns, each an equal share of the full content width with the
-	// keys right-aligned at their column's edge - natural-width columns
-	// hugged the left and left a dead band on the right of the modal.
-	// Equal shares: for the current three groups this is exactly the old
-	// (contentW - 2*gutter) / 3, so the existing layout is pixel-identical.
 	colW := (contentW - (len(groups)-1)*gutter) / len(groups)
 	if colW >= labelWidth+6 {
 		cols := make([][]string, 0, len(groups))
@@ -210,8 +192,7 @@ func (m model) helpGroupedBody(contentW, availH int) string {
 		}
 	}
 
-	// Stacked fallback: keys right-align at the full content width so the
-	// narrow-terminal layout fills the row too.
+	// Stacked fallback for narrow terminals.
 	parts := make([]string, 0, len(groups))
 	for _, title := range groups {
 		parts = append(parts, strings.Join(m.helpGroupLines(title, labelWidth, contentW), "\n"))
@@ -220,8 +201,6 @@ func (m model) helpGroupedBody(contentW, availH int) string {
 	return strings.Join(parts, "\n\n") + "\n\n" + m.styles.styleTrackPopupHint.Render("ctrl+c always quits")
 }
 
-// joinTopAligned pads each column to the tallest height and places them
-// side by side with a shared gutter.
 func joinTopAligned(cols ...[]string) string {
 	blocks := make([]string, 0, len(cols))
 	for _, col := range cols {
@@ -234,18 +213,11 @@ func joinTopAligned(cols ...[]string) string {
 	return out
 }
 
-// Key identity helpers.
-//
-// Dispatch matches keys by v2 identity (modifier flags + base code) instead
-// of comparing rendered strings: each binding string is reduced to the same
-// identity as the pressed key, so aliases ("esc"/"escape",
-// "enter"/"return", " "/"space") and out-of-order modifier lists
-// ("shift+ctrl" vs "ctrl+shift") resolve to one key.
+// Key identity: dispatch reduces bindings and presses to the same v2 identity
+// (modifier flags + base code), so aliases and reordered modifiers resolve to one key.
 
-// isQuitSignal is the single guaranteed-quit check: structually Ctrl+C and
-// nothing else. The rebindable quit binding (which also carries "q") must
-// not punch through modals or key capture, so this deliberately does not
-// consult the registry.
+// isQuitSignal is structurally Ctrl+C and nothing else; it deliberately does
+// not consult the registry, so the rebindable quit binding cannot punch through modals.
 func isQuitSignal(msg tea.KeyPressMsg) bool {
 	k := msg.Key()
 	if k.Mod&tea.ModCtrl == 0 {
@@ -254,8 +226,7 @@ func isQuitSignal(msg tea.KeyPressMsg) bool {
 	return k.Code == 'c' || k.Code == 'C' || k.Text == "c" || k.Text == "C"
 }
 
-// isCancelPress and isConfirmPress are the key-capture control keys by
-// identity, so they hold however the close and select actions are rebound.
+// Capture controls match by identity, so they hold however close/select are rebound.
 func isCancelPress(msg tea.KeyPressMsg) bool {
 	return msg.Key().Code == tea.KeyEscape
 }
@@ -264,8 +235,7 @@ func isConfirmPress(msg tea.KeyPressMsg) bool {
 	return msg.Key().Code == tea.KeyEnter
 }
 
-// isModifierCode reports the bare left/right modifier keys, which carry
-// no base key and can never match a binding on their own.
+// Bare modifiers carry no base key and can never match a binding on their own.
 func isModifierCode(code rune) bool {
 	switch code {
 	case tea.KeyLeftShift, tea.KeyRightShift,
@@ -279,8 +249,6 @@ func isModifierCode(code rune) bool {
 	return false
 }
 
-// keySpecModifiers is the canonical modifier vocabulary, in the order v2
-// renders keystrokes.
 var keySpecModifiers = []struct {
 	name string
 	mod  tea.KeyMod
@@ -296,7 +264,6 @@ var keySpecModifiers = []struct {
 	{"numlock", tea.ModNumLock},
 }
 
-// keyModFlag resolves a modifier-segment name to its flag.
 func keyModFlag(s string) (tea.KeyMod, bool) {
 	for _, m := range keySpecModifiers {
 		if s == m.name {
@@ -306,15 +273,12 @@ func keyModFlag(s string) (tea.KeyMod, bool) {
 	return 0, false
 }
 
-// isKeyModName reports whether s names a modifier segment. Shared by the
-// parser and the extended-vocabulary check so both agree on shape.
 func isKeyModName(s string) bool {
 	_, ok := keyModFlag(s)
 	return ok
 }
 
-// keySpecBaseCode maps the named bases a binding string may carry. Aliases
-// share a code, so they match the same press.
+// Aliases share a code, so they match the same press.
 func keySpecBaseCode(name string) (rune, bool) {
 	switch name {
 	case "enter", "return":
@@ -351,8 +315,6 @@ func keySpecBaseCode(name string) (rune, bool) {
 	return 0, false
 }
 
-// parseKeySpec reduces one binding string to v2 key identity: modifier
-// flags plus a base code, with the printable text the identity implies.
 // ok=false means the string names no key (loaders drop it).
 func parseKeySpec(spec string) (mod tea.KeyMod, code rune, text string, ok bool) {
 	if spec == "" {
@@ -362,9 +324,7 @@ func parseKeySpec(spec string) (mod tea.KeyMod, code rune, text string, ok bool)
 	base := parts[len(parts)-1]
 	modParts := parts[:len(parts)-1]
 	if base == "" {
-		// A trailing "+" means the bound key itself is "+": the lone
-		// "+", or "ctrl++" (the real separator is the previous one).
-		// A lone separator with a named head ("ctrl+") has no key.
+		// A trailing "+" names the plus key itself ("ctrl++"); "ctrl+" names no key.
 		if len(parts) == 2 && parts[0] != "" {
 			return 0, 0, "", false
 		}
@@ -387,9 +347,7 @@ func parseKeySpec(spec string) (mod tea.KeyMod, code rune, text string, ok bool)
 	} else {
 		return 0, 0, "", false
 	}
-	// Printable bases imply their text unless another modifier rides
-	// along — mirrors ultraviolet's matcher so "shift+j" still matches
-	// a "J" press reported without modifier flags.
+	// Mirrors ultraviolet's matcher so "shift+j" matches a bare "J" press.
 	if rest := mod &^ (tea.ModShift | tea.ModCapsLock); rest == 0 && text == "" && unicode.IsPrint(code) {
 		if mod&(tea.ModShift|tea.ModCapsLock) != 0 {
 			text = string(unicode.ToUpper(code))
@@ -400,8 +358,7 @@ func parseKeySpec(spec string) (mod tea.KeyMod, code rune, text string, ok bool)
 	return mod, code, text, true
 }
 
-// matchKeySpec compares a pressed key against one binding string. The
-// comparison itself is ultraviolet's; this wrapper only rewrites the two
+// The comparison itself is ultraviolet's; this wrapper only rewrites the two
 // forms uv cannot parse: a "return" base (uv knows just "enter") and
 // a literal "+" base (a trailing "+" is uv's separator, with no
 // escape for naming the plus key itself).
@@ -425,10 +382,7 @@ func isLiteralPlusSpec(spec string) bool {
 	return strings.HasSuffix(spec, "+")
 }
 
-// foldReturnSpec rewrites a trailing "return" base to "enter":
-// ultraviolet's vocabulary has no "return" alias (ours folds it), and
-// every other spelling parses identically on both sides. Dispatch only
-// ever sees loader-validated specs, whose non-final segments are known
+// ultraviolet's vocabulary has no "return" alias; non-final segments are validated
 // modifiers, so the fold cannot rescue a malformed binding.
 func foldReturnSpec(spec string) string {
 	if spec == "return" {
@@ -440,12 +394,8 @@ func foldReturnSpec(spec string) string {
 	return spec
 }
 
-// canonicalKeySpec re-emits a binding string in canonical form (modifiers
-// in keystroke order, aliases folded) for comparisons. Unparseable specs
-// pass through unchanged. Base names render through ultraviolet, which
-// folds "esc"/"escape" and "return"/"enter" exactly like the old
-// table; the modifier vocabulary stays local because uv's renderer drops
-// the lock modifiers, which the conflict scan must keep distinct.
+// The modifier vocabulary stays local because uv's renderer drops the lock
+// modifiers the conflict scan must keep distinct.
 func canonicalKeySpec(spec string) string {
 	mod, code, _, ok := parseKeySpec(spec)
 	if !ok {

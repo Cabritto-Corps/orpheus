@@ -9,9 +9,6 @@ import (
 	"strings"
 )
 
-// AppSettings is what the settings UI manages: the sections it writes live
-// in config.json instead of .env, which stays a user-authored bootstrap
-// file (normally just the Spotify client id).
 type AppSettings struct {
 	Crossfade  *CrossfadeSettings  `json:"crossfade,omitempty"`
 	AudioCache *AudioCacheSettings `json:"audio_cache,omitempty"`
@@ -27,9 +24,6 @@ type ImageStyleSettings struct {
 	Style *string `json:"style,omitempty"`
 }
 
-// NormalizeImageStyle accepts only the two settings-modal values. Unknown
-// styles (including an env-only "none") resolve to "" so callers can
-// distinguish an explicit choice from the unset state.
 func NormalizeImageStyle(style string) string {
 	switch strings.ToLower(strings.TrimSpace(style)) {
 	case ImageStyleRendered:
@@ -41,8 +35,6 @@ func NormalizeImageStyle(style string) string {
 	}
 }
 
-// ExplicitImageStyle reports a style named in config.json. An omitted or
-// unknown style is not a choice, so environment selection keeps working.
 func ExplicitImageStyle(path string) (string, bool) {
 	settings := LoadAppSettings(path)
 	if settings.Images == nil || settings.Images.Style == nil {
@@ -70,10 +62,6 @@ func defaultSettingsPath() string {
 	return filepath.Join(dir, "config.json")
 }
 
-// ApplyAppSettings overlays the settings file onto the env-derived config:
-// a value present in config.json wins over the .env/env copy, because the
-// settings UI writes there. Anything the file omits keeps falling back to
-// the environment and the defaults, so hand-edited files stay short.
 func ApplyAppSettings(cfg *Config, settings AppSettings) {
 	if s := settings.Crossfade; s != nil {
 		if s.Enabled != nil {
@@ -98,8 +86,6 @@ func ApplyAppSettings(cfg *Config, settings AppSettings) {
 	}
 }
 
-// LoadAppSettings reads config.json, warning and starting empty on
-// malformed input so the env values keep working.
 func LoadAppSettings(path string) AppSettings {
 	var settings AppSettings
 	if path == "" {
@@ -118,11 +104,7 @@ func LoadAppSettings(path string) AppSettings {
 	return settings
 }
 
-// SaveAppSettings persists the managed sections atomically, merged over
-// whatever the file already contains: keys outside the managed sections
-// survive a save instead of being silently dropped, and the managed
-// sections always win. A malformed existing file starts from a clean
-// object rather than failing the save.
+// SaveAppSettings merges atomically: unmanaged keys survive, managed sections win.
 func SaveAppSettings(path string, settings AppSettings) error {
 	if path == "" {
 		return os.ErrInvalid
@@ -135,8 +117,6 @@ func SaveAppSettings(path string, settings AppSettings) error {
 	merged := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(data, &merged); err != nil || merged == nil {
-			// Malformed or null: start from a clean object; the managed
-			// sections still win.
 			merged = map[string]any{}
 		}
 	}

@@ -35,8 +35,7 @@ type Config struct {
 	AudioPeriodCount  int
 }
 
-// defaultAudioBackend picks the platform's native output. PulseAudio has
-// no server on macOS; AudioToolbox is its native backend.
+// PulseAudio has no server on macOS; AudioToolbox is its native backend.
 func defaultAudioBackend() string {
 	if runtime.GOOS == "darwin" {
 		return "audio-toolbox"

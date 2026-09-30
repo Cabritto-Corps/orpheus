@@ -84,12 +84,11 @@ func TestSettingsThemePickerLiveAppliesAndPersists(t *testing.T) {
 	m, _, themePath, _ := newSettingsTestModel(t)
 
 	next := openViaKey(m)
-	next = sendEnter(next) // theme row: open the picker
+	next = sendEnter(next)
 	if next.ui.settings.mode != settingsModeTheme {
 		t.Fatal("enter on the theme row should open the theme picker")
 	}
 
-	// moving down previews the next theme live
 	idx := next.ui.settings.themeCursor
 	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	if next.ui.settings.themeCursor != idx+1 {
@@ -99,7 +98,6 @@ func TestSettingsThemePickerLiveAppliesAndPersists(t *testing.T) {
 		t.Fatal("preset must not change until enter persists")
 	}
 
-	// enter persists the previewed theme
 	next = sendEnter(next)
 	picked := settingsThemeOrder[idx+1]
 	if next.ui.settings.themePreset != themePresetName(picked) {
@@ -121,7 +119,6 @@ func TestSettingsThemePickerLiveAppliesAndPersists(t *testing.T) {
 		t.Fatalf("theme.json preset = %v, want %q", saved["preset"], themePresetName(picked))
 	}
 
-	// the persisted marker survives a reload
 	if got := themePresetName("minimal"); got != "minimal" {
 		t.Fatalf("preset name normalization broken: %q", got)
 	}
@@ -156,12 +153,11 @@ func TestSettingsThemePickerDefersArtRegenToSave(t *testing.T) {
 	next := openViaKey(m)
 	next = sendEnter(next) // open picker
 	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
-	// Live preview moves the styles but must not pay the procedural
-	// cover regen per keypress: the art stays on the old palette.
+	// Live preview must not pay the procedural regen per keypress.
 	if likedArtKey != defaultKey {
 		t.Fatal("preview must leave the liked-songs art unsynced until save")
 	}
-	next = sendEnter(next) // save: the art syncs once to the picked palette
+	next = sendEnter(next)
 	if next.ui.settings.mode != settingsModeRoot {
 		t.Fatal("enter should return to the settings root")
 	}
@@ -320,9 +316,7 @@ func TestSettingsCaptureEscAndNavigation(t *testing.T) {
 	}
 }
 
-// TestSettingsRootRowsDriveMenu pins the settings-root descriptor table:
-// order and behavior class, plus cursor wrap that follows the table
-// length instead of a hardcoded row count. Adding a row is one entry.
+// Cursor wrap follows the table length, not a hardcoded count.
 func TestSettingsRootRowsDriveMenu(t *testing.T) {
 	wantLabels := []string{"Theme", "Theme options", "Keybinds", "Crossfade", "Audio cache", "Images"}
 	if len(settingsRootRows) != len(wantLabels) {
@@ -368,12 +362,7 @@ func TestKeysTableRendersRows(t *testing.T) {
 	}
 }
 
-// The keys table is built to the box content budget: bubbles cells carry
-// their own Padding(0,1), so the columns share (w-4) and every rendered
-// line lands exactly at the budget. Wider lines wrapped inside the box
-// (the header divider's tail spilled into a stray fragment between the
-// column titles and the rows) or were truncated at the viewport width
-// (key labels lost their last characters).
+// Every rendered line must land exactly at the box budget.
 func TestKeysTableLinesFitBudget(t *testing.T) {
 	m := guardModel(t, frameVariant{width: 100, height: 40, modal: "settings-keys"})
 	for _, w := range []int{12, 24, 40, 80, 120} {
@@ -389,9 +378,6 @@ func TestKeysTableLinesFitBudget(t *testing.T) {
 	}
 }
 
-// A wrapped table line leaves its overflow on the next screen row: the
-// header divider's dash tail sat between the column titles and the first
-// option. Assert the rendered modal keeps exactly the divider there.
 func TestKeysModalDividerDoesNotWrap(t *testing.T) {
 	for _, width := range []int{80, 100, 140} {
 		m := guardModel(t, frameVariant{width: width, height: 40, modal: "settings-keys"})
@@ -416,9 +402,7 @@ func TestKeysModalDividerDoesNotWrap(t *testing.T) {
 	}
 }
 
-// The keys table always reflects the live keyMap: no dirty flag or cache
-// stands between a rebind and the next render (the old memo could never
-// engage — its writes landed on render-path copies).
+// No dirty flag or cache stands between a rebind and the next render.
 func TestKeysTableReflectsRebindDirectly(t *testing.T) {
 	m := testListModel()
 	m.ui.settings.keysPath = filepath.Join(t.TempDir(), "keys.json")

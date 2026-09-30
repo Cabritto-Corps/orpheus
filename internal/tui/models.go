@@ -91,10 +91,7 @@ type model struct {
 	contextTracksCh chan<- librespot.ContextTracksResult
 	ldr             *loader.BackgroundLoader
 
-	// styles is the fully-built theme bundle, swapped wholesale on every
-	// theme change; nowPlaying is the shared context-URI pointer the list
-	// delegates read so the now-playing marker follows track changes.
-	// Both are pointers so bubbletea's by-value model copies stay coherent.
+	// Pointers so bubbletea's by-value model copies stay coherent.
 	styles     *themeStyles
 	nowPlaying *string
 
@@ -113,13 +110,8 @@ const (
 	settingsModeThemeOptions
 )
 
-// modalKind is the single vocabulary for "which dialog owns the frame".
-// It is DERIVED from the existing open flags — never stored — so open/
-// close bookkeeping cannot drift out of sync, and settings persistence
-// (which lives in settingsModel's content fields, not in open/mode) is
-// untouched. Order matches View()'s render precedence: help, settings,
-// popup. A new surface registers here and flows into the frame, the focus
-// trap, the filter set and the kitty gate together.
+// modalKind is DERIVED from the open flags — never stored — so open/close
+// bookkeeping cannot drift out of sync. Order matches View()'s render precedence.
 type modalKind int
 
 const (
@@ -168,16 +160,11 @@ type settingsModel struct {
 	themeCursor int
 	themeBackup string
 
-	// themeOptionsPreset is the editor's base palette (row 0 may change
-	// it); pendingState is the live draft; stateBackup holds the applied
-	// theme to restore on esc.
 	themeOptionsPreset string
 	themeStatePending  themeState
 	themeStateBackup   themeState
 	optionsCursor      int
 
-	// themeOverrides caches the parsed theme.json so per-frame view paths
-	// (picker rows, root value) do not re-read the file at the 200ms tick.
 	themeOverrides map[string]any
 	keysPath       string
 	themePath      string
@@ -197,8 +184,6 @@ type settingsModel struct {
 	saveErr                  string
 }
 
-// settingsKeyActions derives the settings keys-menu rows (order + labels)
-// from the shared action registry.
 var settingsKeyActions = func() []struct {
 	action string
 	label  string

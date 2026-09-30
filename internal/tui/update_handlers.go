@@ -47,9 +47,7 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	m.interpolatePlaybackProgress(uiTickInterval)
-	// Advance the loading spinner from the app tick (the list package's own
-	// pattern for tick-driven spinners); the next-tick cmd is dropped
-	// because the app tick is the clock.
+	// Drive the list spinner from the app tick; it is already the clock.
 	m.ui.spinner, _ = m.ui.spinner.Update(spinner.TickMsg{Time: time.Now(), ID: m.ui.spinner.ID()})
 	popupTimeoutCmd := m.tickTrackPopupWait()
 	inputCmd := m.pumpInputExecutor()
@@ -265,16 +263,10 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 	return m, m.handleImageLoadFailure(msg.url, msg.err)
 }
 
-// handleImageLoadFailure applies the shared retry ladder for one failed image
-// load: backoff retries, then a failed stamp and a re-resolve for library URLs
-// whose CDN entry went dead. Used by both the single-load and batch paths so
-// queue-loaded covers get the same recovery as priority loads.
+// Shared retry ladder for single and batch image loads.
 func (m model) handleImageLoadFailure(url string, err error) tea.Cmd {
-	// Release the prefetch memory so the next state push re-evaluates
-	// (paced by the fail cooldown in shouldQueueLoad); otherwise a
-	// failed prefetch would stick until the queue head changes. A map
-	// delete survives this value-receiver copy (delete of a missing key
-	// is a no-op); a scalar write would be silently dropped.
+	// Release failed-prefetch memory so the next push re-evaluates; delete survives this value-receiver copy,
+	// while a scalar write would be silently dropped. Fail cooldown paces re-evaluation in shouldQueueLoad.
 	delete(m.ui.cover.prefetched, strings.TrimSpace(url))
 	attempt := m.ui.cover.imageRetryCount[url] + 1
 	if attempt > imageLoadRetryMax {
@@ -325,8 +317,7 @@ func (m model) handleTUICmdRetryMsg(msg tuiCmdRetryMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.left <= 1 {
-		// The command never reached the player: surface it instead of
-		// silently returning to a stale transport.
+		// The command never reached the player: surface it instead of returning stale.
 		m.transport.playbackErr = errors.New("command could not be sent — player busy")
 		m.transport.transition.Clear()
 		return m, nil
@@ -420,16 +411,11 @@ func (m *model) retruncateTrackPopupTitles() {
 		items = append(items, trackItem{item: qi})
 	}
 	m.ui.trackPopupList.SetItems(items)
-	// The first SetItems derives PerPage while TotalPages is still 0, so the
-	// pagination row counts as one line instead of two (dots + margin) and
-	// the modal's exact-fit clamp cuts the dots. Re-running SetSize re-derives
-	// PerPage against the real pagination height; this is why the dots only
-	// appeared after a resize event.
+	// The first SetItems leaves TotalPages at 0, so re-run SetSize; otherwise the modal clamp cuts the dots.
 	m.ui.trackPopupList.SetSize(m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height())
 }
 
-// tickTrackPopupWait closes the popup with an error when a pending
-// load never gets a reply (dropped command or a wedged backend).
+// Close the popup when a pending load never gets a reply.
 func (m *model) tickTrackPopupWait() tea.Cmd {
 	if !m.ui.trackPopupOpen || m.ui.trackPopupItems != nil {
 		return nil

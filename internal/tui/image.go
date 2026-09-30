@@ -144,10 +144,8 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 	}
 }
 
-// clearRenderCachesLocked drops every cached render tied to the previous
-// protocol. Both protocol-switch paths call it under the cache lock so the
-// two resets cannot drift apart again (the encoded payloads are derived
-// from the retained source images and re-encode on demand).
+// Both switch paths call it under the lock so the two resets cannot
+// drift apart (payloads re-encode on demand from retained sources).
 func (c *imgCache) clearRenderCachesLocked() {
 	c.covers.Clear()
 	for url := range c.coverKeysByURL {
@@ -175,8 +173,8 @@ func (c *imgCache) setImageStyle(style string, managed bool, getenv func(string)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.protocol = protocol
-	// A forced pixelated choice must behave like an environment override:
-	// the automatic fallback and recovery paths must not restore kitty.
+	// A forced pixelated choice must act like an env override:
+	// fallback/recovery must not restore kitty.
 	c.protocolExplicit = explicit
 	c.clearRenderCachesLocked()
 	c.resetKittyOverlayStateLocked()
@@ -198,8 +196,7 @@ func imageProtocolEnvOverride(getenv func(string) string) (imageProtocol, bool) 
 	}
 }
 
-// refreshURL replaces an image and drops every cached render of the old
-// one — used when a procedurally generated cover's palette changes.
+// For procedural covers whose palette changed.
 func (c *imgCache) refreshURL(url string, img image.Image, w, h int) {
 	c.mu.Lock()
 	c.deleteCoversForURLLocked(url)
@@ -245,8 +242,8 @@ func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int, profile colo
 		c.rendering[key] = ch
 		c.mu.Unlock()
 
-		// Resize+render happens outside the lock so per-frame View() reads
-		// are not blocked behind bilinear work.
+		// Outside the lock: per-frame View() reads must not block
+		// behind bilinear work.
 		s := renderCover(img, cols, rows, profile)
 
 		c.mu.Lock()
@@ -341,8 +338,7 @@ func (c *imgCache) shouldQueuePriorityLoad(url string) bool {
 	return true
 }
 
-// protocolForRender reads the negotiated protocol under the lock so render
-// paths cannot race the writer (the bare field read was a latent race).
+// Under the lock: the bare field read was a latent race.
 func (c *imgCache) protocolForRender() imageProtocol {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -437,10 +433,8 @@ func (c *imgCache) cover(url string, cols, rows int, profile colorprofile.Profil
 			return "", false
 		}
 		if ch, rendering := c.rendering[key]; rendering {
-			// Another goroutine is already rendering this key: wait for
-			// its completion signal instead of hot-spinning the event
-			// loop. Both paths close the channel exactly once, so every
-			// waiter wakes and re-checks the cache above.
+			// Wait for the in-flight render instead of hot-spinning;
+			// the channel closes exactly once.
 			c.mu.Unlock()
 			<-ch
 			continue
@@ -597,9 +591,8 @@ func resizeBilinear(src image.Image, width, height int) *image.RGBA {
 	if sb.Dx() <= 0 || sb.Dy() <= 0 || width <= 0 || height <= 0 {
 		return dst
 	}
-	// ApproxBiLinear is the fast path: a nearest/bilinear mix whose
-	// per-pixel output differs slightly from the old hand-rolled kernel
-	// (and which preserves source alpha instead of forcing opaque).
+	// Nearest/bilinear mix; preserves source alpha instead of forcing
+	// opaque.
 	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, sb, draw.Src, nil)
 	return dst
 }
@@ -609,8 +602,8 @@ func renderHalfBlock(img image.Image, cols, rows int, profile colorprofile.Profi
 		return ""
 	}
 	if profile <= colorprofile.Ascii {
-		// NO_COLOR / no-color terminals strip truecolor ANSI, turning the
-		// half-block mosaic into meaningless blank blocks.
+		// Such terminals strip truecolor ANSI, leaving meaningless
+		// blank blocks.
 		return ""
 	}
 

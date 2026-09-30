@@ -5,10 +5,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// Update mirrors the live modal state onto the overlay slot after every
-// message: overlay cmd closures check it at delivery time, so a modal
-// opened after an emission was built drops that stale emission instead
-// of resurrecting the image over the scrim.
+// Mirror live modal state onto the overlay slot: cmd closures check it at
+// delivery time, dropping emissions stale since a modal opened.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	nm, cmd := m.update(msg)
 	if mm, ok := nm.(model); ok && mm.ui.imgs != nil {
@@ -22,9 +20,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		return m.handleWindowSizeMsg(msg)
 	case tea.ColorProfileMsg:
-		// Single write point for the bundle's session-fixed profile: the
-		// runtime delivers this once at startup, and construction seeds
-		// it from the environment so tests and non-runtime paths agree.
+		// Construction seeds this too, so tests and the runtime agree.
 		m.styles.colorProfile = msg.Profile
 		return m, nil
 	case tickMsg:
@@ -61,9 +57,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	case tea.KeyReleaseMsg:
-		// Key releases carry no action: a release must never re-fire the
-		// press it follows (especially while a modal owns the keys), so
-		// releases are ignored explicitly rather than falling through.
+		// Releases must never re-fire a press: ignore them explicitly instead of falling through.
 		return m, nil
 	default:
 		return m, nil

@@ -356,8 +356,7 @@ func TestAdvancePlayerCoverEpochOnQueueHeadChange(t *testing.T) {
 	if m.transport.playerCoverEpoch == 0 {
 		t.Fatal("expected player cover epoch to advance when queue head changes")
 	}
-	// Retransmission flows through the intent revision, not a force flag:
-	// the overlay commit path re-emits on the epoch change by itself.
+	// The revision drives retransmission; force must stay clear.
 	if m.ui.imgs.overlay.force {
 		t.Fatal("expected no force flag when epoch advances; the revision drives retransmission")
 	}
@@ -540,8 +539,6 @@ func volSettleTestModel(vol int) model {
 
 func TestVolumePushDuringPendingBurstKeepsOptimistic(t *testing.T) {
 	m := volSettleTestModel(60)
-	// Previous burst committed 50 a second ago (inside the settle window)
-	// while a new burst is still pending at 65.
 	m.transport.volSentTarget = 50
 	m.transport.volSentAt = time.Now().Add(-1 * time.Second)
 	m.transport.volDebouncePending = 65
@@ -554,8 +551,6 @@ func TestVolumePushDuringPendingBurstKeepsOptimistic(t *testing.T) {
 
 func TestVolumePushAfterCommitPinsToSentTarget(t *testing.T) {
 	m := volSettleTestModel(60)
-	// Burst fully committed a second ago: divergent pushes (e.g. another
-	// client) stay pinned for the settle window, as before.
 	m.transport.volSentTarget = 60
 	m.transport.volSentAt = time.Now().Add(-1 * time.Second)
 	incoming := &spotify.PlaybackStatus{Volume: 55, TrackID: "t1", Playing: true, DurationMS: 200000, ProgressMS: 1000}

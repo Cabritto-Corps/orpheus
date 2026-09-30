@@ -142,8 +142,6 @@ func TestOverlayDisplacedImageDeletedByID(t *testing.T) {
 // delete packets whose own i= names a different image.
 func transmitImageID(t *testing.T, emission string) string {
 	t.Helper()
-	// Split into packets first: a leading delete packet's i= names a
-	// different image, so options must come from the a=T packet alone.
 	for _, pkt := range strings.Split(emission, "\x1b_G")[1:] {
 		opts, _, _ := strings.Cut(pkt, ";")
 		if !strings.Contains(opts, "a=T") {
@@ -188,13 +186,10 @@ func TestKittyUnchangedIntentReplacesFromStoredData(t *testing.T) {
 	shownID := transmitImageID(t, first)
 	rect := m.coverArt(m.bodyLayout().coverCols, m.bodyLayout().coverRows)
 
-	// Every re-place pre-deletes image-scoped (d=i,i=, placements only —
-	// the data stays stored, which uppercase d=I would purge): it drops
-	// every placement of the one shown image, including orphans from
-	// emissions dropped after they were built, so a dropped frame loses
-	// nothing and the next re-place cleans up. The pre-delete is
-	// unconditional — even the first re-place carries it as a harmless
-	// no-op — so no placement-ID bookkeeping can drift stale.
+	// Every re-place pre-deletes image-scoped (d=i: placements only, data
+	// survives — unlike uppercase d=I): this drops all placements of the
+	// one shown image, including orphans from dropped emissions, and is
+	// unconditional so no placement-ID bookkeeping can drift stale.
 	second := m.kittyOverlay()
 	if second == "" {
 		t.Fatal("expected an unchanged intent to re-place, not emit nothing")
@@ -291,8 +286,8 @@ func TestKittyCoverChangeIsOneDirectSwap(t *testing.T) {
 		t.Fatalf("cover change must commit immediately, slot still shows %q", got)
 	}
 	assertPurgeAfterPayload(t, out, newPayload, "cover change")
-	// Transmits sit under the text layer so modal scrims cover them
-	// with no delete/restore dance.
+	// z=-1 is bonus layering under text only, not modal protection;
+	// modal frames delete placements separately.
 	if !strings.Contains(out, "z=-1") {
 		t.Fatalf("cover transmit must sit under text (z=-1), got %q", tail(out, 200))
 	}

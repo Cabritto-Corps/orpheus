@@ -10,8 +10,6 @@ import (
 func TestRequeueFrontCarriesRetryCount(t *testing.T) {
 	m := model{}
 
-	// requeueFront prepends; the pump dequeues before executing, so each
-	// requeue decision is made against a fresh queue.
 	m.requeueFront(playbackInputNext, 0)
 	if len(m.transport.inputQueue) != 1 || m.transport.inputQueue[0].retryCount != 1 {
 		t.Fatalf("expected requeued next with retryCount=1, got %+v", m.transport.inputQueue)
@@ -23,7 +21,6 @@ func TestRequeueFrontCarriesRetryCount(t *testing.T) {
 		t.Fatalf("expected retryCount=2, got %+v", m.transport.inputQueue)
 	}
 
-	// The 3-retry cap: prevRetries == maxRequeueRetries-1 drops the action.
 	m.transport.inputQueue = nil
 	m.requeueFront(playbackInputNext, maxRequeueRetries-1)
 	if len(m.transport.inputQueue) != 0 {
@@ -34,7 +31,6 @@ func TestRequeueFrontCarriesRetryCount(t *testing.T) {
 func TestExecutePlaybackInputRequeuesOnFullChannel(t *testing.T) {
 	ch := make(chan librespot.TUICommand, 1)
 	m := model{ui: uiModel{keys: newKeys()}, tuiCmdCh: ch}
-	// Fill the channel so skip sends fail.
 	ch <- librespot.TUICommand{Kind: librespot.TUICommandSkipNext}
 
 	m.executePlaybackInput(playbackInputNext, 0)
@@ -186,8 +182,7 @@ func TestVolumeChannelFullFallsBackToDebounce(t *testing.T) {
 }
 
 func TestSeekStillTrailingDebounce(t *testing.T) {
-	// Seeks stay trailing-edge on purpose: a scrub burst coalesces into
-	// one player seek, while the display already moves optimistically.
+	// Trailing-edge: a scrub burst coalesces into one player seek while the display moves optimistically.
 	ch := make(chan librespot.TUICommand, 8)
 	m := volTestModel(ch, 50)
 	m.transport.status.DurationMS = 200000

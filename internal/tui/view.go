@@ -12,20 +12,15 @@ import (
 )
 
 const (
-	headerH    = 3
-	tabBarH    = 2
-	playerBarH = 2
-	// playerBarGap is the spacing between the bar's four segments (state
-	// icon, elapsed, progress, total); playerBarGaps is how many gaps that
-	// spacing fills. The bar's width budget was an unexplained magic 8.
+	headerH       = 3
+	tabBarH       = 2
+	playerBarH    = 2
 	playerBarGap  = 2
 	playerBarGaps = 4
 	volumeBarW    = 6
 	gaugeW        = 6
-	// spareLineH is the deliberately empty last row: kitty overlays place
-	// images absolutely, and a frame that fills the terminal's last row
-	// makes the terminal scroll under the renderer, shifting every
-	// absolute placement each frame (observed: covers vanish).
+	// The last row stays empty: a frame touching it scrolls the terminal
+	// under the renderer, shifting absolute kitty placements (covers vanish).
 	footerH = 1
 )
 
@@ -53,20 +48,13 @@ const (
 
 func (m model) View() tea.View {
 	if m.ui.width < 40 || m.ui.height < 12 {
-		// The error branch draws no overlay: kitty graphics sit above
-		// text with absolute placement, and nothing coordinates them
-		// against a frame that never laid out.
+		// No overlay: absolute placements cannot coordinate against a
+		// frame that never laid out.
 		return tea.View{Content: m.styles.styleError.Render("terminal too small — please resize"), AltScreen: true}
 	}
-	// View content carries no kitty bytes: the v2 pipeline never writes
-	// non-SGR escapes to the wire (zero-width cells are skipped, mid-text
-	// ones dropped). The overlay travels via tea.Raw from Update paths
-	// (kittyOverlayCmd); View must stay graphics-free — pinned by test.
 	return tea.View{Content: m.mainView(), AltScreen: true}
 }
 
-// mainView renders the whole frame without the overlay: the open modal
-// when one owns the frame, the header/tab/body/player chrome otherwise.
 func (m model) mainView() string {
 	if kind := m.modalKind(); kind != modalNone {
 		return m.modalView(kind)
@@ -74,8 +62,6 @@ func (m model) mainView() string {
 	return m.pageView()
 }
 
-// modalView renders the dialog that owns the frame. All settings modes
-// share settingsModalView, which dispatches internally.
 func (m model) modalView(kind modalKind) string {
 	switch kind {
 	case modalHelp:
@@ -107,21 +93,16 @@ func (m model) pageView() string {
 	parts := []string{header, tabBar, body, m.playerBarView()}
 	switch {
 	case m.styles.transparentFrame():
-		// No frame paint at all: the terminal's own background shows
-		// through every zone. Selection and modal chrome keep their own
-		// backgrounds (they are overlays, not zones).
+		// Selection and modal chrome keep their own backgrounds (they
+		// are overlays, not zones) while every zone shows the terminal.
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	default:
-		// Solid — and anything unexpected: one uniform surface.
 		return m.styles.paintPage(lipgloss.JoinVertical(lipgloss.Left, parts...), m.ui.width)
 	}
 }
 
-// bgSequence returns the terminal SGR that sets c as the background, or
-// "" where a themed background is not representable (no-color
-// profiles). Full fidelity is always emitted: the v2 renderer
-// downsamples raw SGR in frame content at output, so no per-profile
-// quantization happens here.
+// No per-profile quantization here: the v2 renderer downsamples raw
+// SGR in frame content at output, so full fidelity is always emitted.
 func (s *themeStyles) bgSequence(c color.Color) string {
 	if c == nil || s.colorProfile <= colorprofile.Ascii {
 		return ""
@@ -130,10 +111,8 @@ func (s *themeStyles) bgSequence(c color.Color) string {
 	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r>>8, g>>8, b>>8)
 }
 
-// reassertBgLines asserts the background at every line start as well as
-// after every reset: lipgloss draws box borders with the border-foreground
-// style only (no background), so border-ring lines would otherwise print
-// on the terminal's default color.
+// Lipgloss borders carry the border-foreground only (no background),
+// so border-ring lines would otherwise print on the terminal default.
 func reassertBgLines(text, seq string) string {
 	if seq == "" {
 		return text
@@ -145,26 +124,21 @@ func reassertBgLines(text, seq string) string {
 	return strings.Join(lines, "\n")
 }
 
-// reassertBg re-emits the background sequence after every style reset.
-// Terminals have no layers: an inner style's trailing reset clears the
-// active background for the rest of the line, so a painted band would show
-// holes wherever styled fragments, icons or glyphs sit. Re-asserting after
-// every reset composes the band UNDER every element instead.
+// Terminals have no layers: an inner reset clears the background for
+// the rest of the line, so a painted band would show holes wherever
+// styled fragments, icons or glyphs sit.
 func reassertBg(text, seq string) string {
 	if seq == "" {
 		return text
 	}
-	// Match both reset spellings: v1 terminated styles with \x1b[0m,
-	// v2 emits the abbreviated \x1b[m. Neither is a substring of the
-	// other, so order is irrelevant.
+	// Match both reset spellings (\x1b[0m and \x1b[m); neither is a
+	// substring of the other, so order is irrelevant.
 	out := strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+seq)
 	return strings.ReplaceAll(out, "\x1b[m", "\x1b[m"+seq)
 }
 
-// paintBand fills every line of a band with a background tone that
-// survives inner resets: the sequence is asserted at the line start,
-// re-asserted after each reset, and forced again under the trailing
-// padding (which would otherwise inherit an inner element's own bg).
+// Trailing padding is painted too: it would otherwise inherit an
+// inner element's own background.
 func (s *themeStyles) paintBand(band string, width int, bg color.Color) string {
 	seq := s.bgSequence(bg)
 	if seq == "" {
@@ -178,9 +152,6 @@ func (s *themeStyles) paintBand(band string, width int, bg color.Color) string {
 	return strings.Join(lines, "\n")
 }
 
-// paintPage fills the whole frame with the theme's page tone: every line
-// is padded to the terminal width and drawn on the page background, so a
-// theme owns the full canvas instead of the terminal's default color.
 func (s *themeStyles) paintPage(frame string, width int) string {
 	return s.paintBand(frame, width, s.colorPage)
 }
@@ -245,8 +216,6 @@ func (m model) icon(unicode, nerd string) string {
 	return unicode
 }
 
-// playPauseGlyphs returns the theme's transport pair, upgraded to the
-// nerd-font glyphs when the terminal advertises them.
 func (m model) playPauseGlyphs() (play, pause string) {
 	if m.ui.nerdFonts {
 		return iconPlayNF, iconPauseNF
@@ -264,9 +233,8 @@ func (m model) selectedAlbum() (playlistItem, bool) {
 	return sel, ok
 }
 
-// gradientBar renders a filled/empty bar through bubbles/progress so the
-// color ramp and width handling follow the framework; colors resolve to the
-// live theme on every render.
+// Routed through bubbles/progress so the framework owns the color
+// ramp and width handling.
 func (s *themeStyles) gradientBar(frac float64, width int) string {
 	if width <= 0 {
 		return ""
@@ -294,12 +262,11 @@ func truncate(s string, max int) string {
 	if max <= 0 {
 		return ""
 	}
-	// ansi.Truncate accounts for the tail width itself and returns s
-	// unchanged when it already fits.
+	// The tail counts against the budget (handled by the library).
 	return ansi.Truncate(s, max, "…")
 }
 
-// padCell pads s with spaces to width display cells (not bytes).
+// Width is display cells, not bytes.
 func padCell(s string, width int) string {
 	pad := width - lipgloss.Width(s)
 	if pad <= 0 {
@@ -308,7 +275,6 @@ func padCell(s string, width int) string {
 	return s + strings.Repeat(" ", pad)
 }
 
-// fitCell truncates s to width display cells with an ellipsis, escape-aware.
 func fitCell(s string, width int) string {
 	return truncate(s, width)
 }

@@ -104,8 +104,7 @@ func TestQueueRemoveNilState(t *testing.T) {
 
 func TestQueueJumpCommandPromotesTarget(t *testing.T) {
 	p := newQueueEditTestPlayer(t, []string{"spotify:track:1111111111111111111111", "spotify:track:2222222222222222222222"})
-	// The full load path needs a live fork player; assert the promotion and
-	// state sync side, which is what the backend owns on the Run goroutine.
+	// The full load path needs a live player; assert the promotion and state-sync side.
 	p.player = nil
 
 	if _, err := p.handleTUIPlaybackCommand(context.Background(), TUICommand{Kind: TUICommandQueueJump, QueueIndex: 1}); err != nil {

@@ -15,11 +15,9 @@ import (
 	"github.com/charmbracelet/colorprofile"
 )
 
-// themeStyles is one fully-built theme: palette, attribute flags, widget
-// styles and memo caches, constructed once per theme state by
-// buildThemeStyles and carried on the model by pointer. Styles are
-// values, never globals: a theme change swaps the pointer, so every
-// cache starts cold and no invalidation machinery is needed.
+// Styles are values on the model, never globals: a theme change swaps
+// the pointer, so every cache starts cold and no invalidation machinery
+// is needed.
 type themeStyles struct {
 	colorBlue, colorBlueLight, colorOffWhite, colorGray, colorMutedBlue, colorDimBlue color.Color
 	colorDivider, colorError, colorScrim                                              color.Color
@@ -44,31 +42,22 @@ type themeStyles struct {
 	tabBar      *stringCache[tabBarCacheKey]
 	placeholder *stringCache[placeholderCacheKey]
 
-	// help is the shared bubbles/help model (width set per call); swatchStyles
-	// caches one foreground-block style per palette color so the picker
-	// doesn't rebuild styles per cell per frame. Both live on the bundle,
-	// never in globals.
+	// One fg-block style per palette color, so the picker doesn't rebuild
+	// styles per cell per frame.
 	help         help.Model
 	swatchStyles map[color.Color]lipgloss.Style
 
-	// barProgress is the single progress model for gauges and bars:
-	// width is set per render on a copy, so the frame path allocates no
-	// Model, spring, or atomic ID (gradientBar used to construct one
-	// per call).
+	// Width is set per render on a copy, so the frame path allocates
+	// nothing (gradientBar used to construct one per call).
 	barProgress progress.Model
 
-	// colorProfile is the terminal's color capability, read once from the
-	// environment at construction and refreshed from tea.ColorProfileMsg
-	// at startup. Hot paint paths compare against it instead of
-	// re-parsing the environment per line; the environment is
-	// process-fixed, so a bundle never observes it change mid-session.
+	// Read once: hot paint paths compare instead of re-parsing the
+	// environment per line (it is process-fixed).
 	colorProfile colorprofile.Profile
 }
 
-// panelFromPage derives the panel tone from the page when a theme does not
-// set one explicitly: a barely-there lift toward white keeps the frame
-// continuous (the modal boxes are the only differentiated surfaces)
-// without banded contrast breaks.
+// A barely-there lift keeps the frame continuous (modal boxes stay the
+// only differentiated surfaces) without banded contrast breaks.
 func panelFromPage(page string) string {
 	if page == "" {
 		return ""
@@ -80,7 +69,6 @@ func panelFromPage(page string) string {
 	return lifted
 }
 
-// mixChannel blends two 8-bit channels (t=0 → a, t=1 → b), clamped.
 func mixChannel(a, b uint8, t float64) uint8 {
 	v := float64(a) + (float64(b)-float64(a))*t
 	if v < 0 {
@@ -92,8 +80,8 @@ func mixChannel(a, b uint8, t float64) uint8 {
 	return uint8(v + 0.5)
 }
 
-// mixHex blends two hex colors (t=0 → a, t=1 → b); non-hex inputs (ANSI
-// names, 0-15 indices) return "" so callers can fall back gracefully.
+// Non-hex inputs (ANSI names, 0-15 indices) return "" so callers fall
+// back gracefully.
 func mixHex(a, b string, t float64) string {
 	ra, ga, ba, ok := hexToRGB(a)
 	if !ok {
@@ -133,10 +121,6 @@ func hexToRGB(s string) (r, g, b uint8, ok bool) {
 	return r, g, b, true
 }
 
-// buildThemeStyles constructs one immutable theme bundle from a
-// resolved theme state. Called once at model construction and on every
-// theme change (including live preview): the model swaps the pointer, so
-// every cache starts cold and no invalidation step exists.
 func buildThemeStyles(st themeState) *themeStyles {
 	s := &themeStyles{
 		tabBar:       newStringCache[tabBarCacheKey](),
@@ -287,18 +271,15 @@ func buildThemeStyles(st themeState) *themeStyles {
 	return s
 }
 
-// transparentFrame reports whether the frame paints no background of its
-// own: mode checks read this instead of comparing style strings, so a new
+// Mode checks read this instead of comparing style strings, so a new
 // mode cannot silently inherit painted behavior.
 func (s *themeStyles) transparentFrame() bool {
 	return s.activeBackgrounds.Style == "transparent"
 }
 
-// modalBoxBackground is the background the modal boxes (and their
-// background re-assertion) use: the panel tone, flattened to the page in
-// solid mode so the whole frame is one surface. Transparent keeps the
-// panel tone — the box is floating chrome, not a frame zone, and an
-// unpainted box would dissolve into the terminal behind it.
+// Solid flattens to the page (one surface); transparent keeps the
+// panel tone — the box is floating chrome and would otherwise dissolve
+// into the terminal behind it.
 func (s *themeStyles) modalBoxBackground() color.Color {
 	if s.activeBackgrounds.Style == "solid" {
 		return s.colorPage
@@ -306,8 +287,6 @@ func (s *themeStyles) modalBoxBackground() color.Color {
 	return s.colorPanel
 }
 
-// themeBorder returns the theme's box border family for modal boxes and
-// placeholder art (cover frames have their own border setting).
 func (s *themeStyles) themeBorder() lipgloss.Border {
 	switch s.activeGlyphs.Border {
 	case "thick":
@@ -324,7 +303,6 @@ func (s *themeStyles) themeBorder() lipgloss.Border {
 	}
 }
 
-// themeBarRunes returns the progress bar's full/empty runes.
 func (s *themeStyles) themeBarRunes() (full, empty rune) {
 	if s.activeGlyphs.Bar == "line" {
 		return '━', '─'
@@ -332,8 +310,6 @@ func (s *themeStyles) themeBarRunes() (full, empty rune) {
 	return '█', '░'
 }
 
-// themePlayPauseGlyphs returns the transport pair for the configured set;
-// nerd-font terminals keep the NF glyphs (icon() decides).
 func (s *themeStyles) themePlayPauseGlyphs() (play, pause string) {
 	switch s.activeGlyphs.PlayPause {
 	case "bold":
@@ -347,8 +323,6 @@ func (s *themeStyles) themePlayPauseGlyphs() (play, pause string) {
 	}
 }
 
-// themeNowPlayingGlyph returns the now-playing marker for the configured
-// set ("" for the plain style).
 func (s *themeStyles) themeNowPlayingGlyph() string {
 	switch s.activeGlyphs.NowPlaying {
 	case "dot":
@@ -362,8 +336,6 @@ func (s *themeStyles) themeNowPlayingGlyph() string {
 	}
 }
 
-// coverFrameBorder returns the theme's cover frame border, ok=false when
-// the frame style is "none".
 func (s *themeStyles) coverFrameBorder() (lipgloss.Border, bool) {
 	switch s.activeCover.Frame {
 	case "rounded":
@@ -375,14 +347,11 @@ func (s *themeStyles) coverFrameBorder() (lipgloss.Border, bool) {
 	}
 }
 
-// coverFrameFits reports whether a cell is large enough to inset the art
-// inside a frame without starving it.
 func (s *themeStyles) coverFrameFits(cols, rows int) bool {
 	_, ok := s.coverFrameBorder()
 	return ok && cols >= 6 && rows >= 3
 }
 
-// themedSpinner constructs a bubbles spinner from the theme's style name.
 func themedSpinner(s *themeStyles) spinner.Model {
 	preset := spinner.MiniDot
 	switch s.activeGlyphs.Spinner {
@@ -412,8 +381,6 @@ func (s *themeStyles) verticalDivider(h int) string {
 	return strings.Repeat(line+"\n", h-1) + line
 }
 
-// newBrowseList builds one of the two library browsers with the shared
-// chrome configuration (chrome flags off, search prompt, themed styles).
 func newBrowseList(s *themeStyles, nowPlaying *string) list.Model {
 	l := list.New(nil, newCachedPlaylistDelegate(s, nowPlaying), 40, 20)
 	l.SetShowTitle(false)
@@ -474,8 +441,8 @@ func applyListStyles(l *list.Model, s *themeStyles) {
 		Background(lipgloss.NoColor{}).
 		Padding(0, 0, 1, 0)
 
-	// The v2 filter input styles prompt and cursor per focus state; the v1
-	// FilterPrompt/FilterCursor applied regardless, so set both states.
+	// v2 styles the prompt per focus state (v1 applied regardless), so
+	// set both states.
 	l.Styles.Filter.Focused.Prompt = lipgloss.NewStyle().
 		Foreground(s.colorBlue)
 	l.Styles.Filter.Blurred.Prompt = lipgloss.NewStyle().

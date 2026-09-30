@@ -76,8 +76,7 @@ func (m *model) enqueuePlaybackInput(action playbackInputKind) {
 }
 
 func (m *model) requeueFront(action playbackInputKind, prevRetries int) {
-	// The retry count travels with the popped action: matching against
-	// inputQueue[0] never fired because the failed item was already dequeued.
+	// The retry count travels with the popped action: already dequeued, so matching inputQueue[0] never fired.
 	retries := prevRetries + 1
 	if retries >= maxRequeueRetries {
 		slog.Debug("dropping playback action after retries", "kind", action)
@@ -97,11 +96,7 @@ func (m *model) pumpInputExecutor() tea.Cmd {
 		}
 		idx := m.dequeueNextInputIndex()
 		if m.transport.executorState != executorStateIdle {
-			// Volume is an idempotent set-command that never touches
-			// transition state, and the key handler deliberately
-			// leaves it unblocked during transitions — let it drain
-			// so the bar and the audio stay live while a track
-			// change is in flight. Everything else stays queued.
+			// Volume never touches transition state: let it drain during transitions so bar and audio stay live; the rest stays queued.
 			idx = m.dequeueNextVolumeIndex()
 			if idx < 0 {
 				return nil
@@ -252,11 +247,7 @@ func isVolumeAction(action playbackInputKind) bool {
 	return action == playbackInputVolUp || action == playbackInputVolDown
 }
 
-// trySendVolume commits a volume target to the player immediately
-// (leading edge) instead of waiting out the debounce interval. The
-// trailing debounce timer stays as the fallback when the command
-// channel is full: pending keeps the target and the token guards the
-// retry, so no press is ever lost to a busy player.
+// Leading-edge send; the trailing debounce stays as fallback, with pending + token so no press is lost to a busy player.
 func (m *model) trySendVolume(target int) bool {
 	if m.tuiCmdCh == nil {
 		return false

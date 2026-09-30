@@ -39,9 +39,8 @@ func roundTripOnce(tb testing.TB, tr *rateLimitTransport, ctx context.Context) e
 	return err
 }
 
-// The reported bug: a multi-hour Retry-After slept straight into the page
-// deadline and surfaced as a bare "context deadline exceeded", hiding the
-// 429 from every classifier and hint downstream.
+// A multi-hour Retry-After slept into the page deadline and surfaced as bare
+// "context deadline exceeded", hiding the 429 from classifiers downstream.
 func TestRateLimitTransportFailsFastOnHugeRetryAfter(t *testing.T) {
 	base := &stubBase{header: http.Header{"Retry-After": []string{"14886"}}}
 	tr := newRateLimitTransport(base)
@@ -103,8 +102,7 @@ func TestRateLimitTransportCoalescesShortBurst(t *testing.T) {
 	}
 }
 
-// A shared backoff recorded by another request must not sleep out a new
-// request's deadline either — and must not touch the network at all.
+// A shared backoff must not sleep out a new request's deadline, nor touch the network.
 func TestRateLimitTransportFailsFastOnSharedBackoff(t *testing.T) {
 	base := &stubBase{}
 	tr := newRateLimitTransport(base)

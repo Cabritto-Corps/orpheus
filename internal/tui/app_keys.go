@@ -15,21 +15,16 @@ import (
 )
 
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	// See syncListKeyMaps: the key-capture flow replaces m.ui.keys wholesale.
 	m.syncListKeyMaps()
 	k := m.ui.keys
 	filtering := m.isFiltering()
 
-	// ctrl+c is quit's guaranteed key: it punches through modals, key
-	// capture and filter mode alike.
+	// ctrl+c is quit's guaranteed key through modals, capture, and filter mode.
 	if isQuitSignal(msg) {
 		return m, tea.Quit
 	}
 
-	// An open modal owns every other key (focus trap): the global keys
-	// below stay inert while help, settings or the popup is up, and Esc
-	// always closes. Pressing ? with help open dismisses it; entering
-	// help or settings from inside another modal is not possible.
+	// An open modal owns every other key (focus trap); Esc always closes.
 	if kind := m.modalKind(); kind != modalNone {
 		return m.routeModalKey(msg, kind)
 	}
@@ -45,8 +40,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.ui.helpOpen {
 				m.ensureHelpViewport()
 			}
-			// Opening hides the cover with the modal frame; closing
-			// re-places it at once instead of waiting for a tick.
+			// Hide the cover with the modal frame; closing re-places it without waiting for a tick.
 			return m, m.kittyOverlayCmd()
 		}
 	case keyMatches(msg, k.Settings):
@@ -71,7 +65,6 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Global playback keys: work on all tabs, not just player
 	if !filtering {
 		if action := m.matchGlobalPlaybackKey(msg); action != "" {
 			m.enqueuePlaybackInput(action)
@@ -180,10 +173,7 @@ func (m model) handleAlbumKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// routeModalKey dispatches a key to the open dialog with the order
-// declared once: quit-first already ran in handleKey, the modal owns every
-// other key, Esc always closes. This is the focus trap — the global keys
-// below never see a key a modal swallowed.
+// routeModalKey dispatches a key to the open dialog; quit-first already ran in handleKey.
 func (m model) routeModalKey(msg tea.KeyPressMsg, kind modalKind) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	if kind == modalHelp {
@@ -215,9 +205,7 @@ func (m model) isFiltering() bool {
 	return false
 }
 
-// handleQueueKey handles the up-next panel's interaction keys (player tab).
-// Cursor positions and command payloads use the visible-view addressing the
-// backend expects: position 0 is the entry the panel shows first.
+// Queue commands address the visible view: position 0 is the first shown entry.
 func (m *model) handleQueueKey(msg tea.KeyPressMsg) tea.Cmd {
 	q := m.visibleQueue()
 	if len(q) == 0 {
@@ -238,8 +226,7 @@ func (m *model) handleQueueKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	case keyMatches(msg, k.QueueJump):
-		// Jump loads a track — same class as next/prev, so it must not
-		// fire while a transport transition is mid-flight.
+		// Jump loads a track, so it must not fire mid-transition like next/prev.
 		if m.transport.transition.Pending() {
 			return nil
 		}
@@ -261,17 +248,12 @@ func (m *model) handleQueueKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 }
 
-// allFilterLists is every bubbles list the app can filter with. New
-// surfaces register their list here instead of growing the enumeration in
-// syncListKeyMaps.
+// New filterable surfaces register their list here.
 func (m *model) allFilterLists() []*list.Model {
 	return []*list.Model{&m.browse.playlistList, &m.browse.albumList, &m.ui.trackPopupList}
 }
 
-// filterableLists narrows allFilterLists to what can own the filter right
-// now: the open popup, else the active tab's browser list. Tab-scoping is
-// load-bearing — a list left filtering on an inactive tab must not freeze
-// the new tab's keys.
+// Tab-scoping is load-bearing: an inactive tab's filter must not freeze the new tab's keys.
 func (m model) filterableLists() []*list.Model {
 	if m.ui.trackPopupOpen {
 		return []*list.Model{&m.ui.trackPopupList}
@@ -285,25 +267,16 @@ func (m model) filterableLists() []*list.Model {
 	return nil
 }
 
-// Bubbles' default browse bindings, snapshotted once. The per-keypress
-// reconciliation below strips app-owned keys from a stable base instead of
-// from an already-stripped binding, which is what keeps runtime rebinds
-// correct in both directions: claim `l` and paging loses it; release `l`
-// and paging regains it.
+// Snapshot bubbles' browse bindings once; per-keypress reconciliation strips
+// app-owned keys from this stable base so runtime rebinds work both ways.
 var (
 	defaultListNextPage = list.DefaultKeyMap().NextPage
 	defaultListPrevPage = list.DefaultKeyMap().PrevPage
 )
 
-// syncListKeyMaps reconciles every browse/popup list's KeyMap with the live
-// keyMap so bubbles dispatches nothing the app owns. The key-capture flow
-// replaces m.ui.keys wholesale, so this runs on every keypress: Filter
-// follows the rebound search key; bubbles' built-in quit — `v` since
-// bubbles v2, where v1 bound q/esc — stays disabled (quit is an app action,
-// dispatched before any list ever sees a key); page bindings drop whatever
-// the registry claims (repeat's `l`, queue-remove's `d`), so app keys never
-// turn pages. List cursor/goto bindings are untouched: vertical navigation
-// is the lists' core function.
+// syncListKeyMaps reconciles list KeyMaps with the live keyMap so bubbles dispatches nothing the app owns.
+// Capture flow replaces m.ui.keys wholesale, so this runs on every keypress; bubbles v2's quit binding stays
+// disabled and app-owned page keys stay unbound by lists.
 func (m *model) syncListKeyMaps() {
 	claimed := make(map[string]struct{}, 64)
 	for _, meta := range actionRegistry {
@@ -319,9 +292,6 @@ func (m *model) syncListKeyMaps() {
 	}
 }
 
-// unclaimedListKeys rebuilds a list navigation binding without the keys the
-// action registry owns, keeping bubbles' help text. A binding reduced to
-// nothing stays disabled.
 func unclaimedListKeys(def key.Binding, claimed map[string]struct{}) key.Binding {
 	var keep []string
 	for _, spec := range def.Keys() {
@@ -392,10 +362,7 @@ func (m model) handlePlaybackKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, m.pumpInputExecutor()
 }
 
-// setNowPlaying records the context URI behind the current track. The
-// list delegates read it through the shared pointer, so every list copy
-// sees track changes with no global and no cache flush. Models built
-// without the pointer (bare test fixtures) simply record nothing.
+// setNowPlaying shares the context URI through a pointer so list copies see track changes.
 func (m *model) setNowPlaying(uri string) {
 	if m.nowPlaying != nil {
 		*m.nowPlaying = uri
@@ -407,10 +374,7 @@ type trackPopupItemsMsg struct {
 	items []spotify.QueueItem
 }
 
-// newTrackPopupList builds the track popup's list with the shared chrome:
-// themed filter prompt, a readable status bar (the item count stays visible
-// even on a single page) and pagination dots the framework's default greys
-// bury on dark themes.
+// newTrackPopupList uses shared chrome with readable status and pagination dots on dark themes.
 func newTrackPopupList(s *themeStyles, nowPlaying *string, termW, termH int) list.Model {
 	_, listW, listH := popupModalSize(termW, termH)
 	popup := list.New(nil, newTrackPopupDelegate(s, nowPlaying), listW, listH)
@@ -452,26 +416,21 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 			ResultCh: m.contextTracksCh,
 		}:
 		default:
-			// The backend queue is full; without a reply the popup would
-			// sit on "Loading…" forever.
+			// Without a reply, a full backend queue would leave the popup on "Loading…" forever.
 			m.ui.trackPopupOpen = false
 			m.transport.playbackErr = errors.New("couldn't load tracks — player busy")
 		}
 	} else {
 		m.ui.trackPopupItems = []spotify.QueueItem{}
 	}
-	// The popup frame hides the cover at once; the emission is a pure
-	// delete and bypasses delivery suppression.
+	// Hide the cover at once with a pure delete.
 	return m, m.kittyOverlayCmd()
 }
 
 func (m model) handleTrackPopupKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	if m.ui.trackPopupList.FilterState() == list.Filtering {
-		// While searching inside the popup everything goes to the filter:
-		// bubbles exits the filter on the first esc and accepts on enter,
-		// so the close and play actions below only see keys typed outside
-		// of search mode.
+		// Bubbles consumes the first esc/enter in search; close/play only see non-search keys.
 		var cmd tea.Cmd
 		m.ui.trackPopupList, cmd = m.ui.trackPopupList.Update(msg)
 		return m, cmd
@@ -481,9 +440,6 @@ func (m model) handleTrackPopupKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.ui.trackPopupOpen = false
 		return m, nil
 	case keyMatches(msg, k.Quit):
-		// The bubbles list's own quit binding (disabled in syncListKeyMaps)
-		// can never fire here; this case keeps our own quit inert inside
-		// the modal while Esc closes (ctrl+c already quit above).
 		return m, nil
 	case keyMatches(msg, k.Select):
 		sel, ok := m.ui.trackPopupList.SelectedItem().(trackItem)

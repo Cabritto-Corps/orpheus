@@ -45,9 +45,8 @@ func queueHeadTrackID(queue []spotify.QueueItem) string {
 	return golibrespot.NormalizeSpotifyId(queue[0].ID)
 }
 
-// visibleQueue is what the up-next panel shows: the pushed queue with the
-// currently playing queue entry (when it heads the queue) hidden. Positions
-// here are the same "visible view" the backend uses for queue commands.
+// Up-next view: pushed queue minus the playing head entry — the same visible
+// view the backend uses for queue commands.
 func (m model) visibleQueue() []spotify.QueueItem {
 	q := m.transport.queue
 	if m.transport.status != nil && len(q) > 0 {
@@ -83,9 +82,7 @@ func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.
 	progressRewind := sameURL && prevProgress >= 0 && nextProgress >= 0 && prevProgress > nextProgress+progressRewindThresholdMS
 	shouldAdvance := subjectChanged || trackChanged || queueHeadChanged || progressRewind
 	if shouldAdvance {
-		// The epoch bump alone drives overlay retransmission: the typed
-		// intent carries it as the revision, so the commit path re-emits
-		// without a force flag (which would only duplicate the emission).
+		// The intent revision re-emits on the epoch change alone.
 		m.transport.playerCoverEpoch++
 	}
 }
@@ -109,9 +106,6 @@ func (m *model) beginTransportTransition() {
 		fromTrack = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
 	}
 	m.transport.transition.Begin(time.Now(), fromTrack)
-	// No overlay force here: the content is identical and the terminal keeps
-	// showing it; the header's transition marker changes the frame text, so
-	// any needed emission rides the normal frame diff.
 	m.syncExecutorState()
 }
 
@@ -120,7 +114,6 @@ func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
 	if event == transportEventNone {
 		return
 	}
-	// Same as begin: clearing needs no overlay force of its own.
 	if event == transportEventStuck {
 		m.transport.playbackErr = errors.New("track didn't start — skip again")
 	}
@@ -148,9 +141,7 @@ func (m *model) applyOptimisticSkip(next bool) {
 	m.transport.interpolationSyncAt = time.Time{}
 	m.transport.interpolationProgressMS = 0
 	if next {
-		// The view hides queue entries matching the current track, so
-		// aiming at queue[0] would show no visible change when the head
-		// still is the playing track (e.g. repeat-one).
+		// Aim past the head: the view hides the playing track (e.g. repeat-one).
 		for _, entry := range m.transport.queue {
 			if entry.ID == m.transport.status.TrackID {
 				continue
@@ -362,8 +353,6 @@ func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool
 	}
 }
 
-// queueFingerprint summarizes queue identity cheaply: length plus the first,
-// middle and last entry IDs.
 func queueFingerprint(queue []spotify.QueueItem) uint64 {
 	if len(queue) == 0 {
 		return 0
@@ -385,16 +374,11 @@ func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.Queue
 	sameTrack := func(id string) bool {
 		return golibrespot.NormalizeSpotifyId(id) != "" && golibrespot.NormalizeSpotifyId(id) == nextID
 	}
-	// Carry prev's AlbumImageURL only on same-track pushes: intermediate librespot
-	// state updates for a new track often omit the cover URL and a stale URL from
-	// the previous track would render the wrong art until the second push arrives.
+	// Same-track only: a stale prev URL would render the wrong art until the second push.
 	if out.AlbumImageURL == "" && prev != nil && prev.AlbumImageURL != "" && sameTrack(prev.TrackID) {
 		out.AlbumImageURL = prev.AlbumImageURL
 	}
-	// The queue carries the resolved album art for the upcoming track, so a
-	// track change whose push omits the cover URL does not blank the panel
-	// until a later push arrives. Runs before the metadata early-return:
-	// complete metadata with a missing URL is exactly the skip case.
+	// Runs before the metadata early-return: complete metadata with a missing URL is exactly the skip case.
 	if out.AlbumImageURL == "" {
 		for _, q := range queue {
 			if sameTrack(q.ID) && q.ImageURL != "" {

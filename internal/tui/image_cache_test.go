@@ -623,17 +623,12 @@ func placementIDOf(t *testing.T, packet string) string {
 }
 
 func TestKittyOverlayHidesUnderAnyModal(t *testing.T) {
-	// Help, settings, and the track popup all hide the overlay with an
-	// image-scoped delete on every modal frame while the slot believes
-	// an image is live — never once-and-silent, so a missed delete or a
-	// resurrected placement self-heals on the next frame instead of
-	// stranding the image over the modal. The delete names the image
-	// only (no p=): placement IDs churn every frame and Ghostty has
-	// point-delete (d=i,p=) conformance gaps, so targeting a placement
-	// is stale-prone and terminal-fragile. Re-placing during a modal
-	// would draw the cover back over the scrim on every tick (z=-1
-	// shows through default-background cells, so under-text layering
-	// alone does not cover the image).
+	// Every modal frame re-deletes image-scoped (no p=) while the slot
+	// believes an image is live — never once-and-silent, so a missed delete
+	// or resurrected placement self-heals. The delete names the image only:
+	// placement IDs churn every frame and Ghostty has point-delete gaps.
+	// Re-placing during a modal would redraw the cover over the scrim:
+	// z=-1 shows through default-background cells.
 	t.Setenv("TMUX", "")
 	cases := []struct {
 		name string

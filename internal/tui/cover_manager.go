@@ -17,19 +17,15 @@ type coverManager struct {
 	resolveInFlight map[string]struct{}
 	queue           *stdlist.List
 	queued          map[string]*stdlist.Element
-	// prefetched remembers kicked up-next covers so repeated state pushes
-	// don't re-evaluate them. A map (not a string): coverManager travels
-	// by value inside the model, so scalar writes from handlers that don't
-	// return the model would be silently dropped; map writes survive.
+	// prefetched dedups re-kicks across state pushes. A map, not a scalar:
+	// coverManager travels by value, so scalar writes would be silently dropped.
 	prefetched map[string]struct{}
-	// queue is the FIFO of cover URLs to load; queued maps each URL to
-	// its list element. Element pointers stay valid across pops and
-	// removes, so no index bookkeeping exists that could desync.
+	// Element pointers stay valid across pops and removes, so queued needs
+	// no index bookkeeping that could desync.
 	playerCoverFailStreak int
 	kittyRecoveryStreak   int
-	// kittyFellBack records that kitty was disabled by the failure
-	// fallback, as opposed to never having been detected. Recovery must
-	// only re-enable a protocol that actually worked before.
+	// kittyFellBack: kitty was disabled by the failure fallback, not merely
+	// undetected — recovery must only re-enable a protocol that worked before.
 	kittyFellBack bool
 }
 
@@ -97,9 +93,8 @@ func (c *coverManager) popURL() (string, bool) {
 	return url, true
 }
 
-// pruneExcept drops queued URLs outside the currently interesting set so a
-// fast scroll does not leave hundreds of off-screen loads queued ahead of
-// what the user is looking at.
+// pruneExcept bounds the queue to the currently interesting set: fast scrolls
+// must not strand hundreds of off-screen loads ahead of the visible ones.
 func (c *coverManager) pruneExcept(keep map[string]struct{}) {
 	if c.queue.Len() == 0 {
 		return
@@ -247,13 +242,11 @@ func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
 	return m.loadImagesBatchCmd(urls)
 }
 
-// prefetchNextCoverCmd warms the up-next track's cover so a skip swaps
-// from cache instead of paying fetch+decode on the critical path. The
-// visible queue already hides the currently playing head entry, so its
-// first item is the next track. One URL in flight at a time: re-kicks
-// only when the head changes. shouldQueueLoad (not bare beginLoad) gates
-// the kick so dead URLs pace behind the fail cooldown instead of
-// refetching on every state push.
+// prefetchNextCoverCmd warms the up-next cover so a skip swaps from cache.
+// q[0] is the next track (the visible queue hides the playing head); one
+// URL is remembered at a time, so re-kicks happen only when the head
+// changes. shouldQueueLoad gates the kick so dead URLs pace behind the
+// fail cooldown instead of refetching on every state push.
 func (m *model) prefetchNextCoverCmd() tea.Cmd {
 	if m.ui.imgs == nil {
 		return nil
@@ -286,8 +279,8 @@ func (m *model) maybeRecoverKittyProtocol() {
 	if !m.ui.cover.kittyFellBack {
 		return
 	}
-	// Recovery: after a healthy streak of successful loads, give kitty
-	// another chance instead of staying in half-block mode for the whole session.
+	// After a healthy streak, give kitty another chance instead of staying
+	// in half-block mode for the whole session.
 	m.ui.cover.kittyRecoveryStreak++
 	if m.ui.cover.kittyRecoveryStreak >= kittyProtocolRecoveryStreak {
 		m.ui.imgs.setProtocol(imageProtocolKitty)

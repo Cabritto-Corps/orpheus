@@ -19,10 +19,8 @@ const (
 	TUICommandQueueJump
 )
 
-// Queue commands address entries by VISIBLE position (the "up next" view):
-// position 0 is the entry the panel shows first, i.e. the fork's visible-view
-// index where the currently playing queue entry (if any) is excluded. Track
-// IDs are not used: they can duplicate within a queue.
+// Queue commands address entries by VISIBLE position (up-next view, current
+// entry excluded); track IDs can duplicate within a queue.
 type TUICommand struct {
 	Kind             TUICommandKind
 	URI              string
@@ -35,9 +33,8 @@ type TUICommand struct {
 	ResultCh         chan<- ContextTracksResult
 }
 
-// ContextTracksResult is the reply to TUICommandGetContextTracks. ReqToken
-// echoes the request so the TUI can drop results that no longer match the
-// open popup.
+// ContextTracksResult replies to TUICommandGetContextTracks; ReqToken lets the
+// TUI drop results that no longer match the open popup.
 type ContextTracksResult struct {
 	ReqToken int
 	Entries  []PlaybackStateQueueEntry
@@ -70,7 +67,6 @@ type PlaybackStateUpdate struct {
 	QueueHasMore  bool
 	QueueIncluded bool
 
-	// Error carries a transport-level failure (e.g. connection lost). Empty
-	// means healthy; the TUI surfaces non-empty values as playbackErr.
+	// Error carries a transport-level failure; the TUI surfaces it as playbackErr.
 	Error string
 }

@@ -10,13 +10,10 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// DefaultDelegate.Render is the most expensive per-frame call on list tabs
-// (word-wrap + grapheme width passes per visible row), yet its output is a
-// pure function of (item text, width, selection, filter state, delegate
-// height, styles). Rendering is memoized on that key inside each delegate's
-// own cache; delegates are rebuilt from the current theme on every theme
-// change, so a fresh delegate (and its empty cache) can never serve stale
-// rows — no epoch, no registry, no reset step.
+// Render is the most expensive per-frame list-tab call (word-wrap + width
+// passes per row) but pure in its key — memoized per delegate. Delegates are
+// rebuilt on every theme change, so a fresh empty cache can never serve
+// stale rows: no epoch, no registry, no reset step.
 
 type delegateKey struct {
 	width    int
@@ -57,10 +54,8 @@ type tabBarCacheKey struct {
 	active tab
 }
 
-// stringCache is a tiny memo for constant-per-key view fragments. The
-// instance lives on the theme bundle, so entries are only valid for that
-// bundle's lifetime: a theme change builds a fresh bundle with cold
-// caches, and no reset step exists.
+// stringCache memos constant-per-key view fragments. It lives on the theme
+// bundle, so a theme change builds fresh cold caches and no reset step exists.
 type stringCache[K comparable] struct {
 	mu      sync.Mutex
 	entries map[K]string
@@ -86,11 +81,9 @@ func (c *stringCache[K]) put(k K, s string) {
 	c.mu.Unlock()
 }
 
-// cachedDelegate wraps list.DefaultDelegate. It is stored by value inside
-// list.Model (which bubbletea copies freely), so the cache lives behind a
-// pointer shared by every copy. The now-playing context URI rides the same
-// sharing: one pointer written by the event loop on track change, so every
-// copy (and its title-derived cache key) sees the move with no flush.
+// cachedDelegate is stored by value in list.Model (copied freely), so the
+// cache and the now-playing URI ride behind shared pointers written once by
+// the event loop: every copy sees track moves with no flush.
 type cachedDelegate struct {
 	list.DefaultDelegate
 	cache      *delegateCache
@@ -105,18 +98,14 @@ func (d cachedDelegate) currentNowPlaying() string {
 	return *d.nowPlaying
 }
 
-// nowPlayingURI is written through the model's shared pointer (see
-// setNowPlaying); delegates read it through theirs, so the marker follows
-// track changes with no global and no cache flush.
 func newCachedPlaylistDelegate(s *themeStyles, nowPlaying *string) cachedDelegate {
 	c := &delegateCache{entries: make(map[delegateKey]string, 64)}
 	return cachedDelegate{DefaultDelegate: newPlaylistDelegate(s), cache: c, glyph: s.themeNowPlayingGlyph(), nowPlaying: nowPlaying}
 }
 
-// trackRow composes a track row: name left, duration right-aligned at the
-// row edge — the default delegate leaves the right half of full-size lists
-// empty. During filtering the rune-highlight path falls back to the
-// framework renderer (no duration shown while filtering).
+// trackRow right-aligns the duration at the row edge (the default delegate
+// leaves the right half empty). Filtering falls back to the framework
+// renderer, so no duration shows while filtering.
 func (d cachedDelegate) trackRow(m list.Model, index int, item trackItem) (string, bool) {
 	if m.FilterState() == list.Filtering || m.Width() <= 0 {
 		return "", false

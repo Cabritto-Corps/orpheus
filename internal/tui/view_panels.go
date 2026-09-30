@@ -265,12 +265,9 @@ func (m model) queuePanel(w, h int) string {
 	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 }
 
-// coverOrPlaceholder resolves a panel's cover cell: kitty overlays blank
-// the cell once the image is placed, ANSI panels show cached art or the
-// placeholder box. The art rectangle and frame decision both come from the
-// single coverArt derivation, so the ANSI cell and the kitty placement can
-// never disagree. The single accessor reads the protocol under the cache
-// lock instead of every render site racing on the field.
+// Both renderers derive from the single coverArt, so ANSI and kitty can
+// never disagree; the protocol reads under the cache lock so render sites
+// don't race on the field.
 func (m model) coverOrPlaceholder(url string, cols, rows int) string {
 	rect := m.coverArt(cols, rows)
 	if m.ui.imgs == nil {
@@ -294,8 +291,7 @@ func (m model) coverOrPlaceholder(url string, cols, rows int) string {
 	return m.placeholderArt(cols, rows)
 }
 
-// coverFrameBox renders the frame with an empty interior: the kitty image
-// is placed over the blank inner cells at the inset offset.
+// Blank by design: the kitty image sits over these cells at the inset offset.
 func (s *themeStyles) coverFrameBox(cols, rows int) string {
 	return s.coverFrameBoxWith(strings.Repeat(" ", cols-2), cols, rows)
 }
@@ -335,9 +331,7 @@ func (m model) placeholderArt(cols, rows int) string {
 	if cached, ok := m.styles.placeholder.get(key); ok {
 		return cached
 	}
-	// lipgloss v2 Width/Height are total block budgets: the requested cell
-	// already includes the border ring. Render an empty interior and let
-	// the style supply the full cell.
+	// Render an empty interior and let the style supply the full cell.
 	out := lipgloss.NewStyle().
 		Border(m.styles.themeBorder()).
 		BorderForeground(m.styles.colorDivider).
@@ -348,10 +342,7 @@ func (m model) placeholderArt(cols, rows int) string {
 	return out
 }
 
-// queueGrid is the shared column layout for the up-next panel's header and
-// rows: a right-aligned index, flexible title/artist columns and a
-// right-aligned duration, all inside the panel width. Header and rows come
-// from the same constants so the grid aligns.
+// Header and rows share the constants so the grid aligns.
 type queueGrid struct {
 	lead    int
 	idxW    int
@@ -386,8 +377,7 @@ func (g queueGrid) header(s *themeStyles) string {
 	return b.String()
 }
 
-// row renders one queue row: unstyled cells padded to the grid, then exactly
-// one style applied over the whole padded row (single-owner selection).
+// One style owns the whole padded row (single-owner selection).
 func (g queueGrid) row(s *themeStyles, w, num int, title, artist string, durMS int, selected bool) string {
 	name := truncate(title, g.titleW)
 	artist = truncate(artist, g.artistW)

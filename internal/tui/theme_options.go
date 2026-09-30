@@ -17,11 +17,8 @@ const (
 	optionReset
 )
 
-// themeOptionRow describes one theming-editor row: its kind, its label,
-// how the current value renders, and how a +/- step mutates the pending
-// draft (nil for the save/reset action rows). The editor reads this
-// table everywhere — cursor wrap, rendering, cycling — so adding a
-// control is one entry here.
+// The editor reads this table everywhere (cursor wrap, rendering,
+// cycling), so adding a control is one entry here.
 type themeOptionRow struct {
 	kind  optionKind
 	label string
@@ -29,8 +26,6 @@ type themeOptionRow struct {
 	cycle func(s *settingsModel, pending *themeState, step int)
 }
 
-// themeOptionsRowsList drives the theming editor: order is the menu order,
-// kind marks the save/reset action rows.
 var themeOptionsRowsList = []themeOptionRow{
 	{optionCycle, "Base palette",
 		func(s *settingsModel) string { return s.themeOptionsPreset },
@@ -38,8 +33,8 @@ var themeOptionsRowsList = []themeOptionRow{
 			names := themeRegistryNames()
 			next := cycleValue(names, s.themeOptionsPreset, step)
 			s.themeOptionsPreset = next
-			// Base change restarts the palette from the new preset but keeps
-			// the glyph/typography/cover/backgrounds edits made so far.
+			// Palette restarts from the new preset; glyph/cover/etc
+			// edits made so far are kept.
 			base := themePresetState(next)
 			base.glyphs = pending.glyphs
 			base.typography = pending.typography
@@ -132,8 +127,7 @@ func themeOptionsRowCount() int {
 	return len(themeOptionsRowsList)
 }
 
-// Curated cycles: "preset" always comes first in the color cycles and
-// restores the base palette's value for that role.
+// "preset" heads each color cycle and restores the base value.
 var (
 	pageToneChoices = []string{"#06080B", "#0A0D12", "#101216", "#14181E", "#1A1B20"}
 	accentChoices   = []string{"#4A90D9", "#7AA2F7", "#89B4FA", "#C4A7E7", "#8EC07C", "#FE8019", "#F38BA8", "#E5C07B", "#00FF87"}
@@ -151,9 +145,8 @@ func cycleValue(choices []string, current string, step int) string {
 	return choices[0]
 }
 
-// cycleColor keeps the preset value as the head of the cycle so "preset"
-// and the curated hexes round-trip in one ring; a preset value already
-// present in the curated list is not repeated.
+// Preset heads the ring (deduped) so it and the curated hexes
+// round-trip.
 func cycleColor(choices []string, current, preset string, step int) string {
 	all := []string{preset}
 	for _, c := range choices {
@@ -173,12 +166,9 @@ func (m *model) openThemeOptions() {
 	s.optionsCursor = 0
 }
 
-// themeOptionsApply renders a draft state live: styles, list delegates
-// and spinner follow. The procedural cover stays out of the live path —
-// its regen dominates a keypress — and syncs on save/exit instead.
+// The procedural cover stays out of the live path (its regen
+// dominates a keypress) and syncs on save/exit instead.
 func (m model) themeOptionsApply(state themeState) (tea.Model, tea.Cmd) {
-	// Live preview swaps the whole bundle: every cache starts cold, so
-	// no invalidation step runs on the keypress path.
 	m.styles = buildThemeStyles(state)
 	m.rethemeBrowseLists()
 	m.ui.spinner = themedSpinner(m.styles)
@@ -187,10 +177,7 @@ func (m model) themeOptionsApply(state themeState) (tea.Model, tea.Cmd) {
 	}
 }
 
-// themeOptionsApplyAndRefresh is the settle path for theme changes: it
-// applies a state and then syncs the procedural cover art, which the
-// live preview deliberately skips. Use it wherever a theme mode closes
-// over a changed palette.
+// Use it wherever a theme mode closes over a changed palette.
 func (m model) themeOptionsApplyAndRefresh(state themeState) (tea.Model, tea.Cmd) {
 	next, cmd := m.themeOptionsApply(state)
 	applied := next.(model)
@@ -217,8 +204,8 @@ func (m model) themeOptionsReset() (tea.Model, tea.Cmd) {
 
 func (m model) themeOptionsRevert() (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
-	// Mode first: the apply call copies the model, so the returned copy
-	// must already carry the exit to the root.
+	// Mode first: apply copies the model, so the returned copy must
+	// already carry the exit.
 	s.mode = settingsModeRoot
 	s.themePreset = themePresetName(s.themePreset)
 	return m.themeOptionsApplyAndRefresh(s.themeStateBackup)
@@ -246,8 +233,6 @@ func onOff(v bool) string {
 	return "off"
 }
 
-// themeOptionsView renders the theming editor: rows with right-aligned
-// values, save/reset actions, and a scrolling window on short terminals.
 func (m model) themeOptionsView(modalW, innerH int) string {
 	s := m.ui.settings
 	listH := max(4, innerH-6)

@@ -64,10 +64,7 @@ func TestLoadKeyOverridesUnknownKeyFallsBack(t *testing.T) {
 	}
 }
 
-// TestIsPlausibleKeyNameV2Forms pins the loader vocabulary after the v2
-// migration: canonical modifier combos and legacy aliases load, and so do
-// the ultraviolet function/keypad/media names (kitty terminals report
-// them; previously unloadable), while garbage still drops.
+// Pins the loader vocabulary: aliases and ultraviolet names load, garbage drops.
 func TestIsPlausibleKeyNameV2Forms(t *testing.T) {
 	for _, name := range []string{"shift+up", "alt+x", "ctrl+shift+enter", "escape", "return", " ", "space", "+", "f1", "f5", "f24", "f63", "mute", "kpenter", "begin", "ctrl+f5"} {
 		if !isPlausibleKeyName(name) {
@@ -153,10 +150,7 @@ func TestOverrideBindingHelpLabelFollowsRebind(t *testing.T) {
 	}
 }
 
-// TestApplyKeyOverridesCoversRegistry pins the registry-driven loop: every
-// registry action must round-trip through applyKeyOverrides, so a new
-// action with a missing setter fails this test instead of silently
-// staying unbindable.
+// Every registry action must round-trip, so a missing setter fails loudly instead of staying unbindable.
 func TestApplyKeyOverridesCoversRegistry(t *testing.T) {
 	for _, meta := range actionRegistry {
 		custom := []string{"f24"}
@@ -170,7 +164,6 @@ func TestApplyKeyOverridesCoversRegistry(t *testing.T) {
 			t.Fatalf("%s: got keys %v, want %v", meta.action, keys, want)
 		}
 	}
-	// Unknown actions stay ignored.
 	before := newKeys()
 	after := applyKeyOverrides(before, map[string][]string{"nope": {"x"}})
 	for _, meta := range actionRegistry {

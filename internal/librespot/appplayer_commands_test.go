@@ -11,8 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// A cluster push with a cluster but no player state must be evaluated
-// nil-safely: an active device being taken over can carry one.
+// A cluster push without player state must evaluate nil-safely.
 func TestHandleDealerMessageClusterWithoutPlayerState(t *testing.T) {
 	p, _ := newSkipTestPlayer(t, newPipeBackedPlayer(t), []string{"spotify:track:0000000000000000000000"})
 	payload, err := proto.Marshal(&connectpb.ClusterUpdate{
@@ -30,12 +29,10 @@ func TestHandleDealerMessageClusterWithoutPlayerState(t *testing.T) {
 	}
 }
 
-// A transfer without a current session context is rejected before any state
-// is touched.
+// A transfer without session context is rejected before touching state.
 func TestHandlePlayerCommandTransferWithoutSession(t *testing.T) {
 	p, _ := newSkipTestPlayer(t, newPipeBackedPlayer(t), []string{"spotify:track:0000000000000000000000"})
-	// An empty TransferState marshals to zero bytes and would take the
-	// no-data early return; options give the payload content.
+	// Empty TransferState marshals to zero bytes (no-data return); options add content.
 	payload, err := proto.Marshal(&connectpb.TransferState{
 		Options: &connectpb.ContextPlayerOptions{},
 	})
@@ -51,8 +48,7 @@ func TestHandlePlayerCommandTransferWithoutSession(t *testing.T) {
 	}
 }
 
-// A transfer whose playback block is missing must fail cleanly instead of
-// dereferencing it.
+// A transfer without a playback block must fail cleanly, not deref.
 func TestHandlePlayerCommandTransferWithoutPlayback(t *testing.T) {
 	p, _ := newSkipTestPlayer(t, newPipeBackedPlayer(t), []string{"spotify:track:0000000000000000000000"})
 	payload, err := proto.Marshal(&connectpb.TransferState{
@@ -72,8 +68,7 @@ func TestHandlePlayerCommandTransferWithoutPlayback(t *testing.T) {
 	}
 }
 
-// A set_options carrying nothing but modes must merge them into the player
-// options and push the state announcing the change.
+// A modes-only set_options must merge into player options and push state.
 func TestSetOptionsMergesModes(t *testing.T) {
 	p, updates := newSkipTestPlayer(t, newPipeBackedPlayer(t), []string{"spotify:track:0000000000000000000000"})
 	var req dealer.RequestPayload

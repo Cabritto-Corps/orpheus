@@ -37,9 +37,8 @@ func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUp
 	if includeQueue {
 		out.QueueIncluded = true
 		if p.state.tracks != nil {
-			// Loaded-only read: this runs on the Run goroutine where a page
-			// fetch would stall the select loop (B3). The queue top-up timer
-			// extends the loaded pages off the emit path.
+			// Loaded-only read: a page fetch would stall the Run select loop;
+			// the top-up timer extends loaded pages off the emit path.
 			upcoming := p.state.tracks.UpcomingTracksLoaded(queueOverrideMaxTracks)
 			out.Queue = providedTracksToQueueEntries(p, upcoming)
 			out.QueueHasMore = len(upcoming) >= queueOverrideMaxTracks
@@ -84,8 +83,7 @@ func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUp
 	if out.DurationMS <= 0 && p.state.player.Duration > 0 {
 		out.DurationMS = int(p.state.player.Duration)
 	}
-	// Position is derived from PositionAsOfTimestamp + elapsed; a stale
-	// transfer can push the rebase below zero, which the bar must never see.
+	// A stale transfer can push the derived position below zero; clamp it.
 	if out.ProgressMS < 0 {
 		out.ProgressMS = 0
 	}

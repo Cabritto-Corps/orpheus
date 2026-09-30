@@ -31,28 +31,19 @@ const (
 	volumeUpdateDebounce = 100 * time.Millisecond
 	connectStateDebounce = 75 * time.Millisecond
 
-	// queueTopUpDelay keeps the bounded extending fetch off the same Run
-	// iteration as the dealer reply that triggered the emit.
+	// queueTopUpDelay keeps the extending fetch off the dealer-reply Run iteration.
 	queueTopUpDelay = 250 * time.Millisecond
 
-	// endGuardMaxFailures bounds consecutive output-failure recoveries and
-	// the end-of-track guard's retry loop before the player gives up and
-	// surfaces the state instead of retrying forever.
 	endGuardMaxFailures = 3
 
-	// stateReconcileInterval is the push-mode self-heal period.
 	stateReconcileInterval = 30 * time.Second
 
-	// deadTrackMemoryCap bounds the session memory of permanently
-	// unplayable track URIs. A context that accumulates more dead tracks
-	// than this is already pathological; evicting oldest-first keeps the
-	// memory tiny while the common case (a handful of regional blocks)
-	// never evicts.
+	// deadTrackMemoryCap bounds session memory of permanently unplayable URIs;
+	// oldest-first eviction keeps it tiny.
 	deadTrackMemoryCap = 128
 )
 
-// sessionAPI is the slice of *session.Session the player relies on. It exists
-// so the control paths can be exercised in tests without a live Spotify session.
+// sessionAPI is the slice of *session.Session used so tests run without a live session.
 type sessionAPI interface {
 	Events() player.EventManager
 	Spclient() *spclient.Spclient
@@ -111,19 +102,12 @@ type AppPlayer struct {
 
 	stopRecoveryURI      string
 	stopRecoveryFailures int
-	// deadTracks remembers track URIs that failed with a typed permanent
-	// media error (restricted / no supported format) so a later revisit
-	// in the same context skips them instantly instead of burning another
-	// full load and skip attempt. Transient failures are never recorded:
-	// only errors the backend will fail the same way every time. Cleared
-	// on every context load; evicted oldest-first at deadTrackMemoryCap.
+	// deadTracks skips revisits of typed-permanent media failures (never transient); cleared per context load.
 	deadTracks     map[string]struct{}
 	deadTrackOrder []string
-	// outputRecreateOnPlay marks a dead output device: the last stop closed
-	// it, so the next play must rebuild via loadCurrentTrack instead of a
-	// plain fork Play (which answers success with no output). Cleared on
-	// any committed load; while set, the reconcile ticker skips its state
-	// re-push so it cannot wipe the terminal error without recovering.
+	// outputRecreateOnPlay marks a dead output: next play rebuilds via loadCurrentTrack
+	// (plain fork Play answers success with no output); while set the reconcile
+	// ticker skips re-push so it cannot wipe the terminal error.
 	outputRecreateOnPlay bool
 }
 
@@ -210,9 +194,7 @@ func (p *AppPlayer) setProdInfo(prod *ap.ProductInfo) {
 	p.prodInfo = prod
 }
 
-// prodInfoSnapshot returns the current catalog pointer. ProductInfo is
-// replaced wholesale on update and never mutated in place, so callers may
-// keep dereferencing a snapshot after the lock is released.
+// ProductInfo is replaced wholesale, never mutated, so snapshots stay valid after unlock.
 func (p *AppPlayer) prodInfoSnapshot() *ap.ProductInfo {
 	p.prodInfoMu.RLock()
 	defer p.prodInfoMu.RUnlock()
@@ -232,9 +214,8 @@ func (p *AppPlayer) handleAccesspointPacket(pktType ap.PacketType, payload []byt
 		p.setProdInfo(&prod)
 		return nil
 	case ap.PacketTypeCountryCode:
-		// The fork's player reads the country code from its own goroutines;
-		// route the update through its atomic setter instead of writing the
-		// shared pointer here.
+		// The fork's player reads the country code from its own goroutines: route
+		// through its atomic setter, not the shared pointer.
 		p.player.SetCountryCode(string(payload))
 		return nil
 	default:
@@ -343,8 +324,7 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		maps.Copy(p.state.player.ContextMetadata, transferState.CurrentSession.Context.Metadata)
 		maps.Copy(p.state.player.ContextMetadata, ctxTracks.Metadata())
 		contextSpotType := golibrespot.InferSpotifyIdTypeFromContextUri(p.state.player.ContextUri)
-		// A transfer without a named track starts the context from the top
-		// (ContextTrackToProvidedTrack panics on unnamed entries).
+		// Unnamed transfer tracks start from the top (ContextTrackToProvidedTrack panics otherwise).
 		if current := transferState.Playback.CurrentTrack; current != nil && (len(current.Uri) > 0 || len(current.Gid) > 0) {
 			currentTrack := golibrespot.ContextTrackToProvidedTrack(contextSpotType, current)
 			if err := ctxTracks.TrySeek(ctx, tracks.ProvidedTrackComparator(contextSpotType, currentTrack)); err != nil {
@@ -549,16 +529,13 @@ func (p *AppPlayer) Close() {
 		case p.stop <- struct{}{}:
 		default:
 		}
-		// Only wait when Run was actually started: Close may run on a player
-		// that never entered Run, and runDone would never close there.
+		// Wait only if Run started; runDone never closes otherwise.
 		if p.runStarted.Load() {
 			<-p.runDone
 		}
 
-		// The player owns the output goroutine, so it must stop before the
-		// cgo decoders are freed; the reverse order leaves a window where the
-		// output goroutine reads from a closed stream (same invariant noted
-		// on loadCurrentTrack).
+		// Stop the player (output goroutine) before freeing cgo decoders; reversed,
+		// the output goroutine reads a closed stream.
 		p.player.Close()
 		closeStream(p.primaryStream)
 		closeStream(p.secondaryStream)
@@ -573,10 +550,8 @@ func (p *AppPlayer) Close() {
 func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 	p.setRunContext(ctx)
 	p.runStarted.Store(true)
-	// The worker gets its own cancellable context so its exit never depends
-	// on the caller's ctx. Defers run LIFO: cancel first, then wait for the
-	// worker, then close runDone — every Run exit path, p.stop included,
-	// unblocks Close().
+	// The worker's own context decouples its exit from the caller's; LIFO defers
+	// unblock Close() on every Run exit path.
 	runCtx, runCancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -657,7 +632,6 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 		case res := <-p.prefetchDone:
 			p.handlePrefetchResult(res)
 		case volume := <-p.volumeUpdate:
-			// Coalesce bursts: only the most recent value matters.
 		drain:
 			for {
 				select {
@@ -678,13 +652,9 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 		case <-endTransitionGuardTicker.C:
 			p.maybeAdvanceOnTrackEndGuard()
 		case <-reconcileTicker.C:
-			// Push-mode backstop: a dropped playbackStateCh send would
-			// otherwise leave the TUI stale until the next event. Cheap:
-			// the light path reads only in-memory state, no network.
-			// Skipped while a terminal output error stands: a state
-			// re-push would clear the TUI's playback error without
-			// recovering anything, and the error is the state until
-			// the user retries.
+			// Push-mode backstop for dropped sends: the light path is in-memory
+			// only. Skipped while a terminal output error stands, so a re-push
+			// cannot clear the error without recovering.
 			if p.state != nil && p.state.player != nil && p.state.player.ContextUri != "" && !p.outputRecreateOnPlay {
 				p.emitPlaybackStateLight()
 			}

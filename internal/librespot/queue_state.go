@@ -10,8 +10,7 @@ import (
 )
 
 func queueMetaImageURL(p *AppPlayer, coverFileId []byte) string {
-	// Snapshot under the lock: this runs on the metadata-resolution
-	// goroutine, while prodInfo is swapped on the Run goroutine.
+	// Snapshot under lock: metadata-resolution goroutine vs Run-goroutine swap.
 	prod := p.prodInfoSnapshot()
 	if prod == nil || len(coverFileId) == 0 {
 		return ""
