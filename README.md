@@ -34,18 +34,6 @@ Downloading by hand? Grab `orpheus-linux-amd64-<flavor>.tar.gz` from the [releas
 
 On Linux, missing ALSA/FLAC/Ogg/Vorbis libraries are detected with `ldd` and the installer prints the exact distro command (or runs it with explicit consent). macOS needs `brew install libogg libvorbis flac`. Then run `orpheus auth login` (requires Spotify Premium).
 
-### Build and run locally
-
-To work on the source instead of installing a release, install Go 1.26 or newer and the audio development libraries, then build from a clone:
-
-```sh
-git clone https://github.com/Cabritto-Corps/orpheus.git
-cd orpheus
-make build
-```
-
-Follow the [initial setup tutorial](tutorial.md) to create a Spotify app and set `SPOTIFY_CLIENT_ID` (Spotify Premium is required). Then run `./orpheus auth login` and `./orpheus`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the platform-specific build dependencies, tests, and pull request workflow.
-
 ### Notes
 
 **A terminal that supports kitty image protocol is needed to display non pixelated art (prints were taken in [ghostty](https://github.com/ghostty-org/ghostty))**
@@ -100,6 +88,18 @@ Follow the [initial setup tutorial](tutorial.md) to create a Spotify app and set
 | Config files | everything persists to plain files you can edit ([configuration](docs/config.md)) | — |
 
 Every keybind can be changed in settings (`o` → Keybinds).
+
+### Build and run locally
+
+To work on the source instead of installing a release, install Go 1.26 or newer and the audio development libraries, then build from a clone:
+
+```sh
+git clone https://github.com/Cabritto-Corps/orpheus.git
+cd orpheus
+make build
+```
+
+Follow the [initial setup tutorial](tutorial.md) to create a Spotify app and set `SPOTIFY_CLIENT_ID` (Spotify Premium is required). Then run `./orpheus auth login` and `./orpheus`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the platform-specific build dependencies, tests, and pull request workflow.
 
 ### Thanks
 
