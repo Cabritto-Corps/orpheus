@@ -272,7 +272,7 @@ func TestValidColorValue(t *testing.T) {
 // table: order, per-row behavior class, and that the row count the
 // cursor wraps over is the table itself.
 func TestThemeOptionsRowsDriveEditor(t *testing.T) {
-	wantLabels := []string{"Base palette", "Page tone", "Accent", "Backgrounds", "Border", "Now playing", "Play/pause", "Spinner", "Progress bar", "Titles bold", "Descriptions italic", "Cover frame", "Save to theme.json", "Reset to preset"}
+	wantLabels := []string{"Base palette", "Page tone", "Accent", "Backgrounds", "Border", "Queue cursor", "Play/pause", "Spinner", "Progress bar", "Titles bold", "Descriptions italic", "Cover frame", "Save to theme.json", "Reset to preset"}
 	if len(themeOptionsRowsList) != len(wantLabels) {
 		t.Fatalf("themeOptionsRowsList has %d rows, want %d", len(themeOptionsRowsList), len(wantLabels))
 	}
@@ -289,5 +289,30 @@ func TestThemeOptionsRowsDriveEditor(t *testing.T) {
 	}
 	if themeOptionsRowCount() != len(themeOptionsRowsList) {
 		t.Fatalf("row count = %d, table has %d", themeOptionsRowCount(), len(themeOptionsRowsList))
+	}
+}
+
+func TestThemeQueueCursorLegacyAlias(t *testing.T) {
+	// Old theme.json files name the cursor glyph now_playing; it must keep
+	// meaning, while queue_cursor wins when both keys are present.
+	write := func(content string) themeState {
+		path := filepath.Join(t.TempDir(), "theme.json")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, _ := LoadTheme("default", path)
+		return loaded
+	}
+	if got := write(`{"glyphs": {"now_playing": "play"}}`); got.glyphs.QueueCursor != "play" {
+		t.Fatalf("legacy now_playing must map onto the cursor, got %q", got.glyphs.QueueCursor)
+	}
+	if got := write(`{"glyphs": {"queue_cursor": "dot", "now_playing": "play"}}`); got.glyphs.QueueCursor != "dot" {
+		t.Fatalf("queue_cursor must win over the legacy key, got %q", got.glyphs.QueueCursor)
+	}
+	if got := write(`{"glyphs": {"queue_cursor": "play", "now_playing": "bogus"}}`); got.glyphs.QueueCursor != "play" {
+		t.Fatalf("invalid legacy value must not clobber queue_cursor, got %q", got.glyphs.QueueCursor)
+	}
+	if got := write(`{"glyphs": {"queue_cursor": "bogus"}}`); got.glyphs.QueueCursor != "arrow" {
+		t.Fatalf("invalid cursor value must keep the default, got %q", got.glyphs.QueueCursor)
 	}
 }

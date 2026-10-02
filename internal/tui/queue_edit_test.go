@@ -16,11 +16,11 @@ import (
 
 func newQueueKeyTestModel() model {
 	m := newModel(context.Background(), nil, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
-	m.transport.status = &spotify.PlaybackStatus{TrackID: "spotify:track:playing"}
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "spotify:track:playing", ContextURI: "spotify:playlist:testctx"}
 	m.transport.queue = []spotify.QueueItem{
-		{ID: "spotify:track:a", Name: "A"},
-		{ID: "spotify:track:b", Name: "B"},
-		{ID: "spotify:track:c", Name: "C"},
+		{ID: "spotify:track:a", Name: "A", Queued: true},
+		{ID: "spotify:track:b", Name: "B", Queued: true},
+		{ID: "spotify:track:c", Name: "C", Queued: true},
 	}
 	m.transport.stableQueueLen = len(m.transport.queue)
 	return m
@@ -28,8 +28,7 @@ func newQueueKeyTestModel() model {
 
 func TestQueueCursorMoves(t *testing.T) {
 	m := newQueueKeyTestModel()
-	// visibleQueue hides the playing head when it matches the status track;
-	// here the head does not match, so all 3 entries are visible.
+	// The pushed queue is already the visible view.
 	next, _ := m.handlePlaybackKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	m = next.(model)
 	if m.transport.queueCursor != 1 {
@@ -144,5 +143,129 @@ func TestFilterFollowsReboundKey(t *testing.T) {
 	m2 = next.(model)
 	if m2.browse.playlistList.FilterState() == list.Filtering {
 		t.Fatal("unbound key must not start filtering with default bindings")
+	}
+}
+
+func queueRegionTestModel() model {
+	m := newQueueKeyTestModel()
+	m.transport.queue = []spotify.QueueItem{
+		{ID: "spotify:track:q1", Name: "Q1", Queued: true},
+		{ID: "spotify:track:q2", Name: "Q2", Queued: true},
+		{ID: "spotify:track:c1", Name: "C1"},
+		{ID: "spotify:track:c2", Name: "C2"},
+	}
+	return m
+}
+
+func drainCmdCh(ch chan librespot.TUICommand) *librespot.TUICommand {
+	select {
+	case cmd := <-ch:
+		return &cmd
+	default:
+		return nil
+	}
+}
+
+func TestQueueRemoveContextRowHints(t *testing.T) {
+	m := queueRegionTestModel()
+	cmdCh := make(chan librespot.TUICommand, 2)
+	m.tuiCmdCh = cmdCh
+	m.transport.queueCursor = 2
+
+	next, _ := m.handlePlaybackKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	m = next.(model)
+	if m.transport.playbackErr == nil {
+		t.Fatal("expected a hint error removing a context row")
+	}
+	if cmd := drainCmdCh(cmdCh); cmd != nil {
+		t.Fatalf("context-row remove must not send, got %+v", cmd)
+	}
+}
+
+func TestQueueReorderIntoContextRowHints(t *testing.T) {
+	m := queueRegionTestModel()
+	cmdCh := make(chan librespot.TUICommand, 2)
+	m.tuiCmdCh = cmdCh
+	m.transport.queueCursor = 1
+
+	next, _ := m.handlePlaybackKey(tea.KeyPressMsg{Code: ']', Text: "]"})
+	m = next.(model)
+	if m.transport.playbackErr == nil {
+		t.Fatal("expected a hint error moving a queued row into context rows")
+	}
+	if cmd := drainCmdCh(cmdCh); cmd != nil {
+		t.Fatalf("cross-region reorder must not send, got %+v", cmd)
+	}
+}
+
+func TestQueueReorderManualRowsStillSend(t *testing.T) {
+	m := queueRegionTestModel()
+	cmdCh := make(chan librespot.TUICommand, 2)
+	m.tuiCmdCh = cmdCh
+	m.transport.queueCursor = 0
+
+	next, _ := m.handlePlaybackKey(tea.KeyPressMsg{Code: ']', Text: "]"})
+	m = next.(model)
+	if m.transport.playbackErr != nil {
+		t.Fatalf("manual reorder must not hint, got %v", m.transport.playbackErr)
+	}
+	cmd := drainCmdCh(cmdCh)
+	if cmd == nil || cmd.Kind != librespot.TUICommandQueueReorder || cmd.QueueIndex != 0 || cmd.QueueTargetIndex != 1 {
+		t.Fatalf("expected reorder 0->1, got %+v", cmd)
+	}
+}
+
+func TestQueueJumpContextRowPlaysFromTrack(t *testing.T) {
+	m := queueRegionTestModel()
+	cmdCh := make(chan librespot.TUICommand, 2)
+	m.tuiCmdCh = cmdCh
+	m.transport.queueCursor = 2
+
+	next, _ := m.handlePlaybackKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(model)
+	cmd := drainCmdCh(cmdCh)
+	if cmd == nil || cmd.Kind != librespot.TUICommandPlayContextFromTrack {
+		t.Fatalf("context-row enter must play from track, got %+v", cmd)
+	}
+	if cmd.URI != "spotify:playlist:testctx" || cmd.TrackID != "spotify:track:c1" {
+		t.Fatalf("wrong play-from-track target: %+v", cmd)
+	}
+	if m.transport.pendingContextFrom != "spotify:track:playing" {
+		t.Fatalf("pendingContextFrom = %q, want current track", m.transport.pendingContextFrom)
+	}
+}
+
+func TestQueueJumpManualRowJumps(t *testing.T) {
+	m := queueRegionTestModel()
+	cmdCh := make(chan librespot.TUICommand, 2)
+	m.tuiCmdCh = cmdCh
+	m.transport.queueCursor = 0
+
+	next, _ := m.handlePlaybackKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(model)
+	cmd := drainCmdCh(cmdCh)
+	if cmd == nil || cmd.Kind != librespot.TUICommandQueueJump || cmd.QueueIndex != 0 {
+		t.Fatalf("queued-row enter must jump, got %+v", cmd)
+	}
+}
+
+func TestQueueHeadMatchingCurrentStaysVisible(t *testing.T) {
+	// The old ID-based head strip hid this row and shifted every command.
+	m := newQueueKeyTestModel()
+	m.transport.queue = []spotify.QueueItem{
+		{ID: "spotify:track:playing", Name: "Same", Queued: true},
+		{ID: "spotify:track:other", Name: "Other", Queued: true},
+	}
+	if got := len(m.visibleQueue()); got != 2 {
+		t.Fatalf("visible rows = %d, want 2 (no head strip)", got)
+	}
+	cmdCh := make(chan librespot.TUICommand, 2)
+	m.tuiCmdCh = cmdCh
+	m.transport.queueCursor = 0
+	next, _ := m.handlePlaybackKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	m = next.(model)
+	cmd := drainCmdCh(cmdCh)
+	if cmd == nil || cmd.Kind != librespot.TUICommandQueueRemove || cmd.QueueIndex != 0 {
+		t.Fatalf("duplicate head remove must address 0, got %+v", cmd)
 	}
 }

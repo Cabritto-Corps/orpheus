@@ -80,10 +80,10 @@ var themeOptionsRowsList = []themeOptionRow{
 		func(s *settingsModel, pending *themeState, step int) {
 			pending.glyphs.Border = cycleValue(glyphBorderChoices, pending.glyphs.Border, step)
 		}},
-	{optionCycle, "Now playing",
-		func(s *settingsModel) string { return s.themeStatePending.glyphs.NowPlaying },
+	{optionCycle, "Queue cursor",
+		func(s *settingsModel) string { return s.themeStatePending.glyphs.QueueCursor },
 		func(s *settingsModel, pending *themeState, step int) {
-			pending.glyphs.NowPlaying = cycleValue(glyphNowPlayingChoices, pending.glyphs.NowPlaying, step)
+			pending.glyphs.QueueCursor = cycleValue(glyphQueueCursorChoices, pending.glyphs.QueueCursor, step)
 		}},
 	{optionCycle, "Play/pause",
 		func(s *settingsModel) string { return s.themeStatePending.glyphs.PlayPause },

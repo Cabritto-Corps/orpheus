@@ -60,6 +60,8 @@ type Service struct {
 	currentUserIDMu  sync.RWMutex
 	currentUserID    string
 	currentUserIDSet bool
+	albumBatchMu     sync.Mutex
+	albumBatch       *albumImageBatcher
 }
 
 type PlaybackStatus struct {
@@ -77,6 +79,7 @@ type PlaybackStatus struct {
 	ShuffleState  bool
 	RepeatContext bool
 	RepeatTrack   bool
+	ContextURI    string
 }
 
 type QueueItem struct {
@@ -85,6 +88,8 @@ type QueueItem struct {
 	Artist     string
 	DurationMS int
 	ImageURL   string
+	// Queued marks manual-queue entries; unset means a context track.
+	Queued bool
 }
 
 type PlaylistSummary struct {

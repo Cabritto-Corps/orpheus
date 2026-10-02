@@ -20,7 +20,6 @@ import (
 	"orpheus/internal/spotify"
 	"orpheus/internal/tui"
 
-	"github.com/elxgy/go-librespot/sessionconfig"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/oauth2"
 )
@@ -332,28 +331,6 @@ func runLibrespotTUI() (err error) {
 	playbackStateCh := make(chan *librespot.PlaybackStateUpdate, 32)
 	tuiCmdCh := make(chan librespot.TUICommand, 8)
 
-	sess, appState, err := sessionconfig.NewSessionFromConfigDir(ctx, logger, sessionconfig.Options{
-		ConfigDir:    configDir,
-		CallbackPort: 8080,
-		DeviceType:   "computer",
-	})
-	if err != nil {
-		return fmt.Errorf("could not sign in to Spotify: %w\ncheck your network or a Spotify outage (status.spotify.com)", err)
-	}
-	defer sess.Close()
-
-	runtime, err := librespot.NewRuntime(librespotCfg, appState, logger, playbackStateCh)
-	if err != nil {
-		return err
-	}
-
-	appPlayer, err := librespot.NewAppPlayer(ctx, runtime, sess)
-	if err != nil {
-		return err
-	}
-	defer appPlayer.Close()
-	go appPlayer.Run(ctx, tuiCmdCh)
-
 	tuiCfg := config.Config{
 		Theme:             cfg.Theme,
 		SettingsPath:      cfg.SettingsPath,
@@ -397,9 +374,26 @@ func runLibrespotTUI() (err error) {
 		})
 	}
 	if catalog == nil {
-		catalog = librespot.NewPlaylistCatalog(sess)
+		slog.Info("waiting for the player session to supply the browsing catalog")
 	}
-	err = tui.Run(ctx, catalog, tuiCfg, tuiCmdCh, playbackStateCh)
+	handle, err := tui.Start(ctx, catalog, tuiCfg, tuiCmdCh, playbackStateCh)
+	if err != nil {
+		return err
+	}
+
+	supervisor := &backendSupervisor{}
+	sessionCtx, stopSessionSetup := context.WithCancel(ctx)
+	defer stopSessionSetup()
+	startPlayerSession(sessionCtx, logger, configDir, connectPlayerSession,
+		func(sessionCtx context.Context, sess playerSession) (playerBackend, error) {
+			return attachPlayerBackend(sessionCtx, logger, librespotCfg, playbackStateCh, tuiCmdCh, sess, catalog)
+		},
+		supervisor.register,
+		handle.Program.Send,
+	)
+	err = handle.Wait()
+	supervisor.shutdown()
+	stopSessionSetup()
 	cancel()
 	if err != nil {
 		return err

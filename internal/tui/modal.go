@@ -111,8 +111,9 @@ func (s *themeStyles) modalFrame(termW, termH int, title, hint, body string, wan
 func (s *themeStyles) modalRow(label, value string, selected bool, width int) string {
 	inner := max(12, width-modalContentInset)
 
+	// Mono terminals lose the color-only highlight, so keep the marker.
 	marker := " "
-	if selected && width < 40 {
+	if selected && (width < 40 || s.colorProfile <= colorprofile.Ascii) {
 		marker = ">"
 	}
 	var row string

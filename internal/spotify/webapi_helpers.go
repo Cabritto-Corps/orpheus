@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	spotifyapi "github.com/zmb3/spotify/v2"
 )
 
 type PlaylistTotalWire struct {
@@ -29,7 +31,58 @@ type PlaylistOwnerWire struct {
 }
 
 type PlaylistImage struct {
-	URL string `json:"url"`
+	URL    string `json:"url"`
+	Height int    `json:"height"`
+	Width  int    `json:"width"`
+}
+
+const displayImageMinPixels = 250
+
+func imagePixelSize(width, height int) int {
+	if width > 0 {
+		return width
+	}
+	return height
+}
+
+func sdkImagesToPlaylistImages(images []spotifyapi.Image) []PlaylistImage {
+	converted := make([]PlaylistImage, 0, len(images))
+	for _, img := range images {
+		converted = append(converted, PlaylistImage{URL: img.URL, Height: int(img.Height), Width: int(img.Width)})
+	}
+	return converted
+}
+
+func pickDisplayImageURL(images []PlaylistImage) string {
+	best := ""
+	bestSize := 0
+	fallback := ""
+	fallbackSize := 0
+	for _, img := range images {
+		url := strings.TrimSpace(img.URL)
+		if url == "" {
+			continue
+		}
+		size := imagePixelSize(img.Width, img.Height)
+		if size <= 0 {
+			if fallback == "" {
+				fallback = url
+			}
+			continue
+		}
+		if size >= displayImageMinPixels && (best == "" || size < bestSize) {
+			best = url
+			bestSize = size
+		}
+		if size > fallbackSize {
+			fallback = url
+			fallbackSize = size
+		}
+	}
+	if best != "" {
+		return best
+	}
+	return fallback
 }
 
 type PlaylistItemWire struct {

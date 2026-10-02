@@ -61,7 +61,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.normalizeLibraryPagination()
 			m.ui.coverRefreshTick = 0
-			return m, m.loadVisiblePlaylistCoversCmd()
+			return m, tea.Batch(m.loadVisiblePlaylistCoversCmd(), m.kittyOverlayCmd())
 		}
 	}
 
@@ -89,7 +89,7 @@ func (m model) handlePlaylistKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.browse.playlistList, cmd = m.browse.playlistList.Update(msg)
 		nextURL := selectedImageURLFromList(m.browse.playlistList)
-		cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
+		cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd(), m.kittyOverlayCmd()}
 		if nextURL != "" && nextURL != prevURL {
 			cmds = append(cmds, m.loadImageCmd(nextURL, false))
 		}
@@ -121,7 +121,7 @@ func (m model) handlePlaylistKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.browse.playlistList, cmd = m.browse.playlistList.Update(msg)
 	nextURL := selectedImageURLFromList(m.browse.playlistList)
-	cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
+	cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd(), m.kittyOverlayCmd()}
 	if nextURL != "" && nextURL != prevURL {
 		cmds = append(cmds, m.loadImageCmd(nextURL, false))
 	}
@@ -135,7 +135,7 @@ func (m model) handleAlbumKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.browse.albumList, cmd = m.browse.albumList.Update(msg)
 		nextURL := selectedImageURLFromList(m.browse.albumList)
-		cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
+		cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd(), m.kittyOverlayCmd()}
 		if nextURL != "" && nextURL != prevURL {
 			cmds = append(cmds, m.loadImageCmd(nextURL, false))
 		}
@@ -166,7 +166,7 @@ func (m model) handleAlbumKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.browse.albumList, cmd = m.browse.albumList.Update(msg)
 	nextURL := selectedImageURLFromList(m.browse.albumList)
-	cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd()}
+	cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd(), m.kittyOverlayCmd()}
 	if nextURL != "" && nextURL != prevURL {
 		cmds = append(cmds, m.loadImageCmd(nextURL, false))
 	}
@@ -188,7 +188,7 @@ func (m model) routeModalKey(msg tea.KeyPressMsg, kind modalKind) (tea.Model, te
 		case keyMatches(msg, k.QueueDown):
 			m = m.scrollHelp(3)
 		}
-		return m, nil
+		return m, m.kittyOverlayCmd()
 	}
 	if kind == modalTrackPopup {
 		return m.handleTrackPopupKey(msg)
@@ -230,16 +230,38 @@ func (m *model) handleQueueKey(msg tea.KeyPressMsg) tea.Cmd {
 		if m.transport.transition.Pending() {
 			return nil
 		}
+		if q[cursor].Queued {
+			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueJump, QueueIndex: cursor})
+		}
+		// Context rows play from the current context.
+		if uri := m.currentContextURI(); uri != "" {
+			if m.transport.status != nil {
+				m.transport.pendingContextFrom = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
+			}
+			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandPlayContextFromTrack, URI: uri, TrackID: q[cursor].ID})
+		}
 		return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueJump, QueueIndex: cursor})
 	case keyMatches(msg, k.QueueRemove):
+		if !q[cursor].Queued {
+			m.transport.playbackErr = errors.New("only queued tracks can be removed")
+			return nil
+		}
 		return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueRemove, QueueIndex: cursor})
 	case keyMatches(msg, k.QueueMoveUp):
 		if cursor > 0 {
+			if !q[cursor].Queued || !q[cursor-1].Queued {
+				m.transport.playbackErr = errors.New("only queued tracks can be reordered")
+				return nil
+			}
 			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueReorder, QueueIndex: cursor, QueueTargetIndex: cursor - 1})
 		}
 		return nil
 	case keyMatches(msg, k.QueueMoveDown):
 		if cursor < len(q)-1 {
+			if !q[cursor].Queued || !q[cursor+1].Queued {
+				m.transport.playbackErr = errors.New("only queued tracks can be reordered")
+				return nil
+			}
 			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueReorder, QueueIndex: cursor, QueueTargetIndex: cursor + 1})
 		}
 		return nil
@@ -362,22 +384,15 @@ func (m model) handlePlaybackKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, m.pumpInputExecutor()
 }
 
-// setNowPlaying shares the context URI through a pointer so list copies see track changes.
-func (m *model) setNowPlaying(uri string) {
-	if m.nowPlaying != nil {
-		*m.nowPlaying = uri
-	}
-}
-
 type trackPopupItemsMsg struct {
 	token int
 	items []spotify.QueueItem
 }
 
 // newTrackPopupList uses shared chrome with readable status and pagination dots on dark themes.
-func newTrackPopupList(s *themeStyles, nowPlaying *string, termW, termH int) list.Model {
+func newTrackPopupList(s *themeStyles, termW, termH int) list.Model {
 	_, listW, listH := popupModalSize(termW, termH)
-	popup := list.New(nil, newTrackPopupDelegate(s, nowPlaying), listW, listH)
+	popup := list.New(nil, newTrackPopupDelegate(s), listW, listH)
 	popup.SetShowTitle(false)
 	popup.SetShowStatusBar(true)
 	popup.SetFilteringEnabled(true)
@@ -403,7 +418,7 @@ func (m model) openTrackPopup(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.ui.trackPopupName = sel.summary.Name
 	m.ui.trackPopupItems = nil
 
-	popup := newTrackPopupList(m.styles, m.nowPlaying, m.ui.width, m.ui.height)
+	popup := newTrackPopupList(m.styles, m.ui.width, m.ui.height)
 	m.ui.trackPopupList = popup
 	m.ui.trackPopupWidth = m.ui.trackPopupList.Width() - 4
 
@@ -438,7 +453,7 @@ func (m model) handleTrackPopupKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case keyMatches(msg, k.CloseModal):
 		m.ui.trackPopupOpen = false
-		return m, nil
+		return m, m.kittyOverlayCmd()
 	case keyMatches(msg, k.Quit):
 		return m, nil
 	case keyMatches(msg, k.Select):
@@ -484,7 +499,6 @@ func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 	}
 
 	if m.tuiCmdCh != nil {
-		m.setNowPlaying(m.ui.trackPopupURI)
 		cmd := librespot.TUICommand{
 			Kind:    librespot.TUICommandPlayContextFromTrack,
 			URI:     m.ui.trackPopupURI,
@@ -514,7 +528,6 @@ func (m model) selectAndPlayPlaylist(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.transport.interpolationProgressMS = 0
 	if m.tuiCmdCh != nil {
 		m.beginTransportTransition()
-		m.setNowPlaying(sel.summary.URI)
 		cmds := []tea.Cmd{
 			m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandPlayContext, URI: sel.summary.URI}),
 			m.loadImageCmd(sel.summary.ImageURL, true),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"image/color"
 	"strings"
 	"testing"
 	"time"
@@ -59,6 +60,126 @@ func TestHandleAlbumKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
 	if !hasInflightURL(got.ui.imgs, "u2") {
 		t.Fatalf("expected immediate image load for new album selection")
 	}
+}
+
+// A selection change must emit the kitty swap on the keypress itself.
+// A fully prefetched cover produces no load-completion event at all
+// (beginLoad short-circuits the cmd), so emission driven by
+// imageLoadedMsg or the periodic tick lagged the cursor by up to a
+// second when idle — prefetch made the swap slower, not faster.
+func TestNavKeyEmitsKittySwapForPrefetchedCover(t *testing.T) {
+	t.Setenv("TMUX", "")
+	flat := func(c color.RGBA) image.Image {
+		img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+		for y := range 8 {
+			for x := range 8 {
+				img.SetRGBA(x, y, c)
+			}
+		}
+		return img
+	}
+	for _, tc := range []struct {
+		name string
+		tab  tab
+	}{
+		{"playlists", tabPlaylists},
+		{"albums", tabAlbums},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := framedTestModel()
+			m.ui.width = 100
+			m.ui.height = 40
+			m.ui.activeTab = tc.tab
+			m.ui.imgs.protocol = imageProtocolKitty
+			m.ui.imgs.setImage("u1", flat(color.RGBA{R: 255, A: 255}), 40, 20)
+			m.ui.imgs.setImage("u2", flat(color.RGBA{B: 255, A: 255}), 40, 20)
+			markerU1 := m.ui.imgs.encodedFor("u1")
+			markerU2 := m.ui.imgs.encodedFor("u2")
+			if markerU1 == "" || markerU2 == "" || markerU1 == markerU2 {
+				t.Fatalf("need two distinct prefetched payloads, got %q / %q", markerU1, markerU2)
+			}
+
+			newItem := func(id, name, url string) playlistItem {
+				it := playlistItem{summary: spotify.PlaylistSummary{ID: id, Name: name, ImageURL: url}}
+				if tc.tab == tabAlbums {
+					it.summary.Kind = spotify.ContextKindAlbum
+				}
+				return it
+			}
+			items := []list.Item{newItem("1", "one", "u1"), newItem("2", "two", "u2")}
+			if tc.tab == tabAlbums {
+				m.browse.albumList.SetItems(items)
+				m.browse.albumList.Select(0)
+			} else {
+				m.browse.playlistList.SetItems(items)
+				m.browse.playlistList.Select(0)
+			}
+
+			// Show the first cover so the keypress swaps rather than
+			// initialises the overlay slot.
+			primed := m.kittyOverlayCmd()
+			if primed == nil {
+				t.Fatal("expected an initial cover emission")
+			}
+			if raw, ok := primed().(tea.RawMsg); !ok || !strings.Contains(fmt.Sprint(raw.Msg), markerU1) {
+				t.Fatalf("expected the primed emission to carry u1, got %v", primed())
+			}
+
+			var next tea.Model
+			var cmd tea.Cmd
+			if tc.tab == tabAlbums {
+				next, cmd = m.handleAlbumKey(tea.KeyPressMsg{Code: tea.KeyDown})
+			} else {
+				next, cmd = m.handlePlaylistKey(tea.KeyPressMsg{Code: tea.KeyDown})
+			}
+			got := next.(model)
+
+			selURL := ""
+			if tc.tab == tabAlbums {
+				if sel, ok := got.selectedAlbum(); ok {
+					selURL = sel.summary.ImageURL
+				}
+			} else if sel, ok := got.selectedPlaylist(); ok {
+				selURL = sel.summary.ImageURL
+			}
+			if selURL != "u2" {
+				t.Fatalf("expected the cursor on u2, got %q", selURL)
+			}
+			// The swap cannot ride a load completion: prefetch already
+			// holds the cover, so loadImageCmd short-circuits to nil.
+			if got.loadImageCmd("u2", false) != nil {
+				t.Fatal("precondition broken: cover is not fully prefetched")
+			}
+			if !batchEmitsRaw(cmd, "a=T", markerU2) {
+				t.Fatal("selection change carried no kitty transmit for the new cover; the swap waits for the tick")
+			}
+		})
+	}
+}
+
+// batchEmitsRaw unwraps tea.BatchMsg layers and reports whether any
+// command delivers a tea.RawMsg whose bytes carry every want substring.
+func batchEmitsRaw(cmd tea.Cmd, wants ...string) bool {
+	if cmd == nil {
+		return false
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		for _, c := range msg {
+			if batchEmitsRaw(c, wants...) {
+				return true
+			}
+		}
+	case tea.RawMsg:
+		s := fmt.Sprint(msg.Msg)
+		for _, w := range wants {
+			if !strings.Contains(s, w) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func TestTabSwitchClampsTargetPaginationAndQueuesCoverLoad(t *testing.T) {
@@ -119,6 +240,59 @@ func TestImageCacheEvictsOldestImageAndItsRenderedCovers(t *testing.T) {
 	cache.mu.RUnlock()
 	if hasCover {
 		t.Fatalf("expected rendered covers for evicted image to be removed")
+	}
+}
+
+func TestCachedImageDownscaledToBound(t *testing.T) {
+	cache := newImgCache()
+	src := image.NewRGBA(image.Rect(0, 0, 800, 600))
+	cache.setImage("big", src, 0, 0)
+	got, ok := cache.getImage("big")
+	if !ok {
+		t.Fatal("expected cached image")
+	}
+	if d := got.Bounds().Dx(); d != maxCachedImageLongestSide {
+		t.Fatalf("expected cached width %d, got %d", maxCachedImageLongestSide, d)
+	}
+	if h := got.Bounds().Dy(); h != 600*maxCachedImageLongestSide/800 {
+		t.Fatalf("expected proportional height, got %d", h)
+	}
+}
+
+func TestCachedSmallImageUntouched(t *testing.T) {
+	cache := newImgCache()
+	src := image.NewRGBA(image.Rect(0, 0, 100, 80))
+	cache.setImage("small", src, 0, 0)
+	got, ok := cache.getImage("small")
+	if !ok {
+		t.Fatal("expected cached image")
+	}
+	if d, h := got.Bounds().Dx(), got.Bounds().Dy(); d != 100 || h != 80 {
+		t.Fatalf("expected 100x80 untouched, got %dx%d", d, h)
+	}
+}
+
+func TestCachedImageRendersDeterministicallyAtUsedSizes(t *testing.T) {
+	cache := newImgCache()
+	src := image.NewRGBA(image.Rect(0, 0, 640, 640))
+	for y := range 640 {
+		for x := range 640 {
+			src.Set(x, y, color.NRGBA{R: uint8(x % 256), G: uint8(y % 256), B: 128, A: 255})
+		}
+	}
+	cache.setImage("art", src, 0, 0)
+	for _, size := range [][2]int{{30, 20}, {40, 30}, {12, 8}} {
+		first, ok := cache.cover("art", size[0], size[1], colorprofile.TrueColor)
+		if !ok || first == "" {
+			t.Fatalf("expected render at %dx%d", size[0], size[1])
+		}
+		second, ok := cache.cover("art", size[0], size[1], colorprofile.TrueColor)
+		if !ok || second != first {
+			t.Fatalf("expected deterministic render at %dx%d", size[0], size[1])
+		}
+	}
+	if enc := cache.encodedFor("art"); enc == "" {
+		t.Skip("kitty encoding asserted only under kitty protocol")
 	}
 }
 
@@ -757,7 +931,7 @@ func TestKittyOverlayRestoresAfterModalCloses(t *testing.T) {
 // scanned for the ID.
 func transmitIDOf(t *testing.T, emission string) string {
 	t.Helper()
-	for _, seg := range strings.Split(emission, "\x1b_G") {
+	for seg := range strings.SplitSeq(emission, "\x1b_G") {
 		ctrl := seg
 		if i := strings.Index(ctrl, ";"); i >= 0 {
 			ctrl = ctrl[:i]
@@ -940,7 +1114,7 @@ func TestPixelatedStartupEmitsNoGraphicsBytes(t *testing.T) {
 	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
 	m.ui.imgs.protocol = imageProtocolNone
 	m.ui.imgs.protocolExplicit = true
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if out := m.kittyOverlay(); out != "" {
 			t.Fatalf("expected silence on pixelated tick %d, got %q", i, out)
 		}

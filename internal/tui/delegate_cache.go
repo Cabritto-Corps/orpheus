@@ -8,6 +8,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Render is the most expensive per-frame list-tab call (word-wrap + width
@@ -54,6 +55,17 @@ type tabBarCacheKey struct {
 	active tab
 }
 
+// Output varies only by width and quantized fill cell, so one key covers a geometry.
+type barCacheKey struct {
+	width  int
+	filled int
+}
+
+type dividerCacheKey struct {
+	horizontal bool
+	n          int
+}
+
 // stringCache memos constant-per-key view fragments. It lives on the theme
 // bundle, so a theme change builds fresh cold caches and no reset step exists.
 type stringCache[K comparable] struct {
@@ -82,32 +94,28 @@ func (c *stringCache[K]) put(k K, s string) {
 }
 
 // cachedDelegate is stored by value in list.Model (copied freely), so the
-// cache and the now-playing URI ride behind shared pointers written once by
-// the event loop: every copy sees track moves with no flush.
+// cache rides behind a shared pointer written once by the event loop.
 type cachedDelegate struct {
 	list.DefaultDelegate
-	cache      *delegateCache
-	glyph      string
-	nowPlaying *string
+	cache *delegateCache
 }
 
-func (d cachedDelegate) currentNowPlaying() string {
-	if d.nowPlaying == nil {
-		return ""
-	}
-	return *d.nowPlaying
-}
-
-func newCachedPlaylistDelegate(s *themeStyles, nowPlaying *string) cachedDelegate {
+func newCachedPlaylistDelegate(s *themeStyles) cachedDelegate {
 	c := &delegateCache{entries: make(map[delegateKey]string, 64)}
-	return cachedDelegate{DefaultDelegate: newPlaylistDelegate(s), cache: c, glyph: s.themeNowPlayingGlyph(), nowPlaying: nowPlaying}
+	return cachedDelegate{DefaultDelegate: newPlaylistDelegate(s), cache: c}
 }
 
 // trackRow right-aligns the duration at the row edge (the default delegate
 // leaves the right half empty). Filtering falls back to the framework
 // renderer, so no duration shows while filtering.
 func (d cachedDelegate) trackRow(m list.Model, index int, item trackItem) (string, bool) {
-	if m.FilterState() == list.Filtering || m.Width() <= 0 {
+	if m.Width() <= 0 {
+		return "", false
+	}
+	// The framework renderer shows no selection while the filter input is
+	// active; the inline path below marks the cursor row the same as it
+	// does once the filter is applied.
+	if m.FilterState() == list.Filtering && (m.FilterValue() == "" || index != m.Index()) {
 		return "", false
 	}
 	dur := ""
@@ -140,6 +148,37 @@ func (d cachedDelegate) trackRow(m list.Model, index int, item trackItem) (strin
 	return out, true
 }
 
+// renderFilteringSelected marks the cursor row while the filter input is
+// active. Bubbles' DefaultDelegate renders no selection while typing
+// (selected requires FilterState() != Filtering), so without this the
+// cursor row sits unmarked through the whole search session. Mirrors the
+// delegate's own selected branch, including match highlighting.
+func (d cachedDelegate) renderFilteringSelected(m list.Model, index int, title, desc string) (string, bool) {
+	if m.FilterState() != list.Filtering || m.FilterValue() == "" || index != m.Index() {
+		return "", false
+	}
+	textwidth := m.Width() - d.Styles.NormalTitle.GetPaddingLeft() - d.Styles.NormalTitle.GetPaddingRight()
+	title = ansi.Truncate(title, textwidth, "…")
+	if d.ShowDescription {
+		var lines []string
+		for i, line := range strings.Split(desc, "\n") {
+			if i >= d.Height()-1 {
+				break
+			}
+			lines = append(lines, ansi.Truncate(line, textwidth, "…"))
+		}
+		desc = strings.Join(lines, "\n")
+	}
+	unmatched := d.Styles.SelectedTitle.Inline(true)
+	matched := unmatched.Inherit(d.Styles.FilterMatch)
+	title = lipgloss.StyleRunes(title, m.MatchesForItem(index), matched, unmatched)
+	var sb strings.Builder
+	sb.WriteString(d.Styles.SelectedTitle.Render(title))
+	sb.WriteString("\n")
+	sb.WriteString(d.Styles.SelectedDesc.Render(desc))
+	return sb.String(), true
+}
+
 func (d cachedDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	pi, ok := item.(playlistItem)
 	if !ok {
@@ -152,11 +191,6 @@ func (d cachedDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		d.DefaultDelegate.Render(w, m, index, item)
 		return
 	}
-	// Stamp the now-playing flag before reading the title: the glyph
-	// becomes part of Title(), which automatically invalidates the cache
-	// key for that row when playback moves to another context.
-	pi.nowPlaying = strings.TrimSpace(pi.summary.URI) == d.currentNowPlaying()
-	pi.glyph = d.glyph
 	title := pi.Title()
 	desc := pi.Description()
 	key := delegateKey{
@@ -166,6 +200,12 @@ func (d cachedDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		filter:   m.FilterValue(),
 		filtered: m.FilterState() == list.Filtering || m.FilterState() == list.FilterApplied,
 		text:     title + "\x00" + desc,
+	}
+	// The override render is deliberately not cached: the applied-filter
+	// state must keep serving the delegate's own bytes, not a replica.
+	if s, ok := d.renderFilteringSelected(m, index, title, desc); ok {
+		fmt.Fprint(w, s)
+		return
 	}
 	if s, hit := d.cache.get(key); hit {
 		fmt.Fprint(w, s)

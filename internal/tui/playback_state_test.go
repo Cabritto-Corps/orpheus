@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"testing"
@@ -472,6 +473,33 @@ func TestStuckTransportTransitionSetsPlaybackErr(t *testing.T) {
 	}
 	if m.transport.playbackErr == nil {
 		t.Fatal("expected playbackErr to be set after stuck transition")
+	}
+}
+
+func TestFrozenHeartbeatPreservesLivePlaybackErr(t *testing.T) {
+	m := NewLoaderModel()
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "spotify:track:t", Playing: true, ProgressMS: 5000}
+	m.transport.queue = []spotify.QueueItem{{ID: "spotify:track:n"}}
+	m.transport.playbackErr = errors.New("playback stuck: failed to advance to the next track")
+	frozen := playbackStateMsg{
+		seq:           1,
+		status:        &spotify.PlaybackStatus{TrackID: "spotify:track:t", Playing: true, ProgressMS: 5000},
+		queue:         []spotify.QueueItem{{ID: "spotify:track:n"}},
+		queueIncluded: true,
+	}
+	next, _ := m.handlePlaybackStateMsg(frozen)
+	if next.(model).transport.playbackErr == nil {
+		t.Fatal("frozen heartbeat must not clear a live terminal error")
+	}
+	moved := playbackStateMsg{
+		seq:           2,
+		status:        &spotify.PlaybackStatus{TrackID: "spotify:track:t", Playing: true, ProgressMS: 9000},
+		queue:         []spotify.QueueItem{{ID: "spotify:track:n"}},
+		queueIncluded: true,
+	}
+	next, _ = next.(model).handlePlaybackStateMsg(moved)
+	if next.(model).transport.playbackErr != nil {
+		t.Fatal("real progress must clear the error")
 	}
 }
 

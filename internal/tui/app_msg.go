@@ -16,6 +16,21 @@ import (
 	"orpheus/internal/spotify"
 )
 
+type playerBackendMsg struct {
+	ready   bool
+	catalog spotify.PlaylistCatalog
+	err     error
+}
+
+// PlayerBackendReady delivers the player session's browsing catalog.
+func PlayerBackendReady(catalog spotify.PlaylistCatalog) tea.Msg {
+	return playerBackendMsg{ready: true, catalog: catalog}
+}
+
+func PlayerBackendFailed(err error) tea.Msg {
+	return playerBackendMsg{err: err}
+}
+
 func (m model) shouldEnsureAlbumImageLoad(prev, next *spotify.PlaybackStatus) bool {
 	if shouldQueueAlbumImageLoad(prev, next) {
 		return true
@@ -184,14 +199,17 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 		m.smoothApplyProgress(m.transport.status.ProgressMS)
 	}
 	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.transport.status, prevQueueHead, queueHeadTrackID(m.transport.queue))
-	m.transport.playbackErr = nil
+	if !isFrozenHeartbeat(prevStatus, len(m.transport.queue), msg) {
+		m.transport.playbackErr = nil
+	}
 	m.maybeClearTransportTransition(m.transport.status)
 	m.fireOnSongChange(prevStatus, m.transport.status)
 	cmds := []tea.Cmd{}
 	if m.shouldEnsureAlbumImageLoad(prevStatus, m.transport.status) {
 		cmds = append(cmds, m.loadImageCmd(m.transport.status.AlbumImageURL, true))
 	}
-	if cmd := m.prefetchNextCoverCmd(); cmd != nil {
+	m.pinQueueHeadCovers()
+	if cmd := m.sweepQueueCoversCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	if cmd := m.pumpInputExecutor(); cmd != nil {
@@ -207,6 +225,9 @@ func (m *model) scheduleNavDebounceCmd() tea.Cmd {
 }
 
 func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
+	if m.ui.cover.sweepPaused() {
+		return nil
+	}
 	m.normalizeLibraryPagination()
 	urls := make([]string, 0, 64)
 	add := func(url string) {
@@ -258,9 +279,19 @@ func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 	}
 
 	// Drop off-screen URLs so the visible window is not queued behind stale entries.
+	// The playing queue is always interesting: without it a browse refresh
+	// would prune the sweep the state handler just enqueued.
 	keep := make(map[string]struct{}, len(urls))
 	for _, u := range urls {
 		keep[u] = struct{}{}
+	}
+	if m.transport.status != nil {
+		keep[strings.TrimSpace(m.transport.status.AlbumImageURL)] = struct{}{}
+	}
+	for _, item := range m.transport.queue {
+		if url := strings.TrimSpace(item.ImageURL); url != "" {
+			keep[url] = struct{}{}
+		}
 	}
 	m.ui.cover.pruneExcept(keep)
 	for _, u := range urls {
@@ -274,6 +305,9 @@ func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 }
 
 func (m *model) loadLibraryCoversCmd(limit int) tea.Cmd {
+	if m.ui.cover.sweepPaused() {
+		return nil
+	}
 	seen := make(map[string]struct{})
 	added := 0
 
@@ -378,6 +412,9 @@ func (m model) visibleAlbumItems() []playlistItem {
 }
 
 func (m model) resolveCatalog() spotify.PlaylistCatalog {
+	if m.catalogSource != nil {
+		return m.catalogSource.get()
+	}
 	return m.catalog
 }
 
@@ -415,19 +452,35 @@ func (m *model) fireOnSongChange(prev, next *spotify.PlaybackStatus) {
 	}(nextName, nextArtist, nextID)
 }
 
+const songChangeTimeout = 10 * time.Second
+
 func execCmd(template, trackName, artistName, trackID string) {
-	cmd := newSongChangeCmd(template, trackName, artistName, trackID)
-	if cmd == nil {
-		return
-	}
-	if err := cmd.Run(); err != nil {
+	if err := runSongChangeHook(template, trackName, artistName, trackID); err != nil {
 		slog.Warn("on-song-change hook failed", "cmd", template, "error", err)
 	}
 }
 
+func runSongChangeHook(template, trackName, artistName, trackID string) error {
+	return runSongChangeHookWithTimeout(template, trackName, artistName, trackID, songChangeTimeout)
+}
+
+func runSongChangeHookWithTimeout(template, trackName, artistName, trackID string, timeout time.Duration) error {
+	cmd, _, cancel := newSongChangeCmdWithTimeout(template, trackName, artistName, trackID, timeout)
+	if cmd == nil {
+		return nil
+	}
+	defer cancel()
+	return cmd.Run()
+}
+
 // newSongChangeCmd discards hook output: the child inherits the TUI tty, and a cell-diffing renderer
 // would persist anything it prints. Metadata travels via args/env; terminal access needs tea.ExecProcess.
-func newSongChangeCmd(template, trackName, artistName, trackID string) *exec.Cmd {
+func newSongChangeCmd(template, trackName, artistName, trackID string) (*exec.Cmd, context.CancelFunc) {
+	cmd, _, cancel := newSongChangeCmdWithTimeout(template, trackName, artistName, trackID, songChangeTimeout)
+	return cmd, cancel
+}
+
+func newSongChangeCmdWithTimeout(template, trackName, artistName, trackID string, timeout time.Duration) (*exec.Cmd, context.Context, context.CancelFunc) {
 	r := strings.NewReplacer(
 		"{track}", trackName,
 		"{artist}", artistName,
@@ -436,11 +489,10 @@ func newSongChangeCmd(template, trackName, artistName, trackID string) *exec.Cmd
 	expanded := r.Replace(template)
 	parts := strings.Fields(expanded)
 	if len(parts) == 0 {
-		return nil
+		return nil, nil, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	// User-configured command only: metadata feeds args/env, never a shell.
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	// The cancel must outlive Run: it carries the hook deadline.
 	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 	var cmd *exec.Cmd
 	if len(parts) > 1 {
@@ -455,5 +507,5 @@ func newSongChangeCmd(template, trackName, artistName, trackID string) *exec.Cmd
 	)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
-	return cmd
+	return cmd, ctx, cancel
 }

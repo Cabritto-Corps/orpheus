@@ -6,13 +6,159 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	spotifyapi "github.com/zmb3/spotify/v2"
 )
+
+const (
+	albumImageBatchWindow  = 30 * time.Millisecond
+	albumBatchMaxIDs       = 20
+	albumBatchFetchTimeout = 15 * time.Second
+)
+
+type albumImageResult struct {
+	url string
+	err error
+}
+
+type albumImageBatcher struct {
+	mu      sync.Mutex
+	pending map[string][]chan albumImageResult
+	timer   *time.Timer
+	fetch   func(ctx context.Context, ids []string) (map[string]string, error)
+}
+
+func (s *Service) albumBatcher() *albumImageBatcher {
+	s.albumBatchMu.Lock()
+	defer s.albumBatchMu.Unlock()
+	if s.albumBatch == nil {
+		s.albumBatch = &albumImageBatcher{
+			pending: make(map[string][]chan albumImageResult),
+			fetch:   s.fetchAlbumImages,
+		}
+	}
+	return s.albumBatch
+}
+
+func (s *Service) resolveAlbumImageBatched(ctx context.Context, id string) (string, error) {
+	b := s.albumBatcher()
+	ch := make(chan albumImageResult, 1)
+	b.mu.Lock()
+	b.pending[id] = append(b.pending[id], ch)
+	if b.timer == nil {
+		b.timer = time.AfterFunc(albumImageBatchWindow, b.flush)
+	}
+	b.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		b.removeWaiter(id, ch)
+		return "", ctx.Err()
+	case r := <-ch:
+		return r.url, r.err
+	}
+}
+
+func (b *albumImageBatcher) removeWaiter(id string, ch chan albumImageResult) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	waiters := b.pending[id]
+	for i, w := range waiters {
+		if w == ch {
+			waiters = append(waiters[:i], waiters[i+1:]...)
+			break
+		}
+	}
+	if len(waiters) == 0 {
+		delete(b.pending, id)
+	} else {
+		b.pending[id] = waiters
+	}
+}
+
+func (b *albumImageBatcher) flush() {
+	b.mu.Lock()
+	pending := b.pending
+	b.pending = make(map[string][]chan albumImageResult)
+	b.timer = nil
+	b.mu.Unlock()
+	if len(pending) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(pending))
+	for id := range pending {
+		ids = append(ids, id)
+	}
+	results := make(map[string]string, len(ids))
+	ctx, cancel := context.WithTimeout(context.Background(), albumBatchFetchTimeout)
+	defer cancel()
+	var fetchErr error
+	for i := 0; i < len(ids); i += albumBatchMaxIDs {
+		end := min(i+albumBatchMaxIDs, len(ids))
+		got, err := b.fetch(ctx, ids[i:end])
+		if err != nil {
+			fetchErr = err
+			break
+		}
+		maps.Copy(results, got)
+	}
+	for id, chans := range pending {
+		r := albumImageResult{url: results[id], err: fetchErr}
+		for _, ch := range chans {
+			select {
+			case ch <- r:
+			default:
+			}
+		}
+	}
+}
+
+func (s *Service) fetchAlbumImages(ctx context.Context, ids []string) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	if s.itemsHTTPClient == nil {
+		return nil, errors.New("items http client is not configured")
+	}
+	params := url.Values{}
+	params.Set("ids", strings.Join(ids, ","))
+	u := spotifyAPIBase + "albums?" + params.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.itemsHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var payload struct {
+		Albums []*struct {
+			ID     string          `json:"id"`
+			Images []PlaylistImage `json:"images"`
+		} `json:"albums"`
+	}
+	if err := DecodeWebAPIJSON(resp, http.StatusOK, &payload, func(status int, body string) error {
+		return &httpStatusError{status: status, err: fmt.Errorf("album details: %s", body)}
+	}); err != nil {
+		return nil, err
+	}
+	for _, album := range payload.Albums {
+		if album == nil || album.ID == "" {
+			continue
+		}
+		out[album.ID] = pickDisplayImageURL(album.Images)
+	}
+	return out, nil
+}
 
 func (s *Service) ListUserPlaylistsPage(ctx context.Context, offset, limit int) (*PlaylistPage, error) {
 	if offset < 0 {
@@ -41,10 +187,7 @@ func (s *Service) ListUserPlaylistsPage(ctx context.Context, offset, limit int) 
 	}
 	out.Items = make([]PlaylistSummary, 0, len(page.Items))
 	for _, pl := range page.Items {
-		imageURL := ""
-		if len(pl.Images) > 0 {
-			imageURL = pl.Images[0].URL
-		}
+		imageURL := pickDisplayImageURL(pl.Images)
 		out.Items = append(out.Items, PlaylistSummary{
 			ID:            pl.ID,
 			Name:          pl.Name,
@@ -95,10 +238,7 @@ func (s *Service) ListSavedAlbumsPage(ctx context.Context, offset, limit int) (*
 		if album.ID == "" || album.URI == "" {
 			continue
 		}
-		imageURL := ""
-		if len(album.Images) > 0 {
-			imageURL = album.Images[0].URL
-		}
+		imageURL := pickDisplayImageURL(sdkImagesToPlaylistImages(album.Images))
 		artists := make([]string, 0, len(album.Artists))
 		for _, a := range album.Artists {
 			if name := strings.TrimSpace(a.Name); name != "" {
@@ -152,34 +292,9 @@ func (s *Service) ResolveContextImageURL(ctx context.Context, kind, id string) (
 		}); err != nil {
 			return "", err
 		}
-		if len(images) == 0 {
-			return "", nil
-		}
-		return strings.TrimSpace(images[0].URL), nil
+		return pickDisplayImageURL(images), nil
 	case ContextKindAlbum:
-		u := spotifyAPIBase + "albums/" + url.PathEscape(id)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			return "", err
-		}
-		req.Header.Set("Accept", "application/json")
-		resp, err := s.itemsHTTPClient.Do(req)
-		if err != nil {
-			return "", err
-		}
-		defer func() { _ = resp.Body.Close() }()
-		var album struct {
-			Images []PlaylistImage `json:"images"`
-		}
-		if err := DecodeWebAPIJSON(resp, http.StatusOK, &album, func(status int, body string) error {
-			return &httpStatusError{status: status, err: fmt.Errorf("album details: %s", body)}
-		}); err != nil {
-			return "", err
-		}
-		if len(album.Images) == 0 {
-			return "", nil
-		}
-		return strings.TrimSpace(album.Images[0].URL), nil
+		return s.resolveAlbumImageBatched(ctx, id)
 	default:
 		return "", fmt.Errorf("unsupported context kind %q", kind)
 	}

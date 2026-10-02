@@ -2,9 +2,11 @@ package spotify
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -117,10 +119,10 @@ func TestResolveContextImageURLAlbum(t *testing.T) {
 	s := &Service{
 		itemsHTTPClient: &http.Client{
 			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				if req.Method != http.MethodGet || req.URL.Path != "/v1/albums/alb" {
+				if req.Method != http.MethodGet || req.URL.Path != "/v1/albums" || req.URL.Query().Get("ids") != "alb" {
 					t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
 				}
-				return httpJSONResponse(http.StatusOK, `{"images":[{"url":"https://i.scdn.co/image/a1"}]}`), nil
+				return httpJSONResponse(http.StatusOK, `{"albums":[{"id":"alb","images":[{"url":"https://i.scdn.co/image/a1"}]}]}`), nil
 			}),
 		},
 	}
@@ -130,5 +132,98 @@ func TestResolveContextImageURLAlbum(t *testing.T) {
 	}
 	if url != "https://i.scdn.co/image/a1" {
 		t.Fatalf("unexpected URL: %q", url)
+	}
+}
+
+func TestPickDisplayImageURLPrefersMidSize(t *testing.T) {
+	images := []PlaylistImage{
+		{URL: "https://i.scdn.co/image/large", Width: 640, Height: 640},
+		{URL: "https://i.scdn.co/image/mid", Width: 300, Height: 300},
+		{URL: "https://i.scdn.co/image/small", Width: 64, Height: 64},
+	}
+	if got := pickDisplayImageURL(images); got != "https://i.scdn.co/image/mid" {
+		t.Fatalf("expected mid-size image, got %q", got)
+	}
+}
+
+func TestPickDisplayImageURLFallsThrough(t *testing.T) {
+	if got := pickDisplayImageURL([]PlaylistImage{{URL: "https://i.scdn.co/image/only", Width: 640}}); got != "https://i.scdn.co/image/only" {
+		t.Fatalf("expected single image fallthrough, got %q", got)
+	}
+	if got := pickDisplayImageURL([]PlaylistImage{{URL: "https://i.scdn.co/image/unsized"}}); got != "https://i.scdn.co/image/unsized" {
+		t.Fatalf("expected unsized fallthrough, got %q", got)
+	}
+	if got := pickDisplayImageURL([]PlaylistImage{{URL: "https://i.scdn.co/image/tiny", Width: 64}}); got != "https://i.scdn.co/image/tiny" {
+		t.Fatalf("expected tiny-only fallthrough, got %q", got)
+	}
+	if got := pickDisplayImageURL(nil); got != "" {
+		t.Fatalf("expected empty result, got %q", got)
+	}
+}
+
+func TestResolveAlbumImagesBatchesTwentyPerRequest(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	s := &Service{
+		itemsHTTPClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.Path != "/v1/albums" {
+					t.Errorf("unexpected request: %s %s", req.Method, req.URL.String())
+					return httpJSONResponse(http.StatusBadRequest, `{}`), nil
+				}
+				mu.Lock()
+				requests++
+				mu.Unlock()
+				ids := strings.Split(req.URL.Query().Get("ids"), ",")
+				if len(ids) > albumBatchMaxIDs {
+					t.Errorf("batch exceeds %d ids: %d", albumBatchMaxIDs, len(ids))
+				}
+				var sb strings.Builder
+				sb.WriteString(`{"albums":[`)
+				for i, id := range ids {
+					if i > 0 {
+						sb.WriteString(`,`)
+					}
+					fmt.Fprintf(&sb, `{"id":%q,"images":[{"url":%q,"width":640},{"url":%q,"width":300}]}`, id, "https://i.scdn.co/image/"+id+"/large", "https://i.scdn.co/image/"+id+"/mid")
+				}
+				sb.WriteString(`]}`)
+				return httpJSONResponse(http.StatusOK, sb.String()), nil
+			}),
+		},
+	}
+	const total = 25
+	type outcome struct {
+		url string
+		err error
+	}
+	results := make([]outcome, total)
+	var resMu sync.Mutex
+	var wg sync.WaitGroup
+	for i := range total {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("album-%02d", i)
+			url, err := s.ResolveContextImageURL(context.Background(), ContextKindAlbum, id)
+			resMu.Lock()
+			results[i] = outcome{url: url, err: err}
+			resMu.Unlock()
+		}(i)
+	}
+	wg.Wait()
+	for i := range total {
+		id := fmt.Sprintf("album-%02d", i)
+		want := "https://i.scdn.co/image/" + id + "/mid"
+		if results[i].err != nil {
+			t.Fatalf("album %s error: %v", id, results[i].err)
+		}
+		if results[i].url != want {
+			t.Fatalf("album %s: expected mid-size %q, got %q", id, want, results[i].url)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 2 {
+		t.Fatalf("expected 2 batched requests for 25 albums, got %d", requests)
 	}
 }

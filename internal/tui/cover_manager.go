@@ -4,6 +4,7 @@ import (
 	stdlist "container/list"
 	"log/slog"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -17,9 +18,13 @@ type coverManager struct {
 	resolveInFlight map[string]struct{}
 	queue           *stdlist.List
 	queued          map[string]*stdlist.Element
-	// prefetched dedups re-kicks across state pushes. A map, not a scalar:
-	// coverManager travels by value, so scalar writes would be silently dropped.
-	prefetched map[string]struct{}
+	// pinnedHead tracks the head-window URLs pinned against LRU eviction.
+	// A map, not a scalar: coverManager travels by value, so scalar
+	// writes would be silently dropped.
+	pinnedHead map[string]struct{}
+	// sweepPausedUntil parks background sweeps behind a server penalty
+	// while priority (player-cover) loads keep flowing.
+	sweepPausedUntil time.Time
 	// Element pointers stay valid across pops and removes, so queued needs
 	// no index bookkeeping that could desync.
 	playerCoverFailStreak int
@@ -34,9 +39,9 @@ func newCoverManager() coverManager {
 		imageRetryCount: make(map[string]int),
 		imageRetryToken: make(map[string]int),
 		resolveInFlight: make(map[string]struct{}),
-		prefetched:      make(map[string]struct{}),
 		queue:           stdlist.New(),
 		queued:          make(map[string]*stdlist.Element),
+		pinnedHead:      make(map[string]struct{}),
 	}
 }
 
@@ -143,7 +148,7 @@ func (m *model) queueCoverResolveCmd(kind, id string) tea.Cmd {
 }
 
 func (m *model) queueMissingLibraryImageResolvesCmd(limit int) tea.Cmd {
-	if limit <= 0 {
+	if limit <= 0 || m.ui.cover.sweepPaused() {
 		return nil
 	}
 	items := make([]struct{ Kind, ID string }, 0, limit)
@@ -242,34 +247,104 @@ func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
 	return m.loadImagesBatchCmd(urls)
 }
 
-// prefetchNextCoverCmd warms the up-next cover so a skip swaps from cache.
-// q[0] is the next track (the visible queue hides the playing head); one
-// URL is remembered at a time, so re-kicks happen only when the head
-// changes. shouldQueueLoad gates the kick so dead URLs pace behind the
-// fail cooldown instead of refetching on every state push.
-func (m *model) prefetchNextCoverCmd() tea.Cmd {
-	if m.ui.imgs == nil {
+// sweepPaused reports a server-penalty park: background sweeps stop
+// enqueueing until the wait elapses, while priority loads keep flowing.
+func (c *coverManager) sweepPaused() bool {
+	return time.Now().Before(c.sweepPausedUntil)
+}
+
+// pauseSweep parks background sweeps for d: hammering a penalizing server
+// is exactly what the non-transient 429 policy forbids.
+func (c *coverManager) pauseSweep(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	if until := time.Now().Add(d); until.After(c.sweepPausedUntil) {
+		c.sweepPausedUntil = until
+	}
+}
+
+// promoteURL moves an already-queued URL to the drain head so a rapid skip
+// re-prioritizes the new head ahead of stale sweep entries.
+func (c *coverManager) promoteURL(url string) {
+	url = strings.TrimSpace(url)
+	if el, ok := c.queued[url]; ok {
+		c.queue.MoveToFront(el)
+	}
+}
+
+// sweepQueueCoversCmd warms the whole pushed queue head-first so any skip
+// swaps from cache, not just the next track. The cover queue dedupes
+// (queued map), shouldQueueLoad gates dead URLs behind the fail cooldown,
+// and the chained drain in handleImagesBatchLoadedMsg runs the sweep to
+// completion across ticks. Head starvation is impossible: the player cover
+// loads direct (never via this queue) and head URLs promote to front.
+func (m *model) sweepQueueCoversCmd() tea.Cmd {
+	if m.ui.imgs == nil || m.ui.cover.sweepPaused() {
 		return nil
 	}
 	q := m.visibleQueue()
 	if len(q) == 0 {
 		return nil
 	}
-	url := strings.TrimSpace(q[0].ImageURL)
-	if url == "" {
-		return nil
+	current := ""
+	if m.transport.status != nil {
+		current = strings.TrimSpace(m.transport.status.AlbumImageURL)
 	}
-	if _, ok := m.ui.cover.prefetched[url]; ok {
-		return nil
+	enqueued := 0
+	for _, item := range q {
+		if enqueued >= queueCoverSweepBatch {
+			break
+		}
+		url := strings.TrimSpace(item.ImageURL)
+		if url == "" || url == current {
+			continue
+		}
+		if !m.ui.imgs.shouldQueueLoad(url) {
+			continue
+		}
+		if m.ui.cover.enqueueURL(url) {
+			enqueued++
+		}
 	}
-	if m.transport.status != nil && url == strings.TrimSpace(m.transport.status.AlbumImageURL) {
-		return nil
+	// Newest head first: rapid skips re-prioritize ahead of stale entries.
+	for i := min(len(q), queueHeadPinWindow) - 1; i >= 0; i-- {
+		m.ui.cover.promoteURL(q[i].ImageURL)
 	}
-	if !m.ui.imgs.shouldQueueLoad(url) {
-		return nil
+	return m.drainCoverQueueCmd(coverQueueDrainBatch)
+}
+
+// pinQueueHeadCovers pins the current cover plus the head window against
+// LRU eviction: a full-context sweep must never push out the art the next
+// skip needs. Stale pins release as the window moves.
+func (m *model) pinQueueHeadCovers() {
+	if m.ui.imgs == nil {
+		return
 	}
-	m.ui.cover.prefetched = map[string]struct{}{url: {}}
-	return m.loadImageCmd(url, false)
+	want := make(map[string]struct{}, queueHeadPinWindow+1)
+	if m.transport.status != nil {
+		if url := strings.TrimSpace(m.transport.status.AlbumImageURL); url != "" {
+			want[url] = struct{}{}
+		}
+	}
+	q := m.visibleQueue()
+	for i := range min(len(q), queueHeadPinWindow) {
+		if url := strings.TrimSpace(q[i].ImageURL); url != "" {
+			want[url] = struct{}{}
+		}
+	}
+	for url := range m.ui.cover.pinnedHead {
+		if _, ok := want[url]; !ok {
+			m.ui.imgs.unpinURL(url)
+			delete(m.ui.cover.pinnedHead, url)
+		}
+	}
+	for url := range want {
+		if _, ok := m.ui.cover.pinnedHead[url]; !ok {
+			m.ui.imgs.pinURL(url)
+			m.ui.cover.pinnedHead[url] = struct{}{}
+		}
+	}
 }
 
 func (m *model) maybeRecoverKittyProtocol() {

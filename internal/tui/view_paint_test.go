@@ -226,7 +226,7 @@ func TestTrackPopupPaintNeverLosesBackground(t *testing.T) {
 		m.ui.trackPopupName = "Some Playlist"
 		m.ui.trackPopupItems = items
 		_, listW, listH := popupModalSize(m.ui.width, m.ui.height)
-		m.ui.trackPopupList = newTrackPopupList(m.styles, m.nowPlaying, m.ui.width, m.ui.height)
+		m.ui.trackPopupList = newTrackPopupList(m.styles, m.ui.width, m.ui.height)
 		m.ui.trackPopupList.SetSize(listW, listH)
 		listItems := make([]list.Item, 0, len(items))
 		for _, it := range items {

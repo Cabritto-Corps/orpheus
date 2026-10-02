@@ -28,11 +28,11 @@ type themeColors struct {
 }
 
 type themeGlyphs struct {
-	Border     string `json:"border"`
-	NowPlaying string `json:"now_playing"`
-	PlayPause  string `json:"play_pause"`
-	Spinner    string `json:"spinner"`
-	Bar        string `json:"bar"`
+	Border      string `json:"border"`
+	QueueCursor string `json:"queue_cursor"`
+	PlayPause   string `json:"play_pause"`
+	Spinner     string `json:"spinner"`
+	Bar         string `json:"bar"`
 }
 
 type themeTypography struct {
@@ -235,20 +235,20 @@ var themeRegistry = []themeEntry{
 
 // Display names shared by the JSON schema and the settings cycles.
 var (
-	glyphBorderChoices     = []string{"rounded", "thick", "double", "ascii"}
-	glyphNowPlayingChoices = []string{"note", "dot", "play", "arrow", "plain"}
-	glyphPlayPauseChoices  = []string{"modern", "bold", "thin", "ascii"}
-	glyphSpinnerChoices    = []string{"minidot", "dot", "line", "points", "meter", "pulse"}
-	glyphBarChoices        = []string{"block", "line"}
+	glyphBorderChoices      = []string{"rounded", "thick", "double", "ascii"}
+	glyphQueueCursorChoices = []string{"note", "dot", "play", "arrow", "plain"}
+	glyphPlayPauseChoices   = []string{"modern", "bold", "thin", "ascii"}
+	glyphSpinnerChoices     = []string{"minidot", "dot", "line", "points", "meter", "pulse"}
+	glyphBarChoices         = []string{"block", "line"}
 )
 
-var defaultGlyphs = themeGlyphs{Border: "rounded", NowPlaying: "note", PlayPause: "modern", Spinner: "minidot", Bar: "block"}
+var defaultGlyphs = themeGlyphs{Border: "rounded", QueueCursor: "arrow", PlayPause: "modern", Spinner: "minidot", Bar: "block"}
 var defaultTypography = themeTypography{}
 var defaultCover = themeCover{Frame: "none"}
 var defaultBackgrounds = themeBackgrounds{Style: "solid"}
 
 var validGlyphBorder = stringSet(glyphBorderChoices)
-var validGlyphNowPlaying = stringSet(glyphNowPlayingChoices)
+var validGlyphQueueCursor = stringSet(glyphQueueCursorChoices)
 var validGlyphPlayPause = stringSet(glyphPlayPauseChoices)
 var validGlyphSpinner = stringSet(glyphSpinnerChoices)
 var validGlyphBar = stringSet(glyphBarChoices)
@@ -317,7 +317,8 @@ func colorOverridesOnly(raw map[string]any) map[string]any {
 
 func applyGlyphOverrides(g *themeGlyphs, raw map[string]any) {
 	applyStringField(raw, "border", validGlyphBorder, &g.Border, "glyphs.border")
-	applyStringField(raw, "now_playing", validGlyphNowPlaying, &g.NowPlaying, "glyphs.now_playing")
+	applyStringField(raw, "now_playing", validGlyphQueueCursor, &g.QueueCursor, "glyphs.now_playing")
+	applyStringField(raw, "queue_cursor", validGlyphQueueCursor, &g.QueueCursor, "glyphs.queue_cursor")
 	applyStringField(raw, "play_pause", validGlyphPlayPause, &g.PlayPause, "glyphs.play_pause")
 	applyStringField(raw, "spinner", validGlyphSpinner, &g.Spinner, "glyphs.spinner")
 	applyStringField(raw, "bar", validGlyphBar, &g.Bar, "glyphs.bar")

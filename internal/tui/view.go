@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"math"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -46,10 +47,13 @@ const (
 	iconRepeatTrackNF   = "\uf01e"
 )
 
+// Below this size the frame never lays out, so the overlay must clear, not place.
+func tooSmallFrame(w, h int) bool {
+	return w < 40 || h < 12
+}
+
 func (m model) View() tea.View {
-	if m.ui.width < 40 || m.ui.height < 12 {
-		// No overlay: absolute placements cannot coordinate against a
-		// frame that never laid out.
+	if tooSmallFrame(m.ui.width, m.ui.height) {
 		return tea.View{Content: m.styles.styleError.Render("terminal too small — please resize"), AltScreen: true}
 	}
 	return tea.View{Content: m.mainView(), AltScreen: true}
@@ -233,16 +237,22 @@ func (m model) selectedAlbum() (playlistItem, bool) {
 	return sel, ok
 }
 
-// Routed through bubbles/progress so the framework owns the color
-// ramp and width handling.
+// Bubbles owns the color ramp and width handling.
+// Cache by width and quantized fill cell.
 func (s *themeStyles) gradientBar(frac float64, width int) string {
 	if width <= 0 {
 		return ""
 	}
 	frac = max(0, min(1, frac))
+	key := barCacheKey{width: width, filled: int(math.Round(float64(width) * frac))}
+	if cached, ok := s.bars.get(key); ok {
+		return cached
+	}
 	p := s.barProgress
 	p.SetWidth(width)
-	return p.ViewAs(frac)
+	out := p.ViewAs(frac)
+	s.bars.put(key, out)
+	return out
 }
 
 func fmtDuration(ms int) string {

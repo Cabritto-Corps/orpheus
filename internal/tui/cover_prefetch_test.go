@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -20,6 +21,7 @@ import (
 const (
 	prefetchCurrentURL = "https://cdn/current.png"
 	prefetchNextURL    = "https://cdn/next.png"
+	prefetchAfterURL   = "https://cdn/after.png"
 )
 
 func prefetchProbePNG(tb testing.TB) []byte {
@@ -37,8 +39,7 @@ func prefetchProbePNG(tb testing.TB) []byte {
 	return buf.Bytes()
 }
 
-// prefetchProbeModel builds a player-tab model whose pushed queue heads
-// with the current track, so visibleQueue()[0] is the up-next track.
+// The pushed queue already excludes the playing entry.
 func prefetchProbeModel(tb testing.TB, exec loader.Executor) model {
 	tb.Helper()
 	m := newModel(context.Background(), nil, config.Config{DeviceName: "orpheus"},
@@ -52,89 +53,129 @@ func prefetchProbeModel(tb testing.TB, exec loader.Executor) model {
 		ProgressMS: 1000, DurationMS: 200000,
 	}
 	m.transport.queue = []spotify.QueueItem{
-		{ID: "spotify:track:current", Name: "Current", ImageURL: prefetchCurrentURL},
-		{ID: "spotify:track:next", Name: "Next", ImageURL: prefetchNextURL},
+		{ID: "spotify:track:next", Name: "Next", ImageURL: prefetchNextURL, Queued: true},
+		{ID: "spotify:track:after", Name: "After", ImageURL: prefetchAfterURL},
 	}
 	return m
 }
 
-func TestPrefetchKicksNextCoverOnce(t *testing.T) {
-	var fetched atomic.Int32
-	exec := func(context.Context, loader.LoadRequest) []loader.LoadResult {
+// A fake executor that answers every requested item, so batch drains
+// complete the whole sweep instead of stranding unanswered indexes.
+func sweepAnsweringExec(tb testing.TB, fetched *atomic.Int32) loader.Executor {
+	tb.Helper()
+	return func(_ context.Context, req loader.LoadRequest) []loader.LoadResult {
 		fetched.Add(1)
-		return []loader.LoadResult{{Index: 0, Data: loader.ImageData{Data: prefetchProbePNG(t)}}}
-	}
-	m := prefetchProbeModel(t, exec)
-	cmd := m.prefetchNextCoverCmd()
-	if cmd == nil {
-		t.Fatal("expected a prefetch kick for the up-next cover")
-	}
-	if _, ok := m.ui.cover.prefetched[prefetchNextURL]; !ok {
-		t.Fatalf("prefetch memory = %v, want %q recorded", m.ui.cover.prefetched, prefetchNextURL)
-	}
-	if msg := cmd(); msg == nil {
-		t.Fatal("prefetch cmd yielded nothing")
-	} else if lm, ok := msg.(imageLoadedMsg); !ok || lm.err != nil || lm.url != prefetchNextURL {
-		t.Fatalf("prefetch result: %#v", msg)
-	}
-	if n := fetched.Load(); n != 1 {
-		t.Fatalf("fetched %d times, want 1", n)
-	}
-	if cmd := m.prefetchNextCoverCmd(); cmd != nil {
-		t.Fatal("repeated push re-kicked the same head (dedupe broken)")
-	}
-	if n := fetched.Load(); n != 1 {
-		t.Fatalf("dedupe failed to hold: fetched %d times", n)
+		results := make([]loader.LoadResult, 0, len(req.Items))
+		for i := range req.Items {
+			results = append(results, loader.LoadResult{Index: i, Data: loader.ImageData{Data: prefetchProbePNG(tb)}})
+		}
+		return results
 	}
 }
 
-func TestPrefetchSkipsCurrentEmptyAndFailed(t *testing.T) {
+func runSweepCmd(tb testing.TB, cmd tea.Cmd) {
+	tb.Helper()
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	switch batch := msg.(type) {
+	case imagesBatchLoadedMsg:
+		// Decodes and caching already ran inside the drain closure.
+	case tea.BatchMsg:
+		for _, c := range []tea.Cmd(batch) {
+			if c != nil {
+				_ = c()
+			}
+		}
+	default:
+		_ = batch
+	}
+}
+
+func TestSweepWarmsFullQueueHeadFirst(t *testing.T) {
+	var fetched atomic.Int32
+	m := prefetchProbeModel(t, sweepAnsweringExec(t, &fetched))
+	cmd := m.sweepQueueCoversCmd()
+	if cmd == nil {
+		t.Fatal("expected a sweep kick for a queue with image URLs")
+	}
+	runSweepCmd(t, cmd)
+	if n := fetched.Load(); n != 1 {
+		t.Fatalf("sweep drained in %d fetches, want 1 batch", n)
+	}
+	for _, url := range []string{prefetchNextURL, prefetchAfterURL} {
+		if m.ui.imgs.shouldQueueLoad(url) {
+			t.Fatalf("swept cover %q is not load-complete", url)
+		}
+		if enc := m.ui.imgs.encodedFor(url); enc == "" {
+			t.Fatalf("swept cover %q has no kitty encoding", url)
+		}
+	}
+	// Steady state: a second push re-enqueues nothing cached.
+	if cmd := m.sweepQueueCoversCmd(); cmd != nil {
+		runSweepCmd(t, cmd)
+	}
+	if n := fetched.Load(); n != 1 {
+		t.Fatalf("warm sweep refetched: %d fetches, want 1", n)
+	}
+}
+
+func TestSweepSkipsCurrentEmptyFailedAndPaused(t *testing.T) {
 	exec := func(context.Context, loader.LoadRequest) []loader.LoadResult {
 		t.Fatal("no fetch should be kicked")
 		return nil
 	}
 	m := prefetchProbeModel(t, exec)
-	// Head is the current track's own cover.
-	m.transport.queue[1].ImageURL = prefetchCurrentURL
-	if cmd := m.prefetchNextCoverCmd(); cmd != nil {
-		t.Fatal("prefetched the current cover")
-	}
-	// Head has no image.
+	// Head carries the current cover (stale window): same URL, no kick.
+	m.transport.queue[0].ImageURL = prefetchCurrentURL
 	m.transport.queue[1].ImageURL = ""
-	if cmd := m.prefetchNextCoverCmd(); cmd != nil {
-		t.Fatal("prefetched an empty URL")
+	m.ui.imgs.markFailed(prefetchAfterURL)
+	// Everything skippable: current, empty, cooldown-gated.
+	if cmd := m.sweepQueueCoversCmd(); cmd != nil {
+		runSweepCmd(t, cmd)
+	}
+	if n := m.ui.cover.queue.Len(); n != 0 {
+		t.Fatalf("sweep queued %d URLs, want 0", n)
 	}
 	// No queue at all.
 	m.transport.queue = nil
-	if cmd := m.prefetchNextCoverCmd(); cmd != nil {
-		t.Fatal("prefetched with no queue")
+	if cmd := m.sweepQueueCoversCmd(); cmd != nil {
+		t.Fatal("swept with no queue")
 	}
-	// Dead URL inside its fail cooldown.
-	m.transport.queue = []spotify.QueueItem{
-		{ID: "spotify:track:current"},
-		{ID: "spotify:track:next", ImageURL: prefetchNextURL},
+	// A parked sweep enqueues nothing.
+	m = prefetchProbeModel(t, exec)
+	m.ui.cover.pauseSweep(time.Hour)
+	if cmd := m.sweepQueueCoversCmd(); cmd != nil {
+		t.Fatal("parked sweep still kicked")
 	}
-	m.ui.imgs.markFailed(prefetchNextURL)
-	if cmd := m.prefetchNextCoverCmd(); cmd != nil {
-		t.Fatal("prefetched a cooldown-gated URL")
-	}
-	if len(m.ui.cover.prefetched) != 0 {
-		t.Fatalf("skipped kick still stored memory: %v", m.ui.cover.prefetched)
+	// Expiry resumes: no timer, no flag to clear — the wait elapses.
+	m.ui.cover.sweepPausedUntil = time.Now().Add(-time.Second)
+	if cmd := m.sweepQueueCoversCmd(); cmd == nil {
+		t.Fatal("expired park must resume the sweep")
 	}
 }
 
-func TestPrefetchedSkipSwapsWithoutFetch(t *testing.T) {
+func TestSweepPromotesNewHeadOnRapidSkip(t *testing.T) {
+	m := prefetchProbeModel(t, nil)
+	// Stale sweep entries sit ahead; a rapid skip must re-prioritize the
+	// new head to the drain front (the sweep calls promoteURL per push).
+	for _, u := range []string{"https://cdn/stale1.png", "https://cdn/stale2.png", "https://cdn/new.png"} {
+		m.enqueueCoverURL(u)
+	}
+	m.ui.cover.promoteURL("https://cdn/new.png")
+	for _, want := range []string{"https://cdn/new.png", "https://cdn/stale1.png", "https://cdn/stale2.png"} {
+		got, ok := m.ui.cover.popURL()
+		if !ok || got != want {
+			t.Fatalf("drain order: got %q, want %q", got, want)
+		}
+	}
+}
+
+func TestSweptSkipSwapsWithoutFetch(t *testing.T) {
 	var fetched atomic.Int32
-	exec := func(context.Context, loader.LoadRequest) []loader.LoadResult {
-		fetched.Add(1)
-		return []loader.LoadResult{{Index: 0, Data: loader.ImageData{Data: prefetchProbePNG(t)}}}
-	}
-	m := prefetchProbeModel(t, exec)
-	if cmd := m.prefetchNextCoverCmd(); cmd == nil {
-		t.Fatal("no prefetch kick")
-	} else if msg := cmd(); msg == nil {
-		t.Fatal("prefetch yielded nothing")
-	}
+	m := prefetchProbeModel(t, sweepAnsweringExec(t, &fetched))
+	runSweepCmd(t, m.sweepQueueCoversCmd())
 	if n := fetched.Load(); n != 1 {
 		t.Fatalf("fetched %d times, want 1", n)
 	}
@@ -142,10 +183,10 @@ func TestPrefetchedSkipSwapsWithoutFetch(t *testing.T) {
 	// fully cached+encoded so the swap needs no fetch round trip.
 	m.transport.status.AlbumImageURL = prefetchNextURL
 	if m.ui.imgs.shouldQueueLoad(prefetchNextURL) {
-		t.Fatal("prefetched cover not load-complete")
+		t.Fatal("swept cover not load-complete")
 	}
 	if enc := m.ui.imgs.encodedFor(prefetchNextURL); enc == "" {
-		t.Fatal("prefetched cover has no kitty encoding")
+		t.Fatal("swept cover has no kitty encoding")
 	}
 	if cmd := m.loadImageCmd(prefetchNextURL, true); cmd != nil {
 		t.Fatal("cached cover still kicks a load (beginLoad should refuse)")
@@ -177,11 +218,107 @@ func TestEmissionImmediateOnImageLoaded(t *testing.T) {
 	}
 }
 
-func TestPrefetchFailureReleasesMemory(t *testing.T) {
+func TestRateLimitFailureParksSweepWithoutRetries(t *testing.T) {
 	m := prefetchProbeModel(t, nil)
-	m.ui.cover.prefetched = map[string]struct{}{prefetchNextURL: {}}
-	_ = m.handleImageLoadFailure(prefetchNextURL, errors.New("probe fetch failure"))
-	if len(m.ui.cover.prefetched) != 0 {
-		t.Fatalf("failed prefetch stuck in memory: %v", m.ui.cover.prefetched)
+	// Drive the real batch path: the pause lives on the propagated model
+	// (coverManager travels by value), so assert on the returned model.
+	next, cmd := m.handleImagesBatchLoadedMsg(imagesBatchLoadedMsg{
+		results: []imageLoadedMsg{{url: prefetchNextURL, err: &spotify.RateLimitError{RetryAfter: 5 * time.Minute}}},
+	})
+	got := next.(model)
+	if cmd != nil {
+		// Only the chained drain/overlay may remain; no retry tick.
+		if _, ok := got.ui.cover.imageRetryCount[prefetchNextURL]; ok {
+			t.Fatal("penalty failure must not schedule a retry")
+		}
+	}
+	if _, stamped := m.ui.imgs.failedAt[prefetchNextURL]; !stamped {
+		t.Fatal("penalty failure must mark failed so the cooldown paces re-evaluation")
+	}
+	if _, ok := m.ui.cover.imageRetryCount[prefetchNextURL]; ok {
+		t.Fatal("penalty failure must not enter the retry ladder")
+	}
+	if !got.ui.cover.sweepPaused() {
+		t.Fatal("penalty failure must park the background sweep")
+	}
+	// Transient errors still climb the ladder.
+	if _, cmd := m.handleImageLoadFailure(prefetchAfterURL, errors.New("transient")); cmd == nil {
+		t.Fatal("transient failure must still schedule a retry")
+	}
+	if got.ui.cover.sweepPausedUntil.After(time.Now().Add(sweepPauseMax + time.Minute)) {
+		t.Fatal("sweep park exceeds the cap")
+	}
+}
+
+// End-to-end delivery through the real state handler: an imageless push
+// kicks no sweep; the re-push carrying resolved URLs (the backend's
+// post-batch delivery) must sweep the whole queue; the subsequent skip
+// must be a warm hit with no refetch of the now-current cover.
+func TestRepushDeliversHeadCoverForWarmSkip(t *testing.T) {
+	var fetched atomic.Int32
+	exec := func(context.Context, loader.LoadRequest) []loader.LoadResult {
+		fetched.Add(1)
+		return []loader.LoadResult{{Index: 0, Data: loader.ImageData{Data: prefetchProbePNG(t)}}}
+	}
+	m := prefetchProbeModel(t, exec)
+	runCmds := func(cmd tea.Cmd) {
+		if cmd == nil {
+			return
+		}
+		msg := cmd()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, c := range []tea.Cmd(batch) {
+				if c != nil {
+					_ = c()
+				}
+			}
+		}
+	}
+	pushStatus := func(trackID, coverURL string) *spotify.PlaybackStatus {
+		return &spotify.PlaybackStatus{
+			TrackID: trackID, TrackName: "T", ArtistName: "A",
+			AlbumImageURL: coverURL, ProgressMS: 1000, DurationMS: 200000,
+		}
+	}
+
+	// Push 1: cold start, head imageless (pre-batch state). Only the
+	// current cover may fetch; no sweep without URLs.
+	_, cmd := m.handlePlaybackStateMsg(playbackStateMsg{
+		status:        pushStatus("spotify:track:current", prefetchCurrentURL),
+		queue:         []spotify.QueueItem{{ID: "spotify:track:next", Name: "Next"}},
+		queueIncluded: true,
+	})
+	runCmds(cmd)
+	if n := fetched.Load(); n != 1 {
+		t.Fatalf("cold push fetched %d times, want 1 (current cover only)", n)
+	}
+
+	// Push 2: the post-batch re-push carries resolved URLs for the whole
+	// queue; one sweep batch must warm both covers.
+	_, cmd = m.handlePlaybackStateMsg(playbackStateMsg{
+		status: pushStatus("spotify:track:current", prefetchCurrentURL),
+		queue: []spotify.QueueItem{
+			{ID: "spotify:track:next", Name: "Next", ImageURL: prefetchNextURL, Queued: true},
+			{ID: "spotify:track:after", Name: "After", ImageURL: prefetchAfterURL},
+		},
+		queueIncluded: true,
+	})
+	runCmds(cmd)
+	if n := fetched.Load(); n != 2 {
+		t.Fatalf("re-push fetched %d times, want 2 (one sweep batch for the queue)", n)
+	}
+
+	// The skip: the swept cover is fully cached, so becoming current
+	// must not refetch it.
+	_, cmd = m.handlePlaybackStateMsg(playbackStateMsg{
+		status: pushStatus("spotify:track:next", prefetchNextURL),
+		queue: []spotify.QueueItem{
+			{ID: "spotify:track:after", Name: "After", ImageURL: prefetchAfterURL},
+		},
+		queueIncluded: true,
+	})
+	runCmds(cmd)
+	if m.ui.imgs.shouldQueueLoad(prefetchNextURL) {
+		t.Fatal("skipped-to cover is not warm after sweep")
 	}
 }

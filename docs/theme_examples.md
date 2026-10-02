@@ -47,7 +47,7 @@ Thick borders, line progress bars, no marker glyphs:
   "preset": "gruvbox",
   "glyphs": {
     "border": "ascii",
-    "now_playing": "dot",
+    "queue_cursor": "dot",
     "play_pause": "ascii",
     "bar": "line"
   },
@@ -99,7 +99,7 @@ A full theme from scratch, no preset dependency left:
   "page": "#12100D",
   "glyphs": {
     "border": "double",
-    "now_playing": "play",
+    "queue_cursor": "play",
     "play_pause": "bold",
     "spinner": "points",
     "bar": "block"
@@ -117,7 +117,7 @@ Uses terminal palette indices instead of hex, like the built-in `minimal` preset
 ```json
 {
   "preset": "minimal",
-  "glyphs": { "border": "ascii", "now_playing": "arrow" }
+  "glyphs": { "border": "ascii", "queue_cursor": "arrow" }
 }
 ```
 

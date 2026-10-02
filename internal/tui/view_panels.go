@@ -3,11 +3,87 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"sync"
 
+	"charm.land/bubbles/v2/list"
 	"charm.land/lipgloss/v2"
 
 	"orpheus/internal/spotify"
 )
+
+// stablePreview remembers the last unfiltered browse selection per list so
+// the cover preview never chases the filter cursor: opening search resets
+// the list cursor to the top and every keystroke re-seats the match under
+// it, so a live preview would swap art (and in kitty mode retransmit the
+// whole image plus delete the displaced one) per keystroke. Readers call
+// through the model helpers below on every frame: unfiltered frames refresh
+// the memory, filtering frames serve it. Pointer-shared like the render
+// caches, so every model copy agrees; a nil receiver serves live.
+type stablePreview struct {
+	mu          sync.Mutex
+	playlist    playlistItem
+	hasPlaylist bool
+	album       playlistItem
+	hasAlbum    bool
+}
+
+func (s *stablePreview) forPlaylists(filtering bool, live playlistItem, ok bool) (playlistItem, bool) {
+	if s == nil {
+		return live, ok
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !filtering {
+		s.playlist, s.hasPlaylist = live, ok
+		return live, ok
+	}
+	if !s.hasPlaylist {
+		return live, ok
+	}
+	return s.playlist, true
+}
+
+func (s *stablePreview) forAlbums(filtering bool, live playlistItem, ok bool) (playlistItem, bool) {
+	if s == nil {
+		return live, ok
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !filtering {
+		s.album, s.hasAlbum = live, ok
+		return live, ok
+	}
+	if !s.hasAlbum {
+		return live, ok
+	}
+	return s.album, true
+}
+
+// stablePlaylistSelection is the preview subject: the live cursor, except
+// while the filter input is open, when it holds the pre-filter selection.
+// Playback actions keep reading the live cursor; only display freezes.
+func (m model) stablePlaylistSelection() (playlistItem, bool) {
+	live, ok := m.selectedPlaylist()
+	if m.styles == nil || m.styles.previewStable == nil {
+		return live, ok
+	}
+	return m.styles.previewStable.forPlaylists(m.browse.playlistList.FilterState() == list.Filtering, live, ok)
+}
+
+func (m model) stableAlbumSelection() (playlistItem, bool) {
+	live, ok := m.selectedAlbum()
+	if m.styles == nil || m.styles.previewStable == nil {
+		return live, ok
+	}
+	return m.styles.previewStable.forAlbums(m.browse.albumList.FilterState() == list.Filtering, live, ok)
+}
+
+// startupPending: the startup reveal gate. Content panels hold placeholders
+// until the session is attached AND the first library load has resolved —
+// everything then comes up together instead of trickling in.
+func (m model) startupPending() bool {
+	return m.transport.playerConnecting || !m.browse.librarySettled
+}
 
 func (m model) playlistsTabView() string {
 	layout := m.bodyLayout()
@@ -32,6 +108,14 @@ func (m model) playlistBrowserPanel(w, h int) string {
 			rateHint = "\n" + m.styles.styleDimmed.Render(hint)
 		}
 		inner = m.styles.styleError.Render(truncate(errStr, w-2)) + rateHint + "\n" + m.styles.styleDimmed.Render("r to retry")
+	} else if m.startupPending() {
+		// A stale-looking "No playlists yet" reads as data loss; hold the
+		// connecting placeholder until the session itself is attached.
+		if m.transport.playerConnecting {
+			inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " connecting to Spotify...")
+		} else {
+			inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " loading library...")
+		}
 	} else if m.browse.playlistsLoading && len(m.browse.playlistList.Items()) == 0 {
 		inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " loading library...")
 	} else if len(m.browse.playlistList.Items()) == 0 {
@@ -65,7 +149,7 @@ func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
 	innerW := w - 2
 
 	var coverStr string
-	pl, plOk := m.selectedPlaylist()
+	pl, plOk := m.stablePlaylistSelection()
 	if plOk && pl.summary.ImageURL != "" {
 		coverStr = m.coverOrPlaceholder(pl.summary.ImageURL, coverCols, coverRows)
 	} else {
@@ -121,6 +205,14 @@ func (m model) albumBrowserPanel(w, h int) string {
 			rateHint = "\n" + m.styles.styleDimmed.Render(hint)
 		}
 		inner = m.styles.styleError.Render(truncate(errStr, w-2)) + rateHint + "\n" + m.styles.styleDimmed.Render("r to retry")
+	} else if m.startupPending() {
+		// Same gate as the playlists panel: never show "No saved albums yet"
+		// while the session itself is still attaching.
+		if m.transport.playerConnecting {
+			inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " connecting to Spotify...")
+		} else {
+			inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " loading albums...")
+		}
 	} else if m.browse.playlistsLoading && len(m.browse.albumList.Items()) == 0 {
 		inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " loading albums...")
 	} else if m.browse.albumsForbidden && len(m.browse.albumList.Items()) == 0 {
@@ -140,8 +232,16 @@ func (m model) albumPreviewPanel(w, h, coverCols, coverRows int) string {
 	labelLine := label + "\n" + m.styles.sectionDivider(w)
 	innerW := w - 2
 
+	if m.startupPending() {
+		// No cover, no meta until the reveal: art ahead of the connection is
+		// exactly the early render this panel must not do.
+		inner := m.styles.styleDimmed.Render(m.ui.spinner.View() + " connecting to Spotify...")
+		content := labelLine + "\n" + inner
+		return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
+	}
+
 	var coverStr string
-	al, alOk := m.selectedAlbum()
+	al, alOk := m.stableAlbumSelection()
 	if alOk && al.summary.ImageURL != "" {
 		coverStr = m.coverOrPlaceholder(al.summary.ImageURL, coverCols, coverRows)
 	} else {
@@ -165,6 +265,20 @@ func (m model) albumCoverPanel(w, h, coverCols, coverRows int) string {
 	label := m.styles.styleSectionLabel.Render("Now Playing")
 	labelLine := label + "\n" + m.styles.sectionDivider(w-1)
 	innerW := w - 2
+
+	if m.transport.playerConnecting {
+		// Same reveal gate: placeholder art here renders before the session
+		// exists, and "nothing playing" would deny the connecting state.
+		inner := m.styles.styleDimmed.Render(m.ui.spinner.View() + " connecting to Spotify...")
+		content := labelLine + "\n" + inner
+		return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
+	}
+	if m.transport.status == nil && m.startupPending() {
+		// Attached but library still loading, nothing playing yet: hold.
+		inner := m.styles.styleDimmed.Render(m.ui.spinner.View() + " loading library...")
+		content := labelLine + "\n" + inner
+		return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
+	}
 
 	var coverStr string
 	if m.transport.status != nil && m.transport.status.AlbumImageURL != "" {
@@ -218,7 +332,13 @@ func (m model) queuePanel(w, h int) string {
 	displayQueue := m.visibleQueue()
 
 	if m.transport.status == nil {
-		lines = append(lines, m.styles.styleDimmed.Render("  nothing playing"))
+		if m.transport.playerConnecting {
+			lines = append(lines, m.styles.styleDimmed.Render("  connecting to Spotify…"))
+		} else if m.startupPending() {
+			lines = append(lines, m.styles.styleDimmed.Render("  loading library..."))
+		} else {
+			lines = append(lines, m.styles.styleDimmed.Render("  nothing playing"))
+		}
 	}
 
 	if len(displayQueue) == 0 {
@@ -387,7 +507,12 @@ func (g queueGrid) row(s *themeStyles, w, num int, title, artist string, durMS i
 	}
 
 	var b strings.Builder
-	b.WriteString(strings.Repeat(" ", g.lead))
+	// The marker swaps one lead space, so row widths never change; mono terminals need it.
+	lead := strings.Repeat(" ", g.lead)
+	if mark := s.themeCursorGlyph(); selected && mark != "" {
+		lead = mark + strings.Repeat(" ", max(0, g.lead-1))
+	}
+	b.WriteString(lead)
 	b.WriteString(alignRight(fmt.Sprintf("%d.", num), g.idxW))
 	b.WriteString(" ")
 	b.WriteString(padCell(name, g.titleW))
@@ -406,8 +531,7 @@ func (g queueGrid) row(s *themeStyles, w, num int, title, artist string, durMS i
 	case selected && w >= 40:
 		return s.styleQueueSelected.Render(row)
 	case selected:
-		content := truncate(strings.TrimRight(row, " "), max(1, w-3))
-		return s.styleQueueCursor.Render(content + " > ")
+		return s.styleQueueCursor.Render(row)
 	default:
 		return s.styleQueueTrack.Render(row)
 	}

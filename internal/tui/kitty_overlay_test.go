@@ -105,8 +105,8 @@ func TestOverlayDisplacedImageDeletedByID(t *testing.T) {
 	m.ui.activeTab = tabPlayer
 	m.transport.status = &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: "u1"}
 	m.ui.imgs.protocol = imageProtocolKitty
-	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
-	m.ui.imgs.encoded["u2"] = "ZmFrZQ=="
+	m.ui.imgs.encoded["u1"] = "QUFB"
+	m.ui.imgs.encoded["u2"] = "QkJC"
 	first := m.kittyOverlay()
 	if first == "" {
 		t.Fatal("expected initial kitty render")
@@ -125,14 +125,17 @@ func TestOverlayDisplacedImageDeletedByID(t *testing.T) {
 	if want := fmt.Sprintf("d=I,i=%s", shownID); !strings.Contains(second, want) {
 		t.Fatalf("expected old image purged by ID (%q), got %q", want, second)
 	}
-	if pi, ni := strings.Index(second, "d=I,i="+shownID), strings.Index(second, "ZmFrZQ=="); pi < ni {
+	if pi, ni := strings.Index(second, "d=I,i="+shownID), strings.Index(second, "QkJC"); pi < ni {
 		t.Fatalf("expected purge strictly after placement, got %q", second)
 	}
 	if strings.Contains(second, "a=d,d=A") {
 		t.Fatalf("expected no global delete-all on content swap, got %q", second)
 	}
-	if !strings.Contains(second, "ZmFrZQ==") {
-		t.Fatalf("expected redraw to include the new cover payload, got %q", second)
+	if !strings.Contains(second, "QkJC") {
+		t.Fatalf("expected redraw to include the NEW cover payload, got %q", second)
+	}
+	if strings.Contains(second, "QUFB") {
+		t.Fatalf("expected the displaced cover payload gone from the swap, got %q", second)
 	}
 }
 

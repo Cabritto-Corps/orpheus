@@ -16,7 +16,7 @@ func TestCachedDelegateRenderMatchesDefault(t *testing.T) {
 		items[i] = playlistItem{summary: spotify.PlaylistSummary{ID: fmt.Sprintf("pl-%d", i), Name: fmt.Sprintf("playlist-%d", i)}}
 	}
 	st := buildThemeStyles(themePresetState("default"))
-	cd := newCachedPlaylistDelegate(st, new(string))
+	cd := newCachedPlaylistDelegate(st)
 	m := list.New(items, cd, 40, 20)
 	m.SetShowTitle(false)
 	m.SetShowStatusBar(false)

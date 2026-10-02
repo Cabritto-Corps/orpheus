@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -14,8 +15,36 @@ import (
 	"orpheus/internal/spotify"
 )
 
+type catalogSource struct {
+	mu      sync.RWMutex
+	current spotify.PlaylistCatalog
+}
+
+func newCatalogSource(catalog spotify.PlaylistCatalog) *catalogSource {
+	return &catalogSource{current: catalog}
+}
+
+func (s *catalogSource) get() spotify.PlaylistCatalog {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.current
+}
+
+func (s *catalogSource) set(catalog spotify.PlaylistCatalog) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.current = catalog
+}
+
 type transportModel struct {
 	status                  *spotify.PlaybackStatus
+	playerConnecting        bool
 	queue                   []spotify.QueueItem
 	queueCursor             int
 	queueHasMore            bool
@@ -39,7 +68,6 @@ type transportModel struct {
 	onSongChange            string
 	lastPlayedID            string
 	playbackErr             error
-	queueFingerprint        uint64
 	songChangeInFlight      *atomic.Bool
 }
 
@@ -48,8 +76,11 @@ type browseModel struct {
 	albumsForbidden     bool
 	playlistsErr        error
 	playlistsRetryCount int
-	playlistList        list.Model
-	albumList           list.Model
+	// librarySettled ends the startup reveal gate: first library load resolved
+	// (success OR failure). Later refreshes must not re-blank the panels.
+	librarySettled bool
+	playlistList   list.Model
+	albumList      list.Model
 }
 
 type uiModel struct {
@@ -86,14 +117,14 @@ type uiModel struct {
 type model struct {
 	ctx             context.Context
 	catalog         spotify.PlaylistCatalog
+	catalogSource   *catalogSource
 	deviceName      string
 	tuiCmdCh        chan librespot.TUICommand
 	contextTracksCh chan<- librespot.ContextTracksResult
 	ldr             *loader.BackgroundLoader
 
 	// Pointers so bubbletea's by-value model copies stay coherent.
-	styles     *themeStyles
-	nowPlaying *string
+	styles *themeStyles
 
 	transport transportModel
 	browse    browseModel

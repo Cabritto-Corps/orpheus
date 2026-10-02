@@ -51,6 +51,9 @@ func (m model) headerView() string {
 	} else {
 		statusStr = m.styles.styleHeaderPaused.Render("Orpheus")
 		centerL1 = m.styles.styleHeaderSub.Render("no active playback")
+		if m.transport.playerConnecting {
+			centerL1 = m.styles.styleHeaderSub.Render("connecting to Spotify…")
+		}
 		device := m.icon(iconDevice, iconDeviceNF) + " " + m.deviceName
 		// Must fit the full width here or it wraps and corrupts the
 		// chrome height (no truncation side exists in this state).
@@ -254,12 +257,15 @@ func (m model) helpModalView() string {
 	modalW, innerH, contentW := helpModalSize(m.ui.width, m.ui.height)
 
 	hint := m.ui.keys.QueueUp.Help().Key + "/" + m.ui.keys.QueueDown.Help().Key + " scroll   " + m.ui.keys.ToggleHelp.Help().Key + " or " + m.ui.keys.CloseModal.Help().Key + " close"
-	body := m.helpGroupedBody(contentW, innerH-4)
+	// The viewport already owns the scrolled content; skip the full layout.
+	var body string
 	if vp := m.ui.helpViewport; vp != nil {
 		body = vp.View()
 		if vp.AtTop() {
 			hint = m.ui.keys.QueueUp.Help().Key + "/" + m.ui.keys.QueueDown.Help().Key + " scroll   " + m.ui.keys.CloseModal.Help().Key + " close"
 		}
+	} else {
+		body = m.helpGroupedBody(contentW, innerH-4)
 	}
 
 	return m.styles.modalFrame(m.ui.width, m.ui.height, m.styles.styleModalTitle.Render("Help"),
@@ -331,6 +337,13 @@ func (m model) kittyOverlayBytes() (string, bool) {
 	if m.ui.imgs == nil {
 		return "", false
 	}
+	if tooSmallFrame(m.ui.width, m.ui.height) {
+		// The frame never laid out: clear any placement.
+		if id := m.ui.imgs.takePendingKittyPurge(); id != 0 {
+			return deleteKittyImageData(id), false
+		}
+		return deleteKittyImage(m.ui.imgs.clearOverlayIntent()), false
+	}
 	if m.ui.imgs.protocolForRender() != imageProtocolKitty {
 		// The switch resets the slot without naming the shown image;
 		// its pending purge goes out once here, then silence.
@@ -355,12 +368,12 @@ func (m model) kittyOverlayBytes() (string, bool) {
 	var url, subjectID string
 	switch m.ui.activeTab {
 	case tabPlaylists:
-		if pl, ok := m.selectedPlaylist(); ok {
+		if pl, ok := m.stablePlaylistSelection(); ok {
 			url = pl.summary.ImageURL
 			subjectID = strings.TrimSpace(pl.summary.ID)
 		}
 	case tabAlbums:
-		if al, ok := m.selectedAlbum(); ok {
+		if al, ok := m.stableAlbumSelection(); ok {
 			url = al.summary.ImageURL
 			subjectID = strings.TrimSpace(al.summary.ID)
 		}

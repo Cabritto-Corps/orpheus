@@ -113,6 +113,7 @@ func (c *imgCache) encodedFor(url string) string {
 }
 
 func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRows int) {
+	img = fitCachedImage(img)
 	c.mu.RLock()
 	protocol := c.protocol
 	c.mu.RUnlock()
@@ -208,6 +209,12 @@ func (c *imgCache) pinURL(url string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.pinned[url] = struct{}{}
+}
+
+func (c *imgCache) unpinURL(url string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.pinned, url)
 }
 
 func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int, profile colorprofile.Profile) {
@@ -473,10 +480,37 @@ const (
 	imageFetchTimeout              = 6 * time.Second
 	imageFetchFailCooldown         = 30 * time.Second
 	imageFetchPriorityFailCooldown = 5 * time.Second
-	maxCachedImages                = 256
+	maxCachedImages                = 96
 	maxCachedCoverRenders          = 512
 	kittyEncodePixelBudget         = 512
+	// Consumers resample below this; larger originals only burn memory.
+	maxCachedImageLongestSide = 512
 )
+
+func fitCachedImage(img image.Image) image.Image {
+	if img == nil {
+		return nil
+	}
+	sb := img.Bounds()
+	pw, ph := sb.Dx(), sb.Dy()
+	if pw <= 0 || ph <= 0 || max(pw, ph) <= maxCachedImageLongestSide {
+		return img
+	}
+	if pw >= ph {
+		ph = ph * maxCachedImageLongestSide / pw
+		pw = maxCachedImageLongestSide
+	} else {
+		pw = pw * maxCachedImageLongestSide / ph
+		ph = maxCachedImageLongestSide
+	}
+	if pw < 1 {
+		pw = 1
+	}
+	if ph < 1 {
+		ph = 1
+	}
+	return resizeBilinear(img, pw, ph)
+}
 
 func (c *imgCache) deleteCoversForURLLocked(url string) {
 	if keys, ok := c.coverKeysByURL[url]; ok {

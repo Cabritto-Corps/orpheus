@@ -41,6 +41,13 @@ type themeStyles struct {
 
 	tabBar      *stringCache[tabBarCacheKey]
 	placeholder *stringCache[placeholderCacheKey]
+	bars        *stringCache[barCacheKey]
+	dividers    *stringCache[dividerCacheKey]
+
+	// Last unfiltered browse selection per list, so the cover preview
+	// never chases the filter cursor (shared pointer: every model copy
+	// agrees, and a theme rebuild starts it cold like the caches).
+	previewStable *stablePreview
 
 	// One fg-block style per palette color, so the picker doesn't rebuild
 	// styles per cell per frame.
@@ -123,11 +130,14 @@ func hexToRGB(s string) (r, g, b uint8, ok bool) {
 
 func buildThemeStyles(st themeState) *themeStyles {
 	s := &themeStyles{
-		tabBar:       newStringCache[tabBarCacheKey](),
-		placeholder:  newStringCache[placeholderCacheKey](),
-		help:         help.New(),
-		swatchStyles: map[color.Color]lipgloss.Style{},
-		colorProfile: colorprofile.Env(os.Environ()),
+		tabBar:        newStringCache[tabBarCacheKey](),
+		placeholder:   newStringCache[placeholderCacheKey](),
+		bars:          newStringCache[barCacheKey](),
+		dividers:      newStringCache[dividerCacheKey](),
+		help:          help.New(),
+		previewStable: &stablePreview{},
+		swatchStyles:  map[color.Color]lipgloss.Style{},
+		colorProfile:  colorprofile.Env(os.Environ()),
 	}
 	s.colorBlue = lipgloss.Color(st.colors.Blue)
 	s.colorBlueLight = lipgloss.Color(st.colors.BlueLight)
@@ -323,16 +333,18 @@ func (s *themeStyles) themePlayPauseGlyphs() (play, pause string) {
 	}
 }
 
-func (s *themeStyles) themeNowPlayingGlyph() string {
-	switch s.activeGlyphs.NowPlaying {
+func (s *themeStyles) themeCursorGlyph() string {
+	switch s.activeGlyphs.QueueCursor {
+	case "note":
+		return "♪"
 	case "dot":
 		return "●"
 	case "play":
 		return "▶"
-	case "arrow":
-		return "→"
+	case "plain":
+		return ""
 	default:
-		return "♪"
+		return ">"
 	}
 }
 
@@ -370,19 +382,31 @@ func themedSpinner(s *themeStyles) spinner.Model {
 }
 
 func (s *themeStyles) sectionDivider(w int) string {
-	return s.styleDivider.Render(strings.Repeat("─", max(0, w)))
+	key := dividerCacheKey{horizontal: true, n: w}
+	if cached, ok := s.dividers.get(key); ok {
+		return cached
+	}
+	out := s.styleDivider.Render(strings.Repeat("─", max(0, w)))
+	s.dividers.put(key, out)
+	return out
 }
 
 func (s *themeStyles) verticalDivider(h int) string {
 	if h <= 0 {
 		return ""
 	}
+	key := dividerCacheKey{n: h}
+	if cached, ok := s.dividers.get(key); ok {
+		return cached
+	}
 	line := s.styleDivider.Render("│")
-	return strings.Repeat(line+"\n", h-1) + line
+	out := strings.Repeat(line+"\n", h-1) + line
+	s.dividers.put(key, out)
+	return out
 }
 
-func newBrowseList(s *themeStyles, nowPlaying *string) list.Model {
-	l := list.New(nil, newCachedPlaylistDelegate(s, nowPlaying), 40, 20)
+func newBrowseList(s *themeStyles) list.Model {
+	l := list.New(nil, newCachedPlaylistDelegate(s), 40, 20)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)

@@ -27,6 +27,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleTickMsg()
 	case playbackStateMsg:
 		return m.handlePlaybackStateMsg(msg)
+	case playerBackendMsg:
+		return m.handlePlayerBackendMsg(msg)
 	case connectionLostMsg:
 		m.transport.playbackErr = msg.err
 		return m, nil
@@ -50,6 +52,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleSeekDebounceMsg(msg)
 	case tuiCmdRetryMsg:
 		return m.handleTUICmdRetryMsg(msg)
+	case inputRetryMsg:
+		return m, m.pumpInputExecutor()
 	case trackPopupItemsMsg:
 		return m.handleTrackPopupItemsMsg(msg)
 	case list.FilterMatchesMsg:
@@ -62,4 +66,24 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
+}
+
+func (m model) handlePlayerBackendMsg(msg playerBackendMsg) (tea.Model, tea.Cmd) {
+	m.transport.playerConnecting = false
+	if msg.err != nil {
+		// No global reset here: this failure must survive as the UI's startup error.
+		// The startup reveal gate must also resolve, or the failure stays hidden
+		// behind a connecting placeholder.
+		m.browse.librarySettled = true
+		m.transport.playbackErr = msg.err
+		return m, nil
+	}
+	if msg.catalog != nil {
+		if m.catalogSource != nil {
+			m.catalogSource.set(msg.catalog)
+		}
+		m.catalog = msg.catalog
+		return m, m.loadPlaylistsCmd()
+	}
+	return m, nil
 }

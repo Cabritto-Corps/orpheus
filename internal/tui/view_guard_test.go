@@ -65,10 +65,6 @@ func guardModel(tb testing.TB, v frameVariant) model {
 			TrackCount: 42,
 		}}
 	}
-	if v.playing {
-		// One browse row carries the now-playing glyph.
-		m.setNowPlaying("spotify:playlist:pl3")
-	}
 	m.browse.playlistList.SetItems(items)
 	m.browse.albumList.SetItems(items[:20])
 	if v.erroring {
@@ -115,7 +111,7 @@ func guardModel(tb testing.TB, v frameVariant) model {
 		}
 		m.ui.trackPopupItems = items
 		_, listW, listH := popupModalSize(v.width, v.height)
-		popup := list.New(nil, newTrackPopupDelegate(m.styles, m.nowPlaying), listW, listH)
+		popup := list.New(nil, newTrackPopupDelegate(m.styles), listW, listH)
 		popup.SetShowTitle(false)
 		popup.SetShowStatusBar(true)
 		popup.SetFilteringEnabled(true)
@@ -213,20 +209,49 @@ func TestViewFrameContractModals(t *testing.T) {
 }
 
 func TestPopupListSizeInvariantUnderResize(t *testing.T) {
-	for _, size := range [][2]int{{60, 20}, {80, 24}, {120, 40}} {
-		v := frameVariant{name: "popup", width: size[0], height: size[1], tab: tabPlayer, playing: true, hasQueue: true, modal: "popup"}
-		m := guardModel(t, v)
-		_, wantW, wantH := popupModalSize(size[0], size[1])
-		gotW, gotH := m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height()
-		if gotW != wantW || gotH != wantH {
-			t.Fatalf("open at %dx%d: list %dx%d, want %dx%d", size[0], size[1], gotW, gotH, wantW, wantH)
-		}
+	// Hop between sizes: same-size round trips miss one-directional drift.
+	v := frameVariant{name: "popup", width: 120, height: 40, tab: tabPlayer, playing: true, hasQueue: true, modal: "popup"}
+	m := guardModel(t, v)
+	_, wantW, wantH := popupModalSize(120, 40)
+	if gotW, gotH := m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height(); gotW != wantW || gotH != wantH {
+		t.Fatalf("open at 120x40: list %dx%d, want %dx%d", gotW, gotH, wantW, wantH)
+	}
+	for _, size := range [][2]int{{60, 20}, {120, 40}} {
 		m2, _ := m.handleWindowSizeMsg(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = m2.(model)
-		gotW, gotH = m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height()
-		if gotW != wantW || gotH != wantH {
-			t.Fatalf("resize at %dx%d: list %dx%d, want open-time %dx%d", size[0], size[1], gotW, gotH, wantW, wantH)
+		_, wantW, wantH := popupModalSize(size[0], size[1])
+		if gotW, gotH := m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height(); gotW != wantW || gotH != wantH {
+			t.Fatalf("resized to %dx%d: list %dx%d, want %dx%d", size[0], size[1], gotW, gotH, wantW, wantH)
 		}
+	}
+}
+
+func TestKittyOverlaySilentBelowFrameThreshold(t *testing.T) {
+	t.Setenv("TMUX", "")
+	// A fresh sub-threshold slot must emit nothing.
+	v := frameVariant{name: "tiny", width: 30, height: 10, tab: tabPlayer, playing: true}
+	m := guardModel(t, v)
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.transport.status.AlbumImageURL = "u1"
+	m.ui.imgs.encoded["u1"] = "QUFB"
+	if out := m.kittyOverlay(); out != "" {
+		t.Fatalf("expected no overlay bytes below the frame threshold, got %q", out)
+	}
+
+	// After shrinking, delete the live placement but place nothing.
+	m.ui.width, m.ui.height = 120, 40
+	if first := m.kittyOverlay(); first == "" {
+		t.Fatal("expected initial kitty render at full size")
+	}
+	m.ui.width, m.ui.height = 30, 10
+	small := m.kittyOverlay()
+	for _, want := range []string{"a=T", "a=p"} {
+		if strings.Contains(small, want) {
+			t.Fatalf("expected no placement %q below the frame threshold, got %q", want, small)
+		}
+	}
+	if m.ui.imgs.overlay.visible {
+		t.Fatal("expected the overlay slot cleared below the frame threshold")
 	}
 }
 

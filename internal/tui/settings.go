@@ -73,7 +73,7 @@ func (m model) handleSettingsRoot(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case keyMatches(msg, k.CloseModal):
 		s.open = false
-		return m, nil
+		return m, m.kittyOverlayCmd()
 	case keyMatches(msg, k.QueueUp):
 		s.cursor = (s.cursor + len(settingsRootRows) - 1) % len(settingsRootRows)
 		return m, nil
@@ -715,8 +715,8 @@ const maxConflictHintLines = 3
 
 func (m *model) rethemeBrowseLists() {
 	// In-place: SetDelegate keeps items, cursor and pagination (no teardown).
-	m.browse.playlistList.SetDelegate(newCachedPlaylistDelegate(m.styles, m.nowPlaying))
-	m.browse.albumList.SetDelegate(newCachedPlaylistDelegate(m.styles, m.nowPlaying))
+	m.browse.playlistList.SetDelegate(newCachedPlaylistDelegate(m.styles))
+	m.browse.albumList.SetDelegate(newCachedPlaylistDelegate(m.styles))
 	applyListStyles(&m.browse.playlistList, m.styles)
 	applyListStyles(&m.browse.albumList, m.styles)
 }

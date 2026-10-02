@@ -2,7 +2,6 @@ package tui
 
 import (
 	"errors"
-	"hash/fnv"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +37,29 @@ func playbackCoverSubjectChanged(prev, next *spotify.PlaybackStatus) bool {
 	return prevSubject != nextSubject
 }
 
+// Progress changes within this window still count as frozen.
+const heartbeatProgressToleranceMS = 1000
+
+// Frozen pushes must not clear a live transport error.
+func isFrozenHeartbeat(prev *spotify.PlaybackStatus, currentQueueLen int, msg playbackStateMsg) bool {
+	if prev == nil || msg.status == nil {
+		return false
+	}
+	if golibrespot.NormalizeSpotifyId(prev.TrackID) != golibrespot.NormalizeSpotifyId(msg.status.TrackID) {
+		return false
+	}
+	if prev.Playing != msg.status.Playing {
+		return false
+	}
+	if absInt(prev.ProgressMS-msg.status.ProgressMS) > heartbeatProgressToleranceMS {
+		return false
+	}
+	if msg.queueIncluded && len(msg.queue) != currentQueueLen {
+		return false
+	}
+	return true
+}
+
 func queueHeadTrackID(queue []spotify.QueueItem) string {
 	if len(queue) == 0 {
 		return ""
@@ -45,17 +67,17 @@ func queueHeadTrackID(queue []spotify.QueueItem) string {
 	return golibrespot.NormalizeSpotifyId(queue[0].ID)
 }
 
-// Up-next view: pushed queue minus the playing head entry — the same visible
-// view the backend uses for queue commands.
+// Up-next view is the pushed queue as-is; the head is already excluded.
+// IDs can duplicate, so stripping by ID would shift every command.
 func (m model) visibleQueue() []spotify.QueueItem {
-	q := m.transport.queue
-	if m.transport.status != nil && len(q) > 0 {
-		currentID := golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
-		if currentID != "" && golibrespot.NormalizeSpotifyId(q[0].ID) == currentID {
-			return q[1:]
-		}
+	return m.transport.queue
+}
+
+func (m model) currentContextURI() string {
+	if m.transport.status == nil {
+		return ""
 	}
-	return q
+	return strings.TrimSpace(m.transport.status.ContextURI)
 }
 
 func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.PlaybackStatus, prevQueueHead, nextQueueHead string) {
@@ -347,22 +369,6 @@ func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool
 	if updateHasMore {
 		m.transport.queueHasMore = queueHasMore
 	}
-	fingerprint := queueFingerprint(m.transport.queue)
-	if fingerprint != m.transport.queueFingerprint {
-		m.transport.queueFingerprint = fingerprint
-	}
-}
-
-func queueFingerprint(queue []spotify.QueueItem) uint64 {
-	if len(queue) == 0 {
-		return 0
-	}
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(strconv.Itoa(len(queue))))
-	for _, i := range []int{0, len(queue) / 2, len(queue) - 1} {
-		_, _ = h.Write([]byte(queue[i].ID))
-	}
-	return h.Sum64()
 }
 
 func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.QueueItem, next *spotify.PlaybackStatus) *spotify.PlaybackStatus {

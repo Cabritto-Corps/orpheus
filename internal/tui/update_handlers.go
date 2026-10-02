@@ -45,7 +45,50 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	)
 }
 
+func (m model) nextTickInterval() time.Duration {
+	if m.transport.playerConnecting {
+		return uiTickInterval
+	}
+	if m.transport.status != nil && m.transport.status.Playing {
+		return uiTickInterval
+	}
+	if m.transport.transition.Pending() {
+		return uiTickInterval
+	}
+	if m.modalKind() != modalNone {
+		return uiTickInterval
+	}
+	if len(m.transport.inputQueue) > 0 {
+		return uiTickInterval
+	}
+	if m.browse.playlistsLoading {
+		return uiTickInterval
+	}
+	if m.transport.volDebouncePending >= 0 || m.transport.seekDebouncePending >= 0 {
+		return uiTickInterval
+	}
+	if m.ui.startupCoverBoostTicks > 0 {
+		return uiTickInterval
+	}
+	if len(m.ui.cover.imageRetryCount) > 0 || len(m.ui.cover.resolveInFlight) > 0 {
+		return uiTickInterval
+	}
+	if m.ui.cover.queue != nil && m.ui.cover.queue.Len() > 0 {
+		return uiTickInterval
+	}
+	if m.ui.imgs != nil {
+		m.ui.imgs.mu.RLock()
+		pending := len(m.ui.imgs.inflight) > 0
+		m.ui.imgs.mu.RUnlock()
+		if pending {
+			return uiTickInterval
+		}
+	}
+	return uiIdleTickInterval
+}
+
 func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
+	m.maybeClearTransportTransition(m.transport.status)
 	m.interpolatePlaybackProgress(uiTickInterval)
 	// Drive the list spinner from the app tick; it is already the clock.
 	m.ui.spinner, _ = m.ui.spinner.Update(spinner.TickMsg{Time: time.Now(), ID: m.ui.spinner.ID()})
@@ -91,7 +134,7 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 	}
 
 	cmds := make([]tea.Cmd, 0, 8)
-	cmds = append(cmds, m.tickCmd(), inputCmd, m.kittyOverlayCmd())
+	cmds = append(cmds, m.tickCmdWithInterval(m.nextTickInterval()), inputCmd, m.kittyOverlayCmd())
 	if popupTimeoutCmd != nil {
 		cmds = append(cmds, popupTimeoutCmd)
 	}
@@ -115,6 +158,8 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 
 func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	m.browse.playlistsLoading = false
+	// Startup reveal gate resolves on the first load outcome, not on success.
+	m.browse.librarySettled = true
 	if msg.err != nil {
 		m.browse.playlistsErr = msg.err
 		slog.Error("fetch playlists failed", "error", msg.err)
@@ -260,26 +305,36 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 		m.ui.cover.playerCoverFailStreak++
 		m.maybeFallbackFromKittyOnPlayerFailures(msg.url)
 	}
-	return m, m.handleImageLoadFailure(msg.url, msg.err)
+	return m.handleImageLoadFailure(msg.url, msg.err)
 }
 
-// Shared retry ladder for single and batch image loads.
-func (m model) handleImageLoadFailure(url string, err error) tea.Cmd {
-	// Release failed-prefetch memory so the next push re-evaluates; delete survives this value-receiver copy,
-	// while a scalar write would be silently dropped. Fail cooldown paces re-evaluation in shouldQueueLoad.
-	delete(m.ui.cover.prefetched, strings.TrimSpace(url))
+// Shared retry ladder for single and batch image loads. A server penalty
+// skips the ladder entirely: mark-and-park instead of retrying into it,
+// and park the background sweep for the server's wait (priority loads
+// keep flowing). shouldQueueLoad's fail cooldown paces re-evaluation.
+func (m model) handleImageLoadFailure(url string, err error) (model, tea.Cmd) {
+	if spotify.IsRateLimitError(err) {
+		m.ui.imgs.markFailed(url)
+		m.ui.cover.clearRetry(url)
+		if wait, ok := spotify.RateLimitRetryAfter(err); ok {
+			m.ui.cover.pauseSweep(min(wait, sweepPauseMax))
+		} else {
+			m.ui.cover.pauseSweep(time.Minute)
+		}
+		return m, nil
+	}
 	attempt := m.ui.cover.imageRetryCount[url] + 1
 	if attempt > imageLoadRetryMax {
 		m.ui.cover.clearRetry(url)
 		m.ui.imgs.markFailed(url)
 		slog.Warn("image load retries exhausted", "url", url, "error", err)
 		if m.libraryHasImageURL(url) {
-			return m.queueResolvesForImageURLCmd(url, libraryCoverRefreshBatch)
+			return m, m.queueResolvesForImageURLCmd(url, libraryCoverRefreshBatch)
 		}
-		return nil
+		return m, nil
 	}
 	_, token := m.ui.cover.nextRetry(url)
-	return m.imageRetryCmd(url, attempt, token)
+	return m, m.imageRetryCmd(url, attempt, token)
 }
 
 func (m model) handleImageRetryMsg(msg imageRetryMsg) (tea.Model, tea.Cmd) {
@@ -300,6 +355,13 @@ func (m model) handleCoverImageResolvedMsg(msg coverImageResolvedMsg) (tea.Model
 	key := coverResolveKey(msg.kind, msg.id)
 	delete(m.ui.cover.resolveInFlight, key)
 	if msg.err != nil {
+		if spotify.IsRateLimitError(msg.err) {
+			if wait, ok := spotify.RateLimitRetryAfter(msg.err); ok {
+				m.ui.cover.pauseSweep(min(wait, sweepPauseMax))
+			} else {
+				m.ui.cover.pauseSweep(time.Minute)
+			}
+		}
 		slog.Warn("resolve context image URL failed", "kind", msg.kind, "id", msg.id, "error", msg.err)
 		return m, nil
 	}
@@ -434,7 +496,17 @@ func (m model) handleCoverImageURLsBatchResolvedMsg(msg coverImageURLsBatchResol
 	for _, r := range msg.results {
 		key := coverResolveKey(r.kind, r.id)
 		delete(m.ui.cover.resolveInFlight, key)
-		if r.err != nil || strings.TrimSpace(r.url) == "" {
+		if r.err != nil {
+			if spotify.IsRateLimitError(r.err) {
+				if wait, ok := spotify.RateLimitRetryAfter(r.err); ok {
+					m.ui.cover.pauseSweep(min(wait, sweepPauseMax))
+				} else {
+					m.ui.cover.pauseSweep(time.Minute)
+				}
+			}
+			continue
+		}
+		if strings.TrimSpace(r.url) == "" {
 			continue
 		}
 		if !m.applyResolvedContextImageURL(r.kind, r.id, r.url) {
@@ -453,7 +525,9 @@ func (m model) handleImagesBatchLoadedMsg(msg imagesBatchLoadedMsg) (tea.Model, 
 	for _, r := range msg.results {
 		m.ui.imgs.finishLoad(r.url)
 		if r.err != nil {
-			if retryCmd := m.handleImageLoadFailure(r.url, r.err); retryCmd != nil {
+			var retryCmd tea.Cmd
+			m, retryCmd = m.handleImageLoadFailure(r.url, r.err)
+			if retryCmd != nil {
 				cmds = append(cmds, retryCmd)
 			}
 			continue
@@ -464,6 +538,10 @@ func (m model) handleImagesBatchLoadedMsg(msg imagesBatchLoadedMsg) (tea.Model, 
 		}
 	}
 	if cmd := m.drainCoverQueueCmd(coverQueueDrainBatch); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	// Batch loads can also complete covers: restore art immediately.
+	if cmd := m.kittyOverlayCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	if len(cmds) == 0 {

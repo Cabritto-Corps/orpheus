@@ -51,10 +51,66 @@ func TestBrowseListVKeyDoesNotQuit(t *testing.T) {
 func TestTrackPopupVKeyDoesNotQuit(t *testing.T) {
 	m := testListModel()
 	m.ui.trackPopupOpen = true
-	m.ui.trackPopupList = newTrackPopupList(m.styles, m.nowPlaying, 100, 40)
+	m.ui.trackPopupList = newTrackPopupList(m.styles, 100, 40)
 	_, cmd := sendTop(m, pressRune('v'))
 	if batchContainsQuit(cmd) {
 		t.Error("track popup: pressing v returned tea.Quit")
+	}
+}
+
+// The v-quit incident proved structural assertions miss re-enabled bindings:
+// press the generated default vocabulary and require no tea.Quit.
+// Single-rune failures exit the app.
+func TestBrowseListsYieldNoQuitForDefaultVocabulary(t *testing.T) {
+	km := list.DefaultKeyMap()
+	bindings := []key.Binding{
+		km.CursorUp, km.CursorDown, km.NextPage, km.PrevPage,
+		km.GoToStart, km.GoToEnd, km.Filter, km.ClearFilter,
+		km.CancelWhileFiltering, km.AcceptWhileFiltering,
+		km.ShowFullHelp, km.CloseFullHelp, km.Quit, km.ForceQuit,
+	}
+	seen := map[string]bool{}
+	var vocab []string
+	for _, b := range bindings {
+		for _, k := range b.Keys() {
+			if !seen[k] {
+				seen[k] = true
+				vocab = append(vocab, k)
+			}
+		}
+	}
+	if len(vocab) == 0 {
+		t.Fatal("expected a non-empty default key vocabulary")
+	}
+	// The app's own quit keys quit by design.
+	probe := testListModel()
+	skip := map[string]bool{}
+	for _, k := range probe.ui.keys.Quit.Keys() {
+		skip[canonicalKeySpec(k)] = true
+	}
+	skip["ctrl+c"] = true
+	for _, name := range vocab {
+		if skip[canonicalKeySpec(name)] {
+			continue
+		}
+		mod, code, text, ok := parseKeySpec(name)
+		if !ok {
+			t.Fatalf("default vocabulary key %q has no press form", name)
+		}
+		press := pressKey(code, text, mod)
+		for _, tab := range []tab{tabPlaylists, tabAlbums} {
+			m := testListModel()
+			m.ui.activeTab = tab
+			if _, cmd := sendTop(m, press); batchContainsQuit(cmd) {
+				t.Errorf("tab %v: pressing default key %q returned tea.Quit", tab, name)
+			}
+		}
+		pm := testListModel()
+		pm.ui.trackPopupOpen = true
+		pm.ui.trackPopupList = newTrackPopupList(pm.styles, 100, 40)
+		if _, cmd := sendTop(pm, press); batchContainsQuit(cmd) {
+			t.Errorf("popup: pressing default key %q returned tea.Quit", name)
+		}
 	}
 }
 
