@@ -60,7 +60,7 @@ CI runs vet, race-enabled tests, a build, and lint on pull requests. It uses the
 ## Send a pull request
 
 1. Check existing [issues](https://github.com/Cabritto-Corps/orpheus/issues) and [pull requests](https://github.com/Cabritto-Corps/orpheus/pulls); for larger changes, open an issue to discuss the approach first.
-2. Create a branch from `main` in your fork (or in the repository if you have write access), make a focused change, and add or update tests/docs where appropriate.
+2. Create a branch from `dev` in your fork (or in the repository if you have write access), make a focused change, and add or update tests/docs where appropriate.
 3. Run the relevant checks above, then open a pull request against `Cabritto-Corps/orpheus:main`. Describe what changed, link any related issue, and include how you tested it. Do not include `.env`, tokens, or generated binaries.
 
 For configuration and UI behavior, see the [configuration docs](docs/config.md) and [theming docs](docs/theming.md).
