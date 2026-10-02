@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -68,7 +69,11 @@ func ApplyAppSettings(cfg *Config, settings AppSettings) {
 			cfg.Crossfade = *s.Enabled
 		}
 		if s.Seconds != nil {
-			cfg.CrossfadeSeconds = *s.Seconds
+			if *s.Seconds < 0 {
+				warnConfigValue("crossfade.seconds", strconv.FormatFloat(*s.Seconds, 'f', -1, 64))
+			} else {
+				cfg.CrossfadeSeconds = *s.Seconds
+			}
 		}
 	}
 	if s := settings.AudioCache; s != nil {
@@ -76,7 +81,12 @@ func ApplyAppSettings(cfg *Config, settings AppSettings) {
 			cfg.AudioCacheEnabled = *s.Enabled
 		}
 		if s.SizeMB != nil {
-			cfg.AudioCacheSizeMB = *s.SizeMB
+			// Non-positive sizes would disable cache eviction, so fall back warned.
+			if *s.SizeMB <= 0 {
+				warnConfigValue("audio_cache.size_mb", strconv.FormatInt(*s.SizeMB, 10))
+			} else {
+				cfg.AudioCacheSizeMB = *s.SizeMB
+			}
 		}
 	}
 	if s := settings.Images; s != nil && s.Style != nil {

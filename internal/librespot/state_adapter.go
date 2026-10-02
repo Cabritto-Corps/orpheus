@@ -54,6 +54,7 @@ func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUp
 	if p.state.player.Track != nil {
 		out.TrackID = golibrespot.NormalizeSpotifyId(p.state.player.Track.Uri)
 	}
+	out.ContextURI = strings.TrimSpace(p.state.player.ContextUri)
 	if p.primaryStream == nil && p.state.player.Track != nil && p.state.player.Track.Metadata != nil {
 		out.TrackName = metadataValue(p.state.player.Track.Metadata, "title", "name", "track_name")
 		out.ArtistName = metadataValue(p.state.player.Track.Metadata, "artist_name", "artist", "artists", "show_name")
@@ -97,9 +98,12 @@ func providedTracksToQueueEntries(p *AppPlayer, tracks []*connectpb.ProvidedTrac
 	out := make([]PlaybackStateQueueEntry, 0, len(tracks))
 	for _, t := range tracks {
 		id := golibrespot.NormalizeSpotifyId(t.Uri)
-		e := PlaybackStateQueueEntry{ID: id}
+		// Origin follows the fork's is_queued marker.
+		e := PlaybackStateQueueEntry{ID: id, Queued: t.Metadata["is_queued"] == "true"}
 		if cached := p.getCachedQueueMeta(id); cached != nil {
 			e = *cached
+			// Re-read origin: the same ID can move between regions.
+			e.Queued = t.Metadata["is_queued"] == "true"
 			out = append(out, e)
 			continue
 		}

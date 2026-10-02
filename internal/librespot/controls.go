@@ -258,6 +258,9 @@ func (p *AppPlayer) topUpQueue(ctx context.Context) {
 	p.topUpSuppressArm = true
 	p.updateState()
 	p.emitPlaybackState()
+	// New pages arrive imageless: sweep them in the background so a skip
+	// into the extended region is as warm as the head.
+	p.maybeSweepQueueImages()
 }
 
 func (p *AppPlayer) schedulePrefetchNext() {
@@ -402,6 +405,7 @@ func (p *AppPlayer) runAdvanceNextTransition(source string, forceNext, dropTrans
 			if p.endGuardFailures >= endGuardMaxFailures {
 				p.runtime.Log.WithError(err).WithField("source", source).
 					Errorf("giving up end-of-track advance after %d failures", p.endGuardFailures)
+				p.terminalErrActive = true
 				p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "playback stuck: failed to advance to the next track"})
 				return false, nil
 			}
@@ -617,6 +621,7 @@ func (p *AppPlayer) handleUnexpectedStop(failedSource golibrespot.AudioSource) {
 		// Stay paused but mark the transport dead: only a not-playing state routes
 		// the next press to Resume, and that play recreates the gone output.
 		p.outputRecreateOnPlay = true
+		p.terminalErrActive = true
 		p.setPlayerTransportState(false, false, true)
 		p.emitPlaybackStateLight()
 		p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "playback stopped — press play to retry"})
@@ -628,6 +633,7 @@ func (p *AppPlayer) handleUnexpectedStop(failedSource golibrespot.AudioSource) {
 		p.runtime.Log.WithField("uri", uri).Error("giving up output-error recovery after repeated failures")
 		// Same transport-dead reasoning: report stopped so the toggle reaches Resume.
 		p.outputRecreateOnPlay = true
+		p.terminalErrActive = true
 		p.setPlayerTransportState(false, false, false)
 		p.emitPlaybackStateLight()
 		p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "playback stopped after repeated output errors — press play to retry"})
@@ -658,9 +664,11 @@ func (p *AppPlayer) advanceAfterOutputFailure() {
 	case err != nil:
 		p.runtime.Log.WithError(err).Error("output-error advance failed")
 		msg = "output error — could not advance, press next to continue"
+		p.terminalErrActive = true
 	case !advanced:
 		// Contention and an exhausted queue are indistinguishable; only a manual next helps.
 		msg = "output error — press next to continue"
+		p.terminalErrActive = true
 	}
 	p.emitPlaybackStateLight()
 	p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: msg})
@@ -740,11 +748,18 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 	p.resetPlaybackCaches(true)
 	p.syncPlayerTrackState(ctxTracks, nil)
 	allTracks := ctxTracks.AllTracks(ctx)
+	// Head cover URLs are computed on Run (tracks.List is single-goroutine);
+	// the batch itself runs off it.
+	headURIs := headImageURIs(ctxTracks.UpcomingTracksLoaded(headImageWindow), p.queueHeadImageMissing, headImageWindow)
 	p.scheduleQueueTopUp()
+	p.queueHeadWarmInFlight.Store(true)
 	go func() {
+		defer p.queueHeadWarmInFlight.Store(false)
 		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
 		defer metaCancel()
-		p.resolveContextQueueMetadata(metaCtx, allTracks)
+		if p.resolveContextQueueMetadata(metaCtx, allTracks, headURIs) {
+			p.signalQueueMetaUpdated()
+		}
 	}()
 	if err := p.loadCurrentTrack(ctx, paused, drop); err != nil {
 		if isUnplayableMediaError(err) {
@@ -760,6 +775,9 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 }
 
 func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) error {
+	if p.state == nil || p.state.player == nil || p.state.player.Track == nil || p.state.player.Track.Uri == "" {
+		return fmt.Errorf("no current track")
+	}
 	// Defer closing the old primary until SetPrimaryStream replaces it: closing first
 	// leaves the output goroutine reading a closed cgo decoder.
 	var oldStream *player.Stream
@@ -840,6 +858,7 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	// Any committed load revives the output; a same-track commit keeps the
 	// stop-recovery guard.
 	p.outputRecreateOnPlay = false
+	p.terminalErrActive = false
 	p.maybeResetStopRecoveryGuard(spotId.Uri())
 	// A promoted secondary is already playing (the fork crossfaded into it ahead of
 	// this advance): seeking to 0 would rewind the fade-consumed decoder and restart
@@ -861,6 +880,8 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	p.updateState()
 	p.schedulePrefetchNext()
 	p.emitPlaybackState()
+	// Warm the coming covers ahead of the next skip; no-op when warm or busy.
+	p.maybeWarmQueueHeadImages()
 	return nil
 }
 
@@ -915,6 +936,7 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 	if next.Shuffle != curr.Shuffle {
 		requiresUpdate = true
 	}
+	// Modes are opaque echo state, merged without changing playback.
 	for k, v := range modes {
 		if p.state.player.Options.Modes[k] != v {
 			if p.state.player.Options.Modes == nil {
@@ -951,45 +973,53 @@ func (p *AppPlayer) addToQueue(_ context.Context, track *connectpb.ContextTrack)
 	p.emitPlaybackState()
 }
 
-func (p *AppPlayer) queueRemove(index int) {
+func (p *AppPlayer) queueRemove(index int) error {
 	if p.state == nil || p.state.tracks == nil {
-		return
+		return errors.New("no queue loaded")
 	}
 	if !p.state.tracks.RemoveFromQueue(index) {
-		p.runtime.Log.WithField("index", index).Warn("queue remove out of range")
-		return
+		p.emitQueueEditError("queue changed — retry the edit")
+		return errors.New("queue remove out of range")
 	}
 	p.afterQueueEdit()
+	return nil
 }
 
-func (p *AppPlayer) queueReorder(from, to int) {
+func (p *AppPlayer) queueReorder(from, to int) error {
 	if p.state == nil || p.state.tracks == nil {
-		return
+		return errors.New("no queue loaded")
 	}
 	if !p.state.tracks.ReorderQueue(from, to) {
-		p.runtime.Log.WithField("from", from).WithField("to", to).Warn("queue reorder out of range")
-		return
+		p.emitQueueEditError("queue changed — retry the edit")
+		return errors.New("queue reorder out of range")
 	}
 	p.afterQueueEdit()
+	return nil
 }
 
-func (p *AppPlayer) queueJump(ctx context.Context, index int) {
+// Surface stale-index edits as playback errors; Run only logs.
+func (p *AppPlayer) emitQueueEditError(msg string) {
+	p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: msg})
+}
+
+func (p *AppPlayer) queueJump(ctx context.Context, index int) error {
 	if p.state == nil || p.state.tracks == nil {
-		return
+		return errors.New("no queue loaded")
 	}
 	if !p.state.tracks.GoToQueueEntry(index) {
-		p.runtime.Log.WithField("index", index).Warn("queue jump out of range")
-		return
+		p.emitQueueEditError("queue changed — retry the edit")
+		return errors.New("queue jump out of range")
 	}
 	p.syncPlayerTrackState(p.state.tracks, nil)
 	p.updateState()
 	p.emitPlaybackState()
 	if p.player == nil {
-		return
+		return nil
 	}
 	if err := p.loadCurrentTrackFromTransition(ctx, false, true, "queue jump"); err != nil {
 		p.runtime.Log.WithError(err).Error("failed loading queue-jump target")
 	}
+	return nil
 }
 
 func (p *AppPlayer) afterQueueEdit() {
@@ -1105,6 +1135,9 @@ func (p *AppPlayer) seek(_ context.Context, position int64) error {
 }
 
 func (p *AppPlayer) skipPrev(ctx context.Context, allowSeeking bool) error {
+	if p.state == nil || p.state.player == nil || p.state.player.Track == nil {
+		return fmt.Errorf("no current track")
+	}
 	if allowSeeking && p.currentPositionMs() > 3000 {
 		return p.seek(ctx, 0)
 	}
@@ -1340,11 +1373,7 @@ func (p *AppPlayer) updateVolume(newVal uint32) {
 }
 
 func (p *AppPlayer) volumeUpdated(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, shuffleContextTimeout)
-	defer cancel()
-	if err := p.putConnectState(ctx, connectpb.PutStateReason_VOLUME_CHANGED); err != nil {
-		p.runtime.Log.WithError(err).Error("failed put state after volume change")
-	}
+	p.enqueueConnectPut(p.buildConnectPut(connectpb.PutStateReason_VOLUME_CHANGED))
 	p.emitPlaybackStateLight()
 }
 

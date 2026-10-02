@@ -72,14 +72,24 @@ func TestQueueRemoveCommand(t *testing.T) {
 	}
 }
 
-func TestQueueRemoveOutOfRangeIsNoop(t *testing.T) {
+func TestQueueRemoveOutOfRangeSurfacesError(t *testing.T) {
 	p := newQueueEditTestPlayer(t, []string{"spotify:track:1111111111111111111111"})
+	ch := make(chan *PlaybackStateUpdate, 8)
+	p.runtime.PlaybackStateCh = ch
 
-	if _, err := p.handleTUIPlaybackCommand(context.Background(), TUICommand{Kind: TUICommandQueueRemove, QueueIndex: 5}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if _, err := p.handleTUIPlaybackCommand(context.Background(), TUICommand{Kind: TUICommandQueueRemove, QueueIndex: 5}); err == nil {
+		t.Fatal("expected an error for out-of-range remove")
 	}
 	if ids := visibleIDs(p); len(ids) != 1 {
 		t.Fatalf("out-of-range remove must not mutate, queue = %v", ids)
+	}
+	select {
+	case u := <-ch:
+		if u.Error == "" {
+			t.Fatal("expected an Error push for out-of-range remove")
+		}
+	default:
+		t.Fatal("expected an Error push on the playback channel")
 	}
 }
 
@@ -97,8 +107,8 @@ func TestQueueReorderCommand(t *testing.T) {
 
 func TestQueueRemoveNilState(t *testing.T) {
 	p := &AppPlayer{runtime: &Runtime{Log: noopLogger{}}}
-	if _, err := p.handleTUIPlaybackCommand(context.Background(), TUICommand{Kind: TUICommandQueueRemove}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if _, err := p.handleTUIPlaybackCommand(context.Background(), TUICommand{Kind: TUICommandQueueRemove}); err == nil {
+		t.Fatal("expected an error with no queue loaded")
 	}
 }
 

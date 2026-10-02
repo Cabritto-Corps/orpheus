@@ -19,7 +19,6 @@ import (
 	"github.com/elxgy/go-librespot/dealer"
 	"github.com/elxgy/go-librespot/player"
 	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
-	metadatapb "github.com/elxgy/go-librespot/proto/spotify/metadata"
 	"github.com/elxgy/go-librespot/spclient"
 	"github.com/elxgy/go-librespot/tracks"
 	"google.golang.org/protobuf/proto"
@@ -87,6 +86,11 @@ type AppPlayer struct {
 
 	pendingConnectPut    bool
 	pendingConnectReason connectpb.PutStateReason
+	connectPutJobs       chan connectPutJob
+
+	// queueMetaUpdated carries background metadata-batch completions to
+	// Run: the resolving goroutine must never emit (state is Run-owned).
+	queueMetaUpdated chan struct{}
 
 	transitionCache       *transitionCache
 	prefetchGen           atomic.Uint64
@@ -96,9 +100,20 @@ type AppPlayer struct {
 	queueMetaCache *cache.LRU[string, PlaybackStateQueueEntry]
 	queueMetaMu    sync.RWMutex
 
+	// metaBatchFetch overrides the spclient metadata batch in tests.
+	metaBatchFetch func(ctx context.Context, uris []string) (map[string]spclient.ResolvedEntry, error)
+	// queueHeadWarmInFlight collapses overlapping head-image resolutions.
+	queueHeadWarmInFlight atomic.Bool
+	// queueSweepWarmInFlight collapses overlapping beyond-head sweeps.
+	queueSweepWarmInFlight atomic.Bool
+
 	advanceInFlight       atomic.Bool
 	connectionLostEmitted atomic.Bool
 	endGuardFailures      int
+	lastDroppedPlayback   uint64
+	// terminalErrActive latches an unrecovered terminal error so reconcile cannot wipe its guidance.
+	// Set on Error-only pushes; cleared by a committed load or dealer reconnect.
+	terminalErrActive bool
 
 	stopRecoveryURI      string
 	stopRecoveryFailures int
@@ -145,46 +160,41 @@ func (p *AppPlayer) newApiResponseStatusTrack(media *golibrespot.Media, position
 		imageSize = "default"
 	}
 	prod := p.prodInfoSnapshot()
+	// Cover art is optional until the first ProductInfo packet; guard the nil snapshot.
+	var coverURL func([]byte) *string
+	if prod != nil {
+		coverURL = prod.ImageUrl
+	} else {
+		coverURL = func([]byte) *string { return nil }
+	}
 	if media.IsTrack() {
 		track := media.Track()
 		var artists []string
-		for _, a := range track.Artist {
-			artists = append(artists, *a.Name)
+		for _, a := range track.GetArtist() {
+			artists = append(artists, a.GetName())
 		}
-		albumCoverId := golibrespot.GetBestImageIdForSize(track.Album.Cover, imageSize)
-		if albumCoverId == nil && track.Album.CoverGroup != nil {
-			albumCoverId = golibrespot.GetBestImageIdForSize(track.Album.CoverGroup.Image, imageSize)
+		album := track.GetAlbum()
+		albumCoverId := golibrespot.GetBestImageIdForSize(album.GetCover(), imageSize)
+		if albumCoverId == nil && album.GetCoverGroup() != nil {
+			albumCoverId = golibrespot.GetBestImageIdForSize(album.GetCoverGroup().GetImage(), imageSize)
 		}
 		return &ApiResponseStatusTrack{
-			Uri:           golibrespot.SpotifyIdFromGid(golibrespot.SpotifyIdTypeTrack, track.Gid).Uri(),
-			Name:          *track.Name,
+			Name:          track.GetName(),
 			ArtistNames:   artists,
-			AlbumName:     *track.Album.Name,
-			AlbumCoverUrl: prod.ImageUrl(albumCoverId),
+			AlbumName:     album.GetName(),
+			AlbumCoverUrl: coverURL(albumCoverId),
 			Position:      position,
-			Duration:      int(*track.Duration),
-			ReleaseDate:   track.Album.Date.String(),
-			TrackNumber:   int(*track.Number),
-			DiscNumber:    int(*track.DiscNumber),
 		}
 	}
 	episode := media.Episode()
-	var episodeImages []*metadatapb.Image
-	if episode.CoverImage != nil {
-		episodeImages = episode.CoverImage.Image
-	}
-	albumCoverId := golibrespot.GetBestImageIdForSize(episodeImages, imageSize)
+	showName := episode.GetShow().GetName()
+	albumCoverId := golibrespot.GetBestImageIdForSize(episode.GetCoverImage().GetImage(), imageSize)
 	return &ApiResponseStatusTrack{
-		Uri:           golibrespot.SpotifyIdFromGid(golibrespot.SpotifyIdTypeEpisode, episode.Gid).Uri(),
-		Name:          *episode.Name,
-		ArtistNames:   []string{*episode.Show.Name},
-		AlbumName:     *episode.Show.Name,
-		AlbumCoverUrl: prod.ImageUrl(albumCoverId),
+		Name:          episode.GetName(),
+		ArtistNames:   []string{showName},
+		AlbumName:     showName,
+		AlbumCoverUrl: coverURL(albumCoverId),
 		Position:      position,
-		Duration:      int(*episode.Duration),
-		ReleaseDate:   "",
-		TrackNumber:   0,
-		DiscNumber:    0,
 	}
 }
 
@@ -228,6 +238,9 @@ func (p *AppPlayer) handleDealerMessage(ctx context.Context, msg dealer.Message)
 	defer cancel()
 	if strings.HasPrefix(msg.Uri, "hm://pusher/v1/connections/") {
 		p.spotConnId = msg.Headers["Spotify-Connection-Id"]
+		// A fresh dealer connection ends the previous loss episode.
+		p.connectionLostEmitted.Store(false)
+		p.terminalErrActive = false
 		if err := p.putConnectState(ctx, connectpb.PutStateReason_NEW_DEVICE); err != nil {
 			return fmt.Errorf("failed initial state put: %w", err)
 		}
@@ -428,7 +441,11 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 	case "skip_next":
 		return p.skipNext(ctx, req.Command.Track)
 	case "update_context":
-		if req.Command.Context == nil || req.Command.Context.Uri != p.state.player.ContextUri {
+		if req.Command.Context == nil {
+			p.runtime.Log.Warn("ignoring context update without context")
+			return nil
+		}
+		if req.Command.Context.Uri != p.state.player.ContextUri {
 			p.runtime.Log.Warnf("ignoring context update for wrong uri: %s", req.Command.Context.Uri)
 			return nil
 		}
@@ -509,8 +526,27 @@ func (p *AppPlayer) emitConnectionLost(reason string) {
 	if p.connectionLostEmitted.Swap(true) {
 		return
 	}
+	p.terminalErrActive = true
 	p.runtime.Log.Errorf("connection lost: %s", reason)
 	p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "connection lost: " + reason})
+}
+
+// Suppress reconcile while an unrecovered terminal error stands.
+func (p *AppPlayer) shouldReconcilePush() bool {
+	return p.state != nil && p.state.player != nil && p.state.player.ContextUri != "" && !p.terminalErrActive
+}
+
+// One full snapshot per drop episode, on the guard tick.
+func (p *AppPlayer) maybeEmitAfterDrop() {
+	if p == nil || p.runtime == nil {
+		return
+	}
+	dropped := p.runtime.DroppedPlaybackStateUpdates()
+	if dropped == p.lastDroppedPlayback {
+		return
+	}
+	p.lastDroppedPlayback = dropped
+	p.emitPlaybackState()
 }
 
 func (p *AppPlayer) emitPlaybackStateWithQueue(includeQueue bool) {
@@ -556,6 +592,9 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		p.runPrefetchWorker(runCtx)
+	})
+	wg.Go(func() {
+		p.runConnectPutWorker(runCtx)
 	})
 	defer close(p.runDone)
 	defer wg.Wait()
@@ -649,13 +688,15 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			p.flushConnectState()
 		case <-p.queueTopUpTimer.C:
 			p.topUpQueue(ctx)
+		case <-p.queueMetaUpdated:
+			p.handleQueueMetaUpdated()
 		case <-endTransitionGuardTicker.C:
 			p.maybeAdvanceOnTrackEndGuard()
+			p.maybeEmitAfterDrop()
 		case <-reconcileTicker.C:
-			// Push-mode backstop for dropped sends: the light path is in-memory
-			// only. Skipped while a terminal output error stands, so a re-push
-			// cannot clear the error without recovering.
-			if p.state != nil && p.state.player != nil && p.state.player.ContextUri != "" && !p.outputRecreateOnPlay {
+			// Backstop for dropped sends (light path is in-memory only).
+			// Skip while a terminal error stands.
+			if p.shouldReconcilePush() {
 				p.emitPlaybackStateLight()
 			}
 		}

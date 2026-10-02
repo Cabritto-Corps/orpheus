@@ -46,6 +46,8 @@ type PlaybackStateQueueEntry struct {
 	Artist     string
 	DurationMS int
 	ImageURL   string
+	// Queued marks manual-queue entries; context rows cannot be edited.
+	Queued bool
 }
 
 type PlaybackStateUpdate struct {
@@ -66,6 +68,8 @@ type PlaybackStateUpdate struct {
 	Queue         []PlaybackStateQueueEntry
 	QueueHasMore  bool
 	QueueIncluded bool
+	// ContextURI is the loaded context used by play-from-track commands.
+	ContextURI string
 
 	// Error carries a transport-level failure; the TUI surfaces it as playbackErr.
 	Error string

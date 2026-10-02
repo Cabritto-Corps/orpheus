@@ -28,7 +28,10 @@ func NewAppPlayer(ctx context.Context, runtime *Runtime, sess *session.Session) 
 		volumeUpdate:   volumeUpdate,
 		prefetchJobs:   make(chan prefetchJob, 16),
 		prefetchDone:   make(chan prefetchResult, 16),
-		queueMetaCache: cache.NewLRU[string, PlaybackStateQueueEntry](8192),
+		connectPutJobs: make(chan connectPutJob, 1),
+		// Cap-1: overlapping batch completions coalesce into one delivery.
+		queueMetaUpdated: make(chan struct{}, 1),
+		queueMetaCache:   cache.NewLRU[string, PlaybackStateQueueEntry](8192),
 	}
 	var audioCache *golibrespotcache.Cache
 	if runtime.Cfg.AudioCacheEnabled {
