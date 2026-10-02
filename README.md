@@ -89,6 +89,18 @@ On Linux, missing ALSA/FLAC/Ogg/Vorbis libraries are detected with `ldd` and the
 
 Every keybind can be changed in settings (`o` → Keybinds).
 
+### Build and run locally
+
+To work on the source instead of installing a release, install Go 1.26 or newer and the audio development libraries, then build from a clone:
+
+```sh
+git clone https://github.com/Cabritto-Corps/orpheus.git
+cd orpheus
+make build
+```
+
+Follow the [initial setup tutorial](tutorial.md) to create a Spotify app and set `SPOTIFY_CLIENT_ID` (Spotify Premium is required). Then run `./orpheus auth login` and `./orpheus`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the platform-specific build dependencies, tests, and pull request workflow.
+
 ### Thanks
 
 - A big shoutout to the [guy](https://github.com/devgianlu) that developed [go-librespot](https://github.com/devgianlu/go-librespot), this wouldnt be possible if it wasnt for his port of librespot to go
