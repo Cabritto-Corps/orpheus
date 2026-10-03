@@ -26,7 +26,7 @@ Press `o` → **Theme options**. Every row cycles with `+`/`-` (or enter) and pr
 - **Accent** — sets the accent and derives the light accent from it
 - **Backgrounds** — `solid` paints the whole frame in one page-colored surface, `transparent` paints no frame background so your terminal's shows through
 - **Border** — box style of modals and placeholder covers: `rounded`, `thick`, `double`, `ascii`
-- **Now playing** — the marker next to the playlist/album row currently playing: `♪`, `●`, `▶`, `→` or none
+- **Queue cursor** — the marker on the selected up-next row: `>` (arrow), `♪` (note), `●` (dot), `▶` (play) or none (plain)
 - **Play/pause** — the transport icons: `▶ ⏸`, `► ⏸`, `▷ ⏸` or `>` `||`
 - **Spinner** — the loading animation style
 - **Progress bar** — block (`█ ░`) or line (`━ ─`) characters
@@ -75,7 +75,7 @@ Accepted values: hex (`#4A90D9` or `#F00`), ANSI names (`red` up to `bright_whit
 ```json
 "glyphs": {
   "border": "rounded",
-  "now_playing": "note",
+  "queue_cursor": "note",
   "play_pause": "modern",
   "spinner": "minidot",
   "bar": "block"
@@ -83,7 +83,7 @@ Accepted values: hex (`#4A90D9` or `#F00`), ANSI names (`red` up to `bright_whit
 ```
 
 - `border`: `rounded`, `thick`, `double`, `ascii`
-- `now_playing`: `note`, `dot`, `play`, `arrow`, `plain` (none)
+- `queue_cursor`: `arrow`, `note`, `dot`, `play`, `plain` (none). Old theme files may still say `now_playing`; it is read as the cursor.
 - `play_pause`: `modern`, `bold`, `thin`, `ascii`
 - `spinner`: `minidot`, `dot`, `line`, `points`, `meter`, `pulse`
 - `bar`: `block`, `line`

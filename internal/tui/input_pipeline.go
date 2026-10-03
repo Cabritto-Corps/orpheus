@@ -1,10 +1,10 @@
 package tui
 
 import (
-	"log/slog"
+	"errors"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"orpheus/internal/librespot"
 	"orpheus/internal/playbackdomain"
@@ -47,6 +47,16 @@ const (
 	inputPriorityCritical inputPriority = 3
 )
 
+type inputRetryMsg struct{}
+
+const inputRetryInterval = 30 * time.Millisecond
+
+func (m model) inputRetryCmd() tea.Cmd {
+	return tea.Tick(inputRetryInterval, func(time.Time) tea.Msg {
+		return inputRetryMsg{}
+	})
+}
+
 func (m *model) syncExecutorState() {
 	switch {
 	case m.transport.transition.Pending():
@@ -75,18 +85,19 @@ func (m *model) enqueuePlaybackInput(action playbackInputKind) {
 	})
 }
 
-func (m *model) requeueFront(action playbackInputKind, prevRetries int) {
-	// The retry count travels with the popped action: matching against
-	// inputQueue[0] never fired because the failed item was already dequeued.
+func (m *model) requeueFront(action playbackInputKind, prevRetries int) tea.Cmd {
+	// The retry count travels with the popped action: already dequeued, so matching inputQueue[0] never fired.
 	retries := prevRetries + 1
 	if retries >= maxRequeueRetries {
-		slog.Debug("dropping playback action after retries", "kind", action)
-		return
+		// A queued transport key must not die silently when the player stays busy.
+		m.transport.playbackErr = errors.New("command could not be sent — player busy")
+		return nil
 	}
 	if len(m.transport.inputQueue) >= maxInputQueueSize {
 		m.transport.inputQueue = m.transport.inputQueue[:maxInputQueueSize-1]
 	}
 	m.transport.inputQueue = append([]playbackInput{{kind: action, priority: inputPriorityOf(action), retryCount: retries}}, m.transport.inputQueue...)
+	return m.inputRetryCmd()
 }
 
 func (m *model) pumpInputExecutor() tea.Cmd {
@@ -97,11 +108,7 @@ func (m *model) pumpInputExecutor() tea.Cmd {
 		}
 		idx := m.dequeueNextInputIndex()
 		if m.transport.executorState != executorStateIdle {
-			// Volume is an idempotent set-command that never touches
-			// transition state, and the key handler deliberately
-			// leaves it unblocked during transitions — let it drain
-			// so the bar and the audio stay live while a track
-			// change is in flight. Everything else stays queued.
+			// Volume never touches transition state: let it drain during transitions so bar and audio stay live; the rest stays queued.
 			idx = m.dequeueNextVolumeIndex()
 			if idx < 0 {
 				return nil
@@ -127,18 +134,19 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 			}
 			select {
 			case m.tuiCmdCh <- librespot.TUICommand{Kind: kind}:
+				if m.transport.status != nil {
+					m.transport.status.Playing = !m.transport.status.Playing
+				}
 				return nil
 			default:
-				m.requeueFront(action, retryCount)
-				return nil
+				return m.requeueFront(action, retryCount)
 			}
 		}
 		return nil
 	case playbackInputNext:
 		if m.tuiCmdCh != nil {
 			if !m.trySendTransportSkip(librespot.TUICommandSkipNext) {
-				m.requeueFront(action, retryCount)
-				return nil
+				return m.requeueFront(action, retryCount)
 			}
 			m.applyOptimisticSkip(true)
 			m.beginTransportTransition()
@@ -148,8 +156,7 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 	case playbackInputPrev:
 		if m.tuiCmdCh != nil {
 			if !m.trySendTransportSkip(librespot.TUICommandSkipPrev) {
-				m.requeueFront(action, retryCount)
-				return nil
+				return m.requeueFront(action, retryCount)
 			}
 			m.applyOptimisticSkip(false)
 			m.beginTransportTransition()
@@ -161,8 +168,7 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 			select {
 			case m.tuiCmdCh <- librespot.TUICommand{Kind: librespot.TUICommandShuffle}:
 			default:
-				m.requeueFront(action, retryCount)
-				return nil
+				return m.requeueFront(action, retryCount)
 			}
 			return nil
 		}
@@ -178,9 +184,8 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 				m.transport.status.RepeatContext = next.RepeatContext
 				m.transport.status.RepeatTrack = next.RepeatTrack
 			default:
-				m.requeueFront(action, retryCount)
+				return m.requeueFront(action, retryCount)
 			}
-			return nil
 		}
 		return nil
 	case playbackInputVolUp:
@@ -189,9 +194,9 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 		}
 		var target int
 		if m.transport.volDebouncePending >= 0 {
-			target = clampInt(m.transport.volDebouncePending+5, 0, 100)
+			target = min(max(m.transport.volDebouncePending+5, 0), 100)
 		} else {
-			target = clampInt(m.transport.status.Volume+5, 0, 100)
+			target = min(max(m.transport.status.Volume+5, 0), 100)
 		}
 		m.transport.status.Volume = target
 		m.transport.volDebouncePending = target
@@ -206,9 +211,9 @@ func (m *model) executePlaybackInput(action playbackInputKind, retryCount int) t
 		}
 		var target int
 		if m.transport.volDebouncePending >= 0 {
-			target = clampInt(m.transport.volDebouncePending-5, 0, 100)
+			target = min(max(m.transport.volDebouncePending-5, 0), 100)
 		} else {
-			target = clampInt(m.transport.status.Volume-5, 0, 100)
+			target = min(max(m.transport.status.Volume-5, 0), 100)
 		}
 		m.transport.status.Volume = target
 		m.transport.volDebouncePending = target
@@ -252,11 +257,7 @@ func isVolumeAction(action playbackInputKind) bool {
 	return action == playbackInputVolUp || action == playbackInputVolDown
 }
 
-// trySendVolume commits a volume target to the player immediately
-// (leading edge) instead of waiting out the debounce interval. The
-// trailing debounce timer stays as the fallback when the command
-// channel is full: pending keeps the target and the token guards the
-// retry, so no press is ever lost to a busy player.
+// Leading-edge send; the trailing debounce stays as fallback, with pending + token so no press is lost to a busy player.
 func (m *model) trySendVolume(target int) bool {
 	if m.tuiCmdCh == nil {
 		return false

@@ -19,7 +19,6 @@ import (
 	"github.com/elxgy/go-librespot/dealer"
 	"github.com/elxgy/go-librespot/player"
 	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
-	metadatapb "github.com/elxgy/go-librespot/proto/spotify/metadata"
 	"github.com/elxgy/go-librespot/spclient"
 	"github.com/elxgy/go-librespot/tracks"
 	"google.golang.org/protobuf/proto"
@@ -31,28 +30,19 @@ const (
 	volumeUpdateDebounce = 100 * time.Millisecond
 	connectStateDebounce = 75 * time.Millisecond
 
-	// queueTopUpDelay keeps the bounded extending fetch off the same Run
-	// iteration as the dealer reply that triggered the emit.
+	// queueTopUpDelay keeps the extending fetch off the dealer-reply Run iteration.
 	queueTopUpDelay = 250 * time.Millisecond
 
-	// endGuardMaxFailures bounds consecutive output-failure recoveries and
-	// the end-of-track guard's retry loop before the player gives up and
-	// surfaces the state instead of retrying forever.
 	endGuardMaxFailures = 3
 
-	// stateReconcileInterval is the push-mode self-heal period.
 	stateReconcileInterval = 30 * time.Second
 
-	// deadTrackMemoryCap bounds the session memory of permanently
-	// unplayable track URIs. A context that accumulates more dead tracks
-	// than this is already pathological; evicting oldest-first keeps the
-	// memory tiny while the common case (a handful of regional blocks)
-	// never evicts.
+	// deadTrackMemoryCap bounds session memory of permanently unplayable URIs;
+	// oldest-first eviction keeps it tiny.
 	deadTrackMemoryCap = 128
 )
 
-// sessionAPI is the slice of *session.Session the player relies on. It exists
-// so the control paths can be exercised in tests without a live Spotify session.
+// sessionAPI is the slice of *session.Session used so tests run without a live session.
 type sessionAPI interface {
 	Events() player.EventManager
 	Spclient() *spclient.Spclient
@@ -96,6 +86,11 @@ type AppPlayer struct {
 
 	pendingConnectPut    bool
 	pendingConnectReason connectpb.PutStateReason
+	connectPutJobs       chan connectPutJob
+
+	// queueMetaUpdated carries background metadata-batch completions to
+	// Run: the resolving goroutine must never emit (state is Run-owned).
+	queueMetaUpdated chan struct{}
 
 	transitionCache       *transitionCache
 	prefetchGen           atomic.Uint64
@@ -105,25 +100,29 @@ type AppPlayer struct {
 	queueMetaCache *cache.LRU[string, PlaybackStateQueueEntry]
 	queueMetaMu    sync.RWMutex
 
+	// metaBatchFetch overrides the spclient metadata batch in tests.
+	metaBatchFetch func(ctx context.Context, uris []string) (map[string]spclient.ResolvedEntry, error)
+	// queueHeadWarmInFlight collapses overlapping head-image resolutions.
+	queueHeadWarmInFlight atomic.Bool
+	// queueSweepWarmInFlight collapses overlapping beyond-head sweeps.
+	queueSweepWarmInFlight atomic.Bool
+
 	advanceInFlight       atomic.Bool
 	connectionLostEmitted atomic.Bool
 	endGuardFailures      int
+	lastDroppedPlayback   uint64
+	// terminalErrActive latches an unrecovered terminal error so reconcile cannot wipe its guidance.
+	// Set on Error-only pushes; cleared by a committed load or dealer reconnect.
+	terminalErrActive bool
 
 	stopRecoveryURI      string
 	stopRecoveryFailures int
-	// deadTracks remembers track URIs that failed with a typed permanent
-	// media error (restricted / no supported format) so a later revisit
-	// in the same context skips them instantly instead of burning another
-	// full load and skip attempt. Transient failures are never recorded:
-	// only errors the backend will fail the same way every time. Cleared
-	// on every context load; evicted oldest-first at deadTrackMemoryCap.
+	// deadTracks skips revisits of typed-permanent media failures (never transient); cleared per context load.
 	deadTracks     map[string]struct{}
 	deadTrackOrder []string
-	// outputRecreateOnPlay marks a dead output device: the last stop closed
-	// it, so the next play must rebuild via loadCurrentTrack instead of a
-	// plain fork Play (which answers success with no output). Cleared on
-	// any committed load; while set, the reconcile ticker skips its state
-	// re-push so it cannot wipe the terminal error without recovering.
+	// outputRecreateOnPlay marks a dead output: next play rebuilds via loadCurrentTrack
+	// (plain fork Play answers success with no output); while set the reconcile
+	// ticker skips re-push so it cannot wipe the terminal error.
 	outputRecreateOnPlay bool
 }
 
@@ -161,46 +160,41 @@ func (p *AppPlayer) newApiResponseStatusTrack(media *golibrespot.Media, position
 		imageSize = "default"
 	}
 	prod := p.prodInfoSnapshot()
+	// Cover art is optional until the first ProductInfo packet; guard the nil snapshot.
+	var coverURL func([]byte) *string
+	if prod != nil {
+		coverURL = prod.ImageUrl
+	} else {
+		coverURL = func([]byte) *string { return nil }
+	}
 	if media.IsTrack() {
 		track := media.Track()
 		var artists []string
-		for _, a := range track.Artist {
-			artists = append(artists, *a.Name)
+		for _, a := range track.GetArtist() {
+			artists = append(artists, a.GetName())
 		}
-		albumCoverId := golibrespot.GetBestImageIdForSize(track.Album.Cover, imageSize)
-		if albumCoverId == nil && track.Album.CoverGroup != nil {
-			albumCoverId = golibrespot.GetBestImageIdForSize(track.Album.CoverGroup.Image, imageSize)
+		album := track.GetAlbum()
+		albumCoverId := golibrespot.GetBestImageIdForSize(album.GetCover(), imageSize)
+		if albumCoverId == nil && album.GetCoverGroup() != nil {
+			albumCoverId = golibrespot.GetBestImageIdForSize(album.GetCoverGroup().GetImage(), imageSize)
 		}
 		return &ApiResponseStatusTrack{
-			Uri:           golibrespot.SpotifyIdFromGid(golibrespot.SpotifyIdTypeTrack, track.Gid).Uri(),
-			Name:          *track.Name,
+			Name:          track.GetName(),
 			ArtistNames:   artists,
-			AlbumName:     *track.Album.Name,
-			AlbumCoverUrl: prod.ImageUrl(albumCoverId),
+			AlbumName:     album.GetName(),
+			AlbumCoverUrl: coverURL(albumCoverId),
 			Position:      position,
-			Duration:      int(*track.Duration),
-			ReleaseDate:   track.Album.Date.String(),
-			TrackNumber:   int(*track.Number),
-			DiscNumber:    int(*track.DiscNumber),
 		}
 	}
 	episode := media.Episode()
-	var episodeImages []*metadatapb.Image
-	if episode.CoverImage != nil {
-		episodeImages = episode.CoverImage.Image
-	}
-	albumCoverId := golibrespot.GetBestImageIdForSize(episodeImages, imageSize)
+	showName := episode.GetShow().GetName()
+	albumCoverId := golibrespot.GetBestImageIdForSize(episode.GetCoverImage().GetImage(), imageSize)
 	return &ApiResponseStatusTrack{
-		Uri:           golibrespot.SpotifyIdFromGid(golibrespot.SpotifyIdTypeEpisode, episode.Gid).Uri(),
-		Name:          *episode.Name,
-		ArtistNames:   []string{*episode.Show.Name},
-		AlbumName:     *episode.Show.Name,
-		AlbumCoverUrl: prod.ImageUrl(albumCoverId),
+		Name:          episode.GetName(),
+		ArtistNames:   []string{showName},
+		AlbumName:     showName,
+		AlbumCoverUrl: coverURL(albumCoverId),
 		Position:      position,
-		Duration:      int(*episode.Duration),
-		ReleaseDate:   "",
-		TrackNumber:   0,
-		DiscNumber:    0,
 	}
 }
 
@@ -210,9 +204,7 @@ func (p *AppPlayer) setProdInfo(prod *ap.ProductInfo) {
 	p.prodInfo = prod
 }
 
-// prodInfoSnapshot returns the current catalog pointer. ProductInfo is
-// replaced wholesale on update and never mutated in place, so callers may
-// keep dereferencing a snapshot after the lock is released.
+// ProductInfo is replaced wholesale, never mutated, so snapshots stay valid after unlock.
 func (p *AppPlayer) prodInfoSnapshot() *ap.ProductInfo {
 	p.prodInfoMu.RLock()
 	defer p.prodInfoMu.RUnlock()
@@ -232,9 +224,8 @@ func (p *AppPlayer) handleAccesspointPacket(pktType ap.PacketType, payload []byt
 		p.setProdInfo(&prod)
 		return nil
 	case ap.PacketTypeCountryCode:
-		// The fork's player reads the country code from its own goroutines;
-		// route the update through its atomic setter instead of writing the
-		// shared pointer here.
+		// The fork's player reads the country code from its own goroutines: route
+		// through its atomic setter, not the shared pointer.
 		p.player.SetCountryCode(string(payload))
 		return nil
 	default:
@@ -247,6 +238,9 @@ func (p *AppPlayer) handleDealerMessage(ctx context.Context, msg dealer.Message)
 	defer cancel()
 	if strings.HasPrefix(msg.Uri, "hm://pusher/v1/connections/") {
 		p.spotConnId = msg.Headers["Spotify-Connection-Id"]
+		// A fresh dealer connection ends the previous loss episode.
+		p.connectionLostEmitted.Store(false)
+		p.terminalErrActive = false
 		if err := p.putConnectState(ctx, connectpb.PutStateReason_NEW_DEVICE); err != nil {
 			return fmt.Errorf("failed initial state put: %w", err)
 		}
@@ -270,12 +264,16 @@ func (p *AppPlayer) handleDealerMessage(ctx context.Context, msg dealer.Message)
 		if err := proto.Unmarshal(msg.Payload, &clusterUpdate); err != nil {
 			return fmt.Errorf("failed unmarshalling ClusterUpdate: %w", err)
 		}
-		stopBeingActive := p.state.active && clusterUpdate.Cluster.ActiveDeviceId != p.runtime.DeviceId && clusterUpdate.Cluster.PlayerState.Timestamp > p.state.lastTransferTimestamp
+		cluster := clusterUpdate.GetCluster()
+		if cluster == nil {
+			return nil
+		}
+		stopBeingActive := p.state.active && cluster.GetActiveDeviceId() != p.runtime.DeviceId && cluster.GetPlayerState().GetTimestamp() > p.state.lastTransferTimestamp
 		if !stopBeingActive {
 			return nil
 		}
 		name := " "
-		if device := clusterUpdate.Cluster.Device[clusterUpdate.Cluster.ActiveDeviceId]; device != nil {
+		if device := cluster.GetDevice()[cluster.GetActiveDeviceId()]; device != nil {
 			name = device.Name
 		}
 		p.runtime.Log.Infof("playback was transferred to %s", name)
@@ -301,6 +299,9 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		if transferState.Options == nil {
 			transferState.Options = &connectpb.ContextPlayerOptions{}
 		}
+		if transferState.Playback == nil {
+			return fmt.Errorf("transfer state without playback")
+		}
 		p.state.lastTransferTimestamp = transferState.Playback.Timestamp
 		ctxTracks, err := tracks.NewTrackListFromContext(ctx, p.runtime.Log, p.sess.Spclient(), transferState.CurrentSession.Context, 0)
 		if err != nil {
@@ -324,6 +325,9 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		p.state.player.PositionAsOfTimestamp = int64(transferState.Playback.PositionAsOfTimestamp)
 		golibrespot.SetPaused(p.state.player, pause)
 		p.state.player.PlayOrigin = transferState.CurrentSession.PlayOrigin
+		if p.state.player.PlayOrigin == nil {
+			p.state.player.PlayOrigin = &connectpb.PlayOrigin{}
+		}
 		p.state.player.PlayOrigin.DeviceIdentifier = req.SentByDeviceId
 		p.state.player.ContextUri = transferState.CurrentSession.Context.Uri
 		p.state.player.ContextUrl = transferState.CurrentSession.Context.Url
@@ -333,9 +337,12 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		maps.Copy(p.state.player.ContextMetadata, transferState.CurrentSession.Context.Metadata)
 		maps.Copy(p.state.player.ContextMetadata, ctxTracks.Metadata())
 		contextSpotType := golibrespot.InferSpotifyIdTypeFromContextUri(p.state.player.ContextUri)
-		currentTrack := golibrespot.ContextTrackToProvidedTrack(contextSpotType, transferState.Playback.CurrentTrack)
-		if err := ctxTracks.TrySeek(ctx, tracks.ProvidedTrackComparator(contextSpotType, currentTrack)); err != nil {
-			return fmt.Errorf("failed seeking to track: %w", err)
+		// Unnamed transfer tracks start from the top (ContextTrackToProvidedTrack panics otherwise).
+		if current := transferState.Playback.CurrentTrack; current != nil && (len(current.Uri) > 0 || len(current.Gid) > 0) {
+			currentTrack := golibrespot.ContextTrackToProvidedTrack(contextSpotType, current)
+			if err := ctxTracks.TrySeek(ctx, tracks.ProvidedTrackComparator(contextSpotType, currentTrack)); err != nil {
+				return fmt.Errorf("failed seeking to track: %w", err)
+			}
 		}
 		if err := ctxTracks.ToggleShuffle(ctx, transferState.Options.ShufflingContext); err != nil {
 			return fmt.Errorf("failed shuffling context")
@@ -372,6 +379,9 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 		}
 		p.state.setActive(true)
 		p.state.player.PlayOrigin = req.Command.PlayOrigin
+		if p.state.player.PlayOrigin == nil {
+			p.state.player.PlayOrigin = &connectpb.PlayOrigin{}
+		}
 		p.state.player.PlayOrigin.DeviceIdentifier = req.SentByDeviceId
 		p.state.player.Suppressions = req.Command.Options.Suppressions
 		if p.state.player.Options == nil {
@@ -431,7 +441,11 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 	case "skip_next":
 		return p.skipNext(ctx, req.Command.Track)
 	case "update_context":
-		if req.Command.Context == nil || req.Command.Context.Uri != p.state.player.ContextUri {
+		if req.Command.Context == nil {
+			p.runtime.Log.Warn("ignoring context update without context")
+			return nil
+		}
+		if req.Command.Context.Uri != p.state.player.ContextUri {
 			p.runtime.Log.Warnf("ignoring context update for wrong uri: %s", req.Command.Context.Uri)
 			return nil
 		}
@@ -448,23 +462,23 @@ func (p *AppPlayer) handlePlayerCommand(ctx context.Context, req dealer.RequestP
 			p.runtime.Log.Warnf("unsupported set_repeating_context value type: %T", req.Command.Value)
 			return nil
 		}
-		return p.setOptions(ctx, &val, nil, nil)
+		return p.setOptions(ctx, &val, nil, nil, nil)
 	case "set_repeating_track":
 		val, ok := req.Command.Value.(bool)
 		if !ok {
 			p.runtime.Log.Warnf("unsupported set_repeating_track value type: %T", req.Command.Value)
 			return nil
 		}
-		return p.setOptions(ctx, nil, &val, nil)
+		return p.setOptions(ctx, nil, &val, nil, nil)
 	case "set_shuffling_context":
 		val, ok := req.Command.Value.(bool)
 		if !ok {
 			p.runtime.Log.Warnf("unsupported set_shuffling_context value type: %T", req.Command.Value)
 			return nil
 		}
-		return p.setOptions(ctx, nil, nil, &val)
+		return p.setOptions(ctx, nil, nil, &val, nil)
 	case "set_options":
-		return p.setOptions(ctx, req.Command.RepeatingContext, req.Command.RepeatingTrack, req.Command.ShufflingContext)
+		return p.setOptions(ctx, req.Command.RepeatingContext, req.Command.RepeatingTrack, req.Command.ShufflingContext, req.Command.Modes)
 	case "set_queue":
 		p.setQueue(ctx, req.Command.PrevTracks, req.Command.NextTracks)
 		return nil
@@ -512,8 +526,27 @@ func (p *AppPlayer) emitConnectionLost(reason string) {
 	if p.connectionLostEmitted.Swap(true) {
 		return
 	}
+	p.terminalErrActive = true
 	p.runtime.Log.Errorf("connection lost: %s", reason)
 	p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "connection lost: " + reason})
+}
+
+// Suppress reconcile while an unrecovered terminal error stands.
+func (p *AppPlayer) shouldReconcilePush() bool {
+	return p.state != nil && p.state.player != nil && p.state.player.ContextUri != "" && !p.terminalErrActive
+}
+
+// One full snapshot per drop episode, on the guard tick.
+func (p *AppPlayer) maybeEmitAfterDrop() {
+	if p == nil || p.runtime == nil {
+		return
+	}
+	dropped := p.runtime.DroppedPlaybackStateUpdates()
+	if dropped == p.lastDroppedPlayback {
+		return
+	}
+	p.lastDroppedPlayback = dropped
+	p.emitPlaybackState()
 }
 
 func (p *AppPlayer) emitPlaybackStateWithQueue(includeQueue bool) {
@@ -532,16 +565,13 @@ func (p *AppPlayer) Close() {
 		case p.stop <- struct{}{}:
 		default:
 		}
-		// Only wait when Run was actually started: Close may run on a player
-		// that never entered Run, and runDone would never close there.
+		// Wait only if Run started; runDone never closes otherwise.
 		if p.runStarted.Load() {
 			<-p.runDone
 		}
 
-		// The player owns the output goroutine, so it must stop before the
-		// cgo decoders are freed; the reverse order leaves a window where the
-		// output goroutine reads from a closed stream (same invariant noted
-		// on loadCurrentTrack).
+		// Stop the player (output goroutine) before freeing cgo decoders; reversed,
+		// the output goroutine reads a closed stream.
 		p.player.Close()
 		closeStream(p.primaryStream)
 		closeStream(p.secondaryStream)
@@ -556,14 +586,15 @@ func (p *AppPlayer) Close() {
 func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 	p.setRunContext(ctx)
 	p.runStarted.Store(true)
-	// The worker gets its own cancellable context so its exit never depends
-	// on the caller's ctx. Defers run LIFO: cancel first, then wait for the
-	// worker, then close runDone — every Run exit path, p.stop included,
-	// unblocks Close().
+	// The worker's own context decouples its exit from the caller's; LIFO defers
+	// unblock Close() on every Run exit path.
 	runCtx, runCancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		p.runPrefetchWorker(runCtx)
+	})
+	wg.Go(func() {
+		p.runConnectPutWorker(runCtx)
 	})
 	defer close(p.runDone)
 	defer wg.Wait()
@@ -640,7 +671,6 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 		case res := <-p.prefetchDone:
 			p.handlePrefetchResult(res)
 		case volume := <-p.volumeUpdate:
-			// Coalesce bursts: only the most recent value matters.
 		drain:
 			for {
 				select {
@@ -658,17 +688,15 @@ func (p *AppPlayer) Run(ctx context.Context, tuiCmdCh <-chan TUICommand) {
 			p.flushConnectState()
 		case <-p.queueTopUpTimer.C:
 			p.topUpQueue(ctx)
+		case <-p.queueMetaUpdated:
+			p.handleQueueMetaUpdated()
 		case <-endTransitionGuardTicker.C:
 			p.maybeAdvanceOnTrackEndGuard()
+			p.maybeEmitAfterDrop()
 		case <-reconcileTicker.C:
-			// Push-mode backstop: a dropped playbackStateCh send would
-			// otherwise leave the TUI stale until the next event. Cheap:
-			// the light path reads only in-memory state, no network.
-			// Skipped while a terminal output error stands: a state
-			// re-push would clear the TUI's playback error without
-			// recovering anything, and the error is the state until
-			// the user retries.
-			if p.state != nil && p.state.player != nil && p.state.player.ContextUri != "" && !p.outputRecreateOnPlay {
+			// Backstop for dropped sends (light path is in-memory only).
+			// Skip while a terminal error stands.
+			if p.shouldReconcilePush() {
 				p.emitPlaybackStateLight()
 			}
 		}

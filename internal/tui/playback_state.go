@@ -2,17 +2,20 @@ package tui
 
 import (
 	"errors"
-	"hash/fnv"
 	"strconv"
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	golibrespot "github.com/elxgy/go-librespot"
 
 	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
+
+// Startup sync bound: short enough not to stall the reveal visibly, long
+// enough for a resumed session's first push to arrive.
+const firstStateGrace = 2 * time.Second
 
 func playbackCoverSubject(status *spotify.PlaybackStatus) string {
 	if status == nil {
@@ -38,6 +41,29 @@ func playbackCoverSubjectChanged(prev, next *spotify.PlaybackStatus) bool {
 	return prevSubject != nextSubject
 }
 
+// Progress changes within this window still count as frozen.
+const heartbeatProgressToleranceMS = 1000
+
+// Frozen pushes must not clear a live transport error.
+func isFrozenHeartbeat(prev *spotify.PlaybackStatus, currentQueueLen int, msg playbackStateMsg) bool {
+	if prev == nil || msg.status == nil {
+		return false
+	}
+	if golibrespot.NormalizeSpotifyId(prev.TrackID) != golibrespot.NormalizeSpotifyId(msg.status.TrackID) {
+		return false
+	}
+	if prev.Playing != msg.status.Playing {
+		return false
+	}
+	if absInt(prev.ProgressMS-msg.status.ProgressMS) > heartbeatProgressToleranceMS {
+		return false
+	}
+	if msg.queueIncluded && len(msg.queue) != currentQueueLen {
+		return false
+	}
+	return true
+}
+
 func queueHeadTrackID(queue []spotify.QueueItem) string {
 	if len(queue) == 0 {
 		return ""
@@ -45,18 +71,17 @@ func queueHeadTrackID(queue []spotify.QueueItem) string {
 	return golibrespot.NormalizeSpotifyId(queue[0].ID)
 }
 
-// visibleQueue is what the up-next panel shows: the pushed queue with the
-// currently playing queue entry (when it heads the queue) hidden. Positions
-// here are the same "visible view" the backend uses for queue commands.
+// Up-next view is the pushed queue as-is; the head is already excluded.
+// IDs can duplicate, so stripping by ID would shift every command.
 func (m model) visibleQueue() []spotify.QueueItem {
-	q := m.transport.queue
-	if m.transport.status != nil && len(q) > 0 {
-		currentID := golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
-		if currentID != "" && golibrespot.NormalizeSpotifyId(q[0].ID) == currentID {
-			return q[1:]
-		}
+	return m.transport.queue
+}
+
+func (m model) currentContextURI() string {
+	if m.transport.status == nil {
+		return ""
 	}
-	return q
+	return strings.TrimSpace(m.transport.status.ContextURI)
 }
 
 func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.PlaybackStatus, prevQueueHead, nextQueueHead string) {
@@ -83,10 +108,8 @@ func (m *model) advancePlayerCoverEpochIfNeeded(prevStatus, nextStatus *spotify.
 	progressRewind := sameURL && prevProgress >= 0 && nextProgress >= 0 && prevProgress > nextProgress+progressRewindThresholdMS
 	shouldAdvance := subjectChanged || trackChanged || queueHeadChanged || progressRewind
 	if shouldAdvance {
+		// The intent revision re-emits on the epoch change alone.
 		m.transport.playerCoverEpoch++
-		if m.ui.imgs != nil && m.ui.imgs.protocolForRender() == imageProtocolKitty {
-			m.ui.imgs.forceKittyRedraw()
-		}
 	}
 }
 
@@ -109,9 +132,6 @@ func (m *model) beginTransportTransition() {
 		fromTrack = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
 	}
 	m.transport.transition.Begin(time.Now(), fromTrack)
-	if m.ui.imgs != nil && m.ui.imgs.protocolForRender() == imageProtocolKitty {
-		m.ui.imgs.forceKittyRedraw()
-	}
 	m.syncExecutorState()
 }
 
@@ -120,16 +140,13 @@ func (m *model) maybeClearTransportTransition(next *spotify.PlaybackStatus) {
 	if event == transportEventNone {
 		return
 	}
-	if m.ui.imgs != nil && m.ui.imgs.protocolForRender() == imageProtocolKitty {
-		m.ui.imgs.forceKittyRedraw()
-	}
 	if event == transportEventStuck {
 		m.transport.playbackErr = errors.New("track didn't start — skip again")
 	}
 	m.syncExecutorState()
 }
 
-func (m *model) shouldBlockTransportInput(msg tea.KeyMsg) bool {
+func (m *model) shouldBlockTransportInput(msg tea.KeyPressMsg) bool {
 	if !m.transport.transition.Pending() {
 		return false
 	}
@@ -150,9 +167,7 @@ func (m *model) applyOptimisticSkip(next bool) {
 	m.transport.interpolationSyncAt = time.Time{}
 	m.transport.interpolationProgressMS = 0
 	if next {
-		// The view hides queue entries matching the current track, so
-		// aiming at queue[0] would show no visible change when the head
-		// still is the playing track (e.g. repeat-one).
+		// Aim past the head: the view hides the playing track (e.g. repeat-one).
 		for _, entry := range m.transport.queue {
 			if entry.ID == m.transport.status.TrackID {
 				continue
@@ -358,24 +373,6 @@ func (m *model) applyMergedQueue(incoming []spotify.QueueItem, queueHasMore bool
 	if updateHasMore {
 		m.transport.queueHasMore = queueHasMore
 	}
-	fingerprint := queueFingerprint(m.transport.queue)
-	if fingerprint != m.transport.queueFingerprint {
-		m.transport.queueFingerprint = fingerprint
-	}
-}
-
-// queueFingerprint summarizes queue identity cheaply: length plus the first,
-// middle and last entry IDs.
-func queueFingerprint(queue []spotify.QueueItem) uint64 {
-	if len(queue) == 0 {
-		return 0
-	}
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(strconv.Itoa(len(queue))))
-	for _, i := range []int{0, len(queue) / 2, len(queue) - 1} {
-		_, _ = h.Write([]byte(queue[i].ID))
-	}
-	return h.Sum64()
 }
 
 func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.QueueItem, next *spotify.PlaybackStatus) *spotify.PlaybackStatus {
@@ -387,16 +384,11 @@ func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.Queue
 	sameTrack := func(id string) bool {
 		return golibrespot.NormalizeSpotifyId(id) != "" && golibrespot.NormalizeSpotifyId(id) == nextID
 	}
-	// Carry prev's AlbumImageURL only on same-track pushes: intermediate librespot
-	// state updates for a new track often omit the cover URL and a stale URL from
-	// the previous track would render the wrong art until the second push arrives.
+	// Same-track only: a stale prev URL would render the wrong art until the second push.
 	if out.AlbumImageURL == "" && prev != nil && prev.AlbumImageURL != "" && sameTrack(prev.TrackID) {
 		out.AlbumImageURL = prev.AlbumImageURL
 	}
-	// The queue carries the resolved album art for the upcoming track, so a
-	// track change whose push omits the cover URL does not blank the panel
-	// until a later push arrives. Runs before the metadata early-return:
-	// complete metadata with a missing URL is exactly the skip case.
+	// Runs before the metadata early-return: complete metadata with a missing URL is exactly the skip case.
 	if out.AlbumImageURL == "" {
 		for _, q := range queue {
 			if sameTrack(q.ID) && q.ImageURL != "" {

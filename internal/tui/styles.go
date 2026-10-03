@@ -2,42 +2,68 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
+	"os"
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/progress"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
-var (
-	defaultColors  = themePreset("default")
-	colorBlue      = lipgloss.Color(defaultColors.Blue)
-	colorBlueLight = lipgloss.Color(defaultColors.BlueLight)
-	colorOffWhite  = lipgloss.Color(defaultColors.OffWhite)
-	colorGray      = lipgloss.Color(defaultColors.Gray)
-	colorMutedBlue = lipgloss.Color(defaultColors.MutedBlue)
-	colorDimBlue   = lipgloss.Color(defaultColors.DimBlue)
-	colorDivider   = lipgloss.Color(defaultColors.Divider)
-	colorError     = lipgloss.Color(defaultColors.Error)
-	colorScrim     = lipgloss.Color(defaultColors.Scrim)
+// Styles are values on the model, never globals: a theme change swaps
+// the pointer, so every cache starts cold and no invalidation machinery
+// is needed.
+type themeStyles struct {
+	colorBlue, colorBlueLight, colorOffWhite, colorGray, colorMutedBlue, colorDimBlue color.Color
+	colorDivider, colorError, colorScrim                                              color.Color
+	colorSelectionFg, colorSelectionBg, colorPage, colorPanel                         color.Color
 
-	colorSelectionFg = lipgloss.Color(defaultColors.SelectionFg)
-	colorSelectionBg = lipgloss.Color(defaultColors.SelectionBg)
-	colorPage        = lipgloss.Color(defaultColors.Page)
-	colorPanel       = lipgloss.Color(panelFromPage(defaultColors.Page))
+	themeBoldTitles, themeItalicDescs bool
+	activeGlyphs                      themeGlyphs
+	activeCover                       themeCover
+	activeBackgrounds                 themeBackgrounds
 
-	themeBoldTitles   bool
-	themeItalicDescs  bool
-	activeGlyphs      = defaultGlyphs
-	activeCover       = defaultCover
-	activeBackgrounds = defaultBackgrounds
-)
+	styleHeaderStatus, styleHeaderPlaying, styleHeaderPaused              lipgloss.Style
+	styleHeaderCenter, styleHeaderSub, styleHeaderVolume                  lipgloss.Style
+	styleError, styleDimmed, styleDivider, styleSectionLabel              lipgloss.Style
+	stylePlaylistName, stylePlaylistOwner                                 lipgloss.Style
+	styleTrackName, styleArtistName, styleAlbumName                       lipgloss.Style
+	styleQueueHeader, styleQueueTrack, styleQueueCursor                   lipgloss.Style
+	styleQueueSelected, stylePlayerTime, styleProgressBarEmpty            lipgloss.Style
+	styleTrackPopupTitle, styleTrackPopupLoading, styleTrackPopupHint     lipgloss.Style
+	styleTabActive, styleTabInactive                                      lipgloss.Style
+	styleModalBox, styleModalTitle, styleModalHint, styleModalSelectedRow lipgloss.Style
 
-// panelFromPage derives the panel tone from the page when a theme does not
-// set one explicitly: a barely-there lift toward white keeps the frame
-// continuous (the modal boxes are the only differentiated surfaces)
-// without banded contrast breaks.
+	tabBar   *stringCache[tabBarCacheKey]
+	bars     *stringCache[barCacheKey]
+	dividers *stringCache[dividerCacheKey]
+
+	// Last unfiltered browse selection per list, so the cover preview
+	// never chases the filter cursor (shared pointer: every model copy
+	// agrees, and a theme rebuild starts it cold like the caches).
+	previewStable *stablePreview
+
+	// One fg-block style per palette color, so the picker doesn't rebuild
+	// styles per cell per frame.
+	help         help.Model
+	swatchStyles map[color.Color]lipgloss.Style
+
+	// Width is set per render on a copy, so the frame path allocates
+	// nothing (gradientBar used to construct one per call).
+	barProgress progress.Model
+
+	// Read once: hot paint paths compare instead of re-parsing the
+	// environment per line (it is process-fixed).
+	colorProfile colorprofile.Profile
+}
+
+// A barely-there lift keeps the frame continuous (modal boxes stay the
+// only differentiated surfaces) without banded contrast breaks.
 func panelFromPage(page string) string {
 	if page == "" {
 		return ""
@@ -49,7 +75,6 @@ func panelFromPage(page string) string {
 	return lifted
 }
 
-// mixChannel blends two 8-bit channels (t=0 → a, t=1 → b), clamped.
 func mixChannel(a, b uint8, t float64) uint8 {
 	v := float64(a) + (float64(b)-float64(a))*t
 	if v < 0 {
@@ -61,8 +86,8 @@ func mixChannel(a, b uint8, t float64) uint8 {
 	return uint8(v + 0.5)
 }
 
-// mixHex blends two hex colors (t=0 → a, t=1 → b); non-hex inputs (ANSI
-// names, 0-15 indices) return "" so callers can fall back gracefully.
+// Non-hex inputs (ANSI names, 0-15 indices) return "" so callers fall
+// back gracefully.
 func mixHex(a, b string, t float64) string {
 	ra, ga, ba, ok := hexToRGB(a)
 	if !ok {
@@ -102,202 +127,176 @@ func hexToRGB(s string) (r, g, b uint8, ok bool) {
 	return r, g, b, true
 }
 
-// applyTheme rebuilds every package-level style from the resolved theme
-// state (palette + glyph + typography + cover layers). It must be called
-// once at model construction, before any delegate or help model is built,
-// and never concurrently with rendering.
-func applyTheme(st themeState) {
-	themeEpoch++
-	resetStringCaches()
-	colorBlue = lipgloss.Color(st.colors.Blue)
-	colorBlueLight = lipgloss.Color(st.colors.BlueLight)
-	colorOffWhite = lipgloss.Color(st.colors.OffWhite)
-	colorGray = lipgloss.Color(st.colors.Gray)
-	colorMutedBlue = lipgloss.Color(st.colors.MutedBlue)
-	colorDimBlue = lipgloss.Color(st.colors.DimBlue)
-	colorDivider = lipgloss.Color(st.colors.Divider)
-	colorError = lipgloss.Color(st.colors.Error)
-	colorScrim = lipgloss.Color(st.colors.Scrim)
-	colorSelectionFg = lipgloss.Color(st.colors.SelectionFg)
-	colorSelectionBg = lipgloss.Color(st.colors.SelectionBg)
-	colorPage = lipgloss.Color(st.colors.Page)
+func buildThemeStyles(st themeState) *themeStyles {
+	s := &themeStyles{
+		tabBar:        newStringCache[tabBarCacheKey](),
+		bars:          newStringCache[barCacheKey](),
+		dividers:      newStringCache[dividerCacheKey](),
+		help:          help.New(),
+		previewStable: &stablePreview{},
+		swatchStyles:  map[color.Color]lipgloss.Style{},
+		colorProfile:  colorprofile.Env(os.Environ()),
+	}
+	s.colorBlue = lipgloss.Color(st.colors.Blue)
+	s.colorBlueLight = lipgloss.Color(st.colors.BlueLight)
+	s.colorOffWhite = lipgloss.Color(st.colors.OffWhite)
+	s.colorGray = lipgloss.Color(st.colors.Gray)
+	s.colorMutedBlue = lipgloss.Color(st.colors.MutedBlue)
+	s.colorDimBlue = lipgloss.Color(st.colors.DimBlue)
+	s.colorDivider = lipgloss.Color(st.colors.Divider)
+	s.colorError = lipgloss.Color(st.colors.Error)
+	s.colorScrim = lipgloss.Color(st.colors.Scrim)
+	s.colorSelectionFg = lipgloss.Color(st.colors.SelectionFg)
+	s.colorSelectionBg = lipgloss.Color(st.colors.SelectionBg)
+	s.colorPage = lipgloss.Color(st.colors.Page)
 	panel := st.colors.Panel
 	if panel == "" {
 		panel = panelFromPage(st.colors.Page)
 	}
-	colorPanel = lipgloss.Color(panel)
-	themeBoldTitles = st.typography.BoldTitles
-	themeItalicDescs = st.typography.ItalicDescs
-	activeGlyphs = st.glyphs
-	activeCover = st.cover
-	activeBackgrounds = st.backgrounds
+	s.colorPanel = lipgloss.Color(panel)
+	s.themeBoldTitles = st.typography.BoldTitles
+	s.themeItalicDescs = st.typography.ItalicDescs
+	s.activeGlyphs = st.glyphs
+	s.activeCover = st.cover
+	s.activeBackgrounds = st.backgrounds
 
-	styleHeaderStatus = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+	full, empty := s.themeBarRunes()
+	s.barProgress = progress.New(
+		progress.WithoutPercentage(),
+		progress.WithColors(s.colorBlue, s.colorBlueLight),
+		progress.WithFillCharacters(full, empty),
+	)
+	s.barProgress.EmptyColor = s.colorGray
 
-	styleHeaderPlaying = lipgloss.NewStyle().
-		Foreground(colorBlue).
+	s.styleHeaderStatus = lipgloss.NewStyle().
+		Foreground(s.colorMutedBlue)
+
+	s.styleHeaderPlaying = lipgloss.NewStyle().
+		Foreground(s.colorBlue).
 		Bold(true)
 
-	styleHeaderPaused = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+	s.styleHeaderPaused = lipgloss.NewStyle().
+		Foreground(s.colorMutedBlue)
 
-	styleHeaderCenter = lipgloss.NewStyle().
-		Bold(themeBoldTitles).
-		Foreground(colorOffWhite)
+	s.styleHeaderCenter = lipgloss.NewStyle().
+		Bold(s.themeBoldTitles).
+		Foreground(s.colorOffWhite)
 
-	styleHeaderSub = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+	s.styleHeaderSub = lipgloss.NewStyle().
+		Foreground(s.colorMutedBlue)
 
-	styleHeaderVolume = lipgloss.NewStyle().
-		Foreground(colorGray)
+	s.styleHeaderVolume = lipgloss.NewStyle().
+		Foreground(s.colorGray)
 
-	styleError = lipgloss.NewStyle().
-		Foreground(colorError)
+	s.styleError = lipgloss.NewStyle().
+		Foreground(s.colorError)
 
-	styleDimmed = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+	s.styleDimmed = lipgloss.NewStyle().
+		Foreground(s.colorMutedBlue)
 
-	styleDivider = lipgloss.NewStyle().
-		Foreground(colorDivider)
+	s.styleDivider = lipgloss.NewStyle().
+		Foreground(s.colorDivider)
 
-	styleSectionLabel = lipgloss.NewStyle().
+	s.styleSectionLabel = lipgloss.NewStyle().
 		Bold(true).
-		Foreground(colorMutedBlue)
+		Foreground(s.colorMutedBlue)
 
-	stylePlaylistName = lipgloss.NewStyle().
-		Bold(themeBoldTitles).
-		Foreground(colorOffWhite)
+	s.stylePlaylistName = lipgloss.NewStyle().
+		Bold(s.themeBoldTitles).
+		Foreground(s.colorOffWhite)
 
-	stylePlaylistOwner = lipgloss.NewStyle().
-		Italic(themeItalicDescs).
-		Foreground(colorGray)
+	s.stylePlaylistOwner = lipgloss.NewStyle().
+		Italic(s.themeItalicDescs).
+		Foreground(s.colorGray)
 
-	styleTrackName = lipgloss.NewStyle().
-		Bold(themeBoldTitles).
-		Foreground(colorOffWhite)
+	s.styleTrackName = lipgloss.NewStyle().
+		Bold(s.themeBoldTitles).
+		Foreground(s.colorOffWhite)
 
-	styleArtistName = lipgloss.NewStyle().
-		Italic(themeItalicDescs).
-		Foreground(colorGray)
+	s.styleArtistName = lipgloss.NewStyle().
+		Italic(s.themeItalicDescs).
+		Foreground(s.colorGray)
 
-	styleAlbumName = lipgloss.NewStyle().
-		Italic(themeItalicDescs).
-		Foreground(colorMutedBlue)
+	s.styleAlbumName = lipgloss.NewStyle().
+		Italic(s.themeItalicDescs).
+		Foreground(s.colorMutedBlue)
 
-	styleQueueHeader = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+	s.styleQueueHeader = lipgloss.NewStyle().
+		Foreground(s.colorMutedBlue)
 
-	styleQueueTrack = lipgloss.NewStyle().
-		Foreground(colorGray)
+	s.styleQueueTrack = lipgloss.NewStyle().
+		Foreground(s.colorGray)
 
-	styleQueueCursor = lipgloss.NewStyle().
-		Foreground(colorBlueLight)
+	s.styleQueueCursor = lipgloss.NewStyle().
+		Foreground(s.colorBlueLight)
 
-	styleQueueSelected = lipgloss.NewStyle().
-		Foreground(colorSelectionFg).
-		Background(colorSelectionBg)
+	s.styleQueueSelected = lipgloss.NewStyle().
+		Foreground(s.colorSelectionFg).
+		Background(s.colorSelectionBg)
 
-	stylePlayerTime = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+	s.stylePlayerTime = lipgloss.NewStyle().
+		Foreground(s.colorMutedBlue)
 
-	styleProgressBarEmpty = lipgloss.NewStyle().
-		Foreground(colorGray)
+	s.styleProgressBarEmpty = lipgloss.NewStyle().
+		Foreground(s.colorGray)
 
-	styleTrackPopupTitle = lipgloss.NewStyle().
-		Bold(themeBoldTitles).
-		Foreground(colorBlue)
+	s.styleTrackPopupTitle = lipgloss.NewStyle().
+		Bold(s.themeBoldTitles).
+		Foreground(s.colorBlue)
 
-	styleTrackPopupLoading = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+	s.styleTrackPopupLoading = lipgloss.NewStyle().
+		Foreground(s.colorMutedBlue)
 
-	styleTrackPopupHint = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+	s.styleTrackPopupHint = lipgloss.NewStyle().
+		Foreground(s.colorMutedBlue)
 
-	styleTabActive = lipgloss.NewStyle().
+	s.styleTabActive = lipgloss.NewStyle().
 		Bold(true).
-		Foreground(colorOffWhite).
-		Background(colorDimBlue)
+		Foreground(s.colorOffWhite).
+		Background(s.colorDimBlue)
 
-	styleTabInactive = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+	s.styleTabInactive = lipgloss.NewStyle().
+		Foreground(s.colorMutedBlue)
 
-	modalBg := modalBoxBackground()
-	styleModalBox = lipgloss.NewStyle().
-		Border(themeBorder()).
-		BorderForeground(colorBlue).
+	modalBg := s.modalBoxBackground()
+	s.styleModalBox = lipgloss.NewStyle().
+		Border(s.themeBorder()).
+		BorderForeground(s.colorBlue).
 		Background(modalBg).
 		Padding(0, 1)
 
-	styleModalTitle = lipgloss.NewStyle().
-		Bold(themeBoldTitles).
-		Foreground(colorBlue)
+	s.styleModalTitle = lipgloss.NewStyle().
+		Bold(s.themeBoldTitles).
+		Foreground(s.colorBlue)
 
-	styleModalHint = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+	s.styleModalHint = lipgloss.NewStyle().
+		Foreground(s.colorMutedBlue)
 
-	styleModalSelectedRow = lipgloss.NewStyle().
-		Background(colorSelectionBg).
-		Foreground(colorSelectionFg)
+	s.styleModalSelectedRow = lipgloss.NewStyle().
+		Background(s.colorSelectionBg).
+		Foreground(s.colorSelectionFg)
 
+	return s
 }
 
-var (
-	styleHeaderStatus      lipgloss.Style
-	styleHeaderPlaying     lipgloss.Style
-	styleHeaderPaused      lipgloss.Style
-	styleHeaderCenter      lipgloss.Style
-	styleHeaderSub         lipgloss.Style
-	styleHeaderVolume      lipgloss.Style
-	styleError             lipgloss.Style
-	styleDimmed            lipgloss.Style
-	styleDivider           lipgloss.Style
-	styleSectionLabel      lipgloss.Style
-	stylePlaylistName      lipgloss.Style
-	stylePlaylistOwner     lipgloss.Style
-	styleTrackName         lipgloss.Style
-	styleArtistName        lipgloss.Style
-	styleAlbumName         lipgloss.Style
-	styleQueueHeader       lipgloss.Style
-	styleQueueTrack        lipgloss.Style
-	styleQueueCursor       lipgloss.Style
-	styleQueueSelected     lipgloss.Style
-	stylePlayerTime        lipgloss.Style
-	styleProgressBarEmpty  lipgloss.Style
-	styleTrackPopupTitle   lipgloss.Style
-	styleTrackPopupLoading lipgloss.Style
-	styleTrackPopupHint    lipgloss.Style
-	styleTabActive         lipgloss.Style
-	styleTabInactive       lipgloss.Style
-	styleModalBox          lipgloss.Style
-	styleModalTitle        lipgloss.Style
-	styleModalHint         lipgloss.Style
-	styleModalSelectedRow  lipgloss.Style
-)
-
-// transparentFrame reports whether the frame paints no background of its
-// own: mode checks read this instead of comparing style strings, so a new
+// Mode checks read this instead of comparing style strings, so a new
 // mode cannot silently inherit painted behavior.
-func transparentFrame() bool {
-	return activeBackgrounds.Style == "transparent"
+func (s *themeStyles) transparentFrame() bool {
+	return s.activeBackgrounds.Style == "transparent"
 }
 
-// modalBoxBackground is the background the modal boxes (and their
-// background re-assertion) use: the panel tone, flattened to the page in
-// solid mode so the whole frame is one surface. Transparent keeps the
-// panel tone — the box is floating chrome, not a frame zone, and an
-// unpainted box would dissolve into the terminal behind it.
-func modalBoxBackground() lipgloss.Color {
-	if activeBackgrounds.Style == "solid" {
-		return colorPage
+// Solid flattens to the page (one surface); transparent keeps the
+// panel tone — the box is floating chrome and would otherwise dissolve
+// into the terminal behind it.
+func (s *themeStyles) modalBoxBackground() color.Color {
+	if s.activeBackgrounds.Style == "solid" {
+		return s.colorPage
 	}
-	return colorPanel
+	return s.colorPanel
 }
 
-// themeBorder returns the theme's box border family for modal boxes and
-// placeholder art (cover frames have their own border setting).
-func themeBorder() lipgloss.Border {
-	switch activeGlyphs.Border {
+func (s *themeStyles) themeBorder() lipgloss.Border {
+	switch s.activeGlyphs.Border {
 	case "thick":
 		return lipgloss.ThickBorder()
 	case "double":
@@ -312,18 +311,15 @@ func themeBorder() lipgloss.Border {
 	}
 }
 
-// themeBarRunes returns the progress bar's full/empty runes.
-func themeBarRunes() (full, empty rune) {
-	if activeGlyphs.Bar == "line" {
+func (s *themeStyles) themeBarRunes() (full, empty rune) {
+	if s.activeGlyphs.Bar == "line" {
 		return '━', '─'
 	}
 	return '█', '░'
 }
 
-// themePlayPauseGlyphs returns the transport pair for the configured set;
-// nerd-font terminals keep the NF glyphs (icon() decides).
-func themePlayPauseGlyphs() (play, pause string) {
-	switch activeGlyphs.PlayPause {
+func (s *themeStyles) themePlayPauseGlyphs() (play, pause string) {
+	switch s.activeGlyphs.PlayPause {
 	case "bold":
 		return "►", "⏸"
 	case "thin":
@@ -335,25 +331,23 @@ func themePlayPauseGlyphs() (play, pause string) {
 	}
 }
 
-// themeNowPlayingGlyph returns the now-playing marker for the configured
-// set ("" for the plain style).
-func themeNowPlayingGlyph() string {
-	switch activeGlyphs.NowPlaying {
+func (s *themeStyles) themeCursorGlyph() string {
+	switch s.activeGlyphs.QueueCursor {
+	case "note":
+		return "♪"
 	case "dot":
 		return "●"
 	case "play":
 		return "▶"
-	case "arrow":
-		return "→"
+	case "plain":
+		return ""
 	default:
-		return "♪"
+		return ">"
 	}
 }
 
-// coverFrameBorder returns the theme's cover frame border, ok=false when
-// the frame style is "none".
-func coverFrameBorder() (lipgloss.Border, bool) {
-	switch activeCover.Frame {
+func (s *themeStyles) coverFrameBorder() (lipgloss.Border, bool) {
+	switch s.activeCover.Frame {
 	case "rounded":
 		return lipgloss.RoundedBorder(), true
 	case "thick":
@@ -363,17 +357,14 @@ func coverFrameBorder() (lipgloss.Border, bool) {
 	}
 }
 
-// coverFrameFits reports whether a cell is large enough to inset the art
-// inside a frame without starving it.
-func coverFrameFits(cols, rows int) bool {
-	_, ok := coverFrameBorder()
+func (s *themeStyles) coverFrameFits(cols, rows int) bool {
+	_, ok := s.coverFrameBorder()
 	return ok && cols >= 6 && rows >= 3
 }
 
-// themedSpinner constructs a bubbles spinner from the theme's style name.
-func themedSpinner() spinner.Model {
+func themedSpinner(s *themeStyles) spinner.Model {
 	preset := spinner.MiniDot
-	switch activeGlyphs.Spinner {
+	switch s.activeGlyphs.Spinner {
 	case "dot":
 		preset = spinner.Dot
 	case "line":
@@ -388,114 +379,123 @@ func themedSpinner() spinner.Model {
 	return spinner.New(spinner.WithSpinner(preset))
 }
 
-func init() {
-	applyTheme(themePresetState("default"))
+func (s *themeStyles) sectionDivider(w int) string {
+	key := dividerCacheKey{horizontal: true, n: w}
+	if cached, ok := s.dividers.get(key); ok {
+		return cached
+	}
+	out := s.styleDivider.Render(strings.Repeat("─", max(0, w)))
+	s.dividers.put(key, out)
+	return out
 }
 
-func sectionDivider(w int) string {
-	return styleDivider.Render(strings.Repeat("─", max(0, w)))
-}
-
-func verticalDivider(h int) string {
+func (s *themeStyles) verticalDivider(h int) string {
 	if h <= 0 {
 		return ""
 	}
-	line := styleDivider.Render("│")
-	return strings.Repeat(line+"\n", h-1) + line
+	key := dividerCacheKey{n: h}
+	if cached, ok := s.dividers.get(key); ok {
+		return cached
+	}
+	line := s.styleDivider.Render("│")
+	out := strings.Repeat(line+"\n", h-1) + line
+	s.dividers.put(key, out)
+	return out
 }
 
-// newBrowseList builds one of the two library browsers with the shared
-// chrome configuration (chrome flags off, search prompt, themed styles).
-func newBrowseList() list.Model {
-	l := list.New(nil, newCachedPlaylistDelegate(), 40, 20)
+func newBrowseList(s *themeStyles) list.Model {
+	l := list.New(nil, newCachedPlaylistDelegate(s), 40, 20)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
 	l.SetShowFilter(true)
 	l.SetShowHelp(false)
 	l.FilterInput.Prompt = "Search: "
-	applyListStyles(&l)
+	applyListStyles(&l, s)
 	return l
 }
 
-func newPlaylistDelegate() list.DefaultDelegate {
+func newPlaylistDelegate(s *themeStyles) list.DefaultDelegate {
 	d := list.NewDefaultDelegate()
 	d.ShowDescription = true
 	d.SetSpacing(0)
 
 	d.Styles.SelectedTitle = lipgloss.NewStyle().
-		Bold(themeBoldTitles).
-		Foreground(colorBlue).
+		Bold(s.themeBoldTitles).
+		Foreground(s.colorBlue).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(colorBlue).
+		BorderForeground(s.colorBlue).
 		Padding(0, 0, 0, 1)
 
 	d.Styles.SelectedDesc = lipgloss.NewStyle().
-		Italic(themeItalicDescs).
-		Foreground(colorMutedBlue).
+		Italic(s.themeItalicDescs).
+		Foreground(s.colorMutedBlue).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(colorBlue).
+		BorderForeground(s.colorBlue).
 		Padding(0, 0, 0, 1)
 
 	d.Styles.NormalTitle = lipgloss.NewStyle().
-		Foreground(colorOffWhite).
+		Foreground(s.colorOffWhite).
 		Padding(0, 0, 0, 2)
 
 	d.Styles.NormalDesc = lipgloss.NewStyle().
-		Italic(themeItalicDescs).
-		Foreground(colorMutedBlue).
+		Italic(s.themeItalicDescs).
+		Foreground(s.colorMutedBlue).
 		Padding(0, 0, 0, 2)
 
 	d.Styles.DimmedTitle = lipgloss.NewStyle().
-		Foreground(colorDimBlue).
+		Foreground(s.colorDimBlue).
 		Padding(0, 0, 0, 2)
 
 	d.Styles.DimmedDesc = lipgloss.NewStyle().
-		Foreground(colorMutedBlue).
+		Foreground(s.colorMutedBlue).
 		Padding(0, 0, 0, 2)
 
 	return d
 }
 
-func applyListStyles(l *list.Model) {
+func applyListStyles(l *list.Model, s *themeStyles) {
 	l.Styles.Title = lipgloss.NewStyle().
-		Bold(themeBoldTitles).
-		Foreground(colorOffWhite)
+		Bold(s.themeBoldTitles).
+		Foreground(s.colorOffWhite)
 
 	l.Styles.TitleBar = lipgloss.NewStyle().
-		Background(lipgloss.Color("")).
+		Background(lipgloss.NoColor{}).
 		Padding(0, 0, 1, 0)
 
-	l.Styles.FilterPrompt = lipgloss.NewStyle().
-		Foreground(colorBlue)
+	// v2 styles the prompt per focus state (v1 applied regardless), so
+	// set both states.
+	l.Styles.Filter.Focused.Prompt = lipgloss.NewStyle().
+		Foreground(s.colorBlue)
+	l.Styles.Filter.Blurred.Prompt = lipgloss.NewStyle().
+		Foreground(s.colorBlue)
 
-	l.Styles.FilterCursor = lipgloss.NewStyle().
-		Foreground(colorBlueLight)
+	l.Styles.Filter.Cursor.Color = s.colorBlueLight
 
 	l.Styles.StatusBar = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+		Foreground(s.colorMutedBlue)
 
 	l.Styles.StatusEmpty = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+		Foreground(s.colorMutedBlue)
 
 	l.Styles.NoItems = lipgloss.NewStyle().
-		Foreground(colorMutedBlue).
+		Foreground(s.colorMutedBlue).
 		Padding(1, 2)
 
 	l.Styles.PaginationStyle = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+		Foreground(s.colorMutedBlue)
 
 	l.Styles.ActivePaginationDot = lipgloss.NewStyle().
-		Foreground(colorBlue).
+		Foreground(s.colorBlue).
 		SetString("•")
 
 	l.Styles.InactivePaginationDot = lipgloss.NewStyle().
-		Foreground(colorMutedBlue).
+		Foreground(s.colorMutedBlue).
 		SetString("•")
 
 	l.Styles.HelpStyle = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+		Foreground(s.colorMutedBlue)
 
 	l.Styles.ArabicPagination = lipgloss.NewStyle().
-		Foreground(colorMutedBlue)
+		Foreground(s.colorMutedBlue)
 }

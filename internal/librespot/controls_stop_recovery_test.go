@@ -178,8 +178,7 @@ func TestStopRecoveryGuardKeepsSameTrackCommit(t *testing.T) {
 	if action, _ := p.planStopRecovery(); action != stopActionReload {
 		t.Fatalf("first stop must reload, got %d", action)
 	}
-	// A same-track commit is the recovery's own reload: it must not
-	// clear the guard, or the next stop reloads again forever.
+	// A same-track commit is the recovery's own reload: it must not clear the guard.
 	p.maybeResetStopRecoveryGuard(stopRecoveryTestURI)
 	if p.stopRecoveryURI != stopRecoveryTestURI {
 		t.Fatal("same-track commit must keep the guard armed")
@@ -217,8 +216,7 @@ func TestReloadPathDoesNotArmRecreateFlag(t *testing.T) {
 
 func TestAdvanceAfterOutputFailurePushOrder(t *testing.T) {
 	p, ch := newStopRecoveryTestPlayer(t)
-	// Contend the transition so the advance short-circuits without a
-	// live player; the push ordering is what this guards.
+	// Contend the transition so the advance short-circuits; this guards push ordering.
 	p.advanceInFlight.Store(true)
 
 	p.advanceAfterOutputFailure()
@@ -258,8 +256,7 @@ func TestDropSuspectCachedStream(t *testing.T) {
 	if p.hasTransitionCachedStream(*id) {
 		t.Fatal("suspect cached stream must be dropped before reload")
 	}
-	// The drop closes asynchronously by design; wait for it instead of
-	// racing the closer goroutine.
+	// The drop closes asynchronously by design; wait instead of racing the closer.
 	select {
 	case <-closedCh:
 	case <-time.After(5 * time.Second):
@@ -305,10 +302,8 @@ func TestIsStaleStopSource(t *testing.T) {
 	}
 }
 
-// A Stop that predates the committed track (the output loop reads ahead
-// while Run loads the next track synchronously) must not restart the
-// healthy current track: the log showed exactly this as a 1s-later reload
-// of a freshly loaded track with its position reset.
+// A Stop predating the committed track (the output loop reads ahead while Run
+// loads synchronously) must not restart the healthy track from zero.
 func TestUnexpectedStopIgnoresStaleSource(t *testing.T) {
 	p, ch := newStopRecoveryTestPlayer(t)
 	current := &mockAudioSource{}
@@ -325,16 +320,14 @@ func TestUnexpectedStopIgnoresStaleSource(t *testing.T) {
 	if p.outputRecreateOnPlay {
 		t.Fatal("stale stop must not arm output recreation")
 	}
-	// Only the light state push goes out; no error may surface for a
-	// failure that predates the current track.
+	// Only the light push goes out; predated failures surface no error.
 	if first := drainPlaybackUpdate(t, ch); first.Error != "" {
 		t.Fatalf("stale stop must not push an error, got %q", first.Error)
 	}
 	assertNoPlaybackUpdate(t, ch)
 }
 
-// A Stop tagged with the current primary is live and must reach the
-// normal recovery planning (nil-tagged stops behave exactly as before).
+// A Stop tagged with the current primary is live and reaches normal planning.
 func TestUnexpectedStopMatchingSourceReachesRecovery(t *testing.T) {
 	p, _ := newStopRecoveryTestPlayer(t)
 	current := &mockAudioSource{}
@@ -342,8 +335,7 @@ func TestUnexpectedStopMatchingSourceReachesRecovery(t *testing.T) {
 	p.stopRecoveryURI = stopRecoveryTestURI
 	p.stopRecoveryFailures = 1
 
-	// Same track failing again must advance, not reload: the tag matched,
-	// so planning ran instead of the stale-ignore path.
+	// A re-failing same track must advance, not reload: the tag matched.
 	if action, _ := p.planStopRecovery(); action != stopActionAdvance {
 		t.Fatalf("matching stop must advance on a repeated failure, got %d", action)
 	}

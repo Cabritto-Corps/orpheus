@@ -1,10 +1,15 @@
 package tui
 
 import (
+	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 )
 
 type keyMap struct {
@@ -74,46 +79,48 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	}
 }
 
-// actionRegistry is the single ordered source for every bindable action:
-// keys.json validity, the settings keys menu, the key-conflict scan and the
-// help modal groups all derive from it, so the four copies that could drift
-// are gone. Order defines the help modal's group order and the settings
-// menu row order.
+// actionRegistry is the single ordered source for every bindable action;
+// order defines help group and settings menu order.
 type actionMeta struct {
 	action string
 	group  string
 	label  string
 	desc   string
 	bind   func(keyMap) key.Binding
+	set    func(*keyMap, []string)
 }
 
 var actionRegistry = []actionMeta{
-	{"play_pause", "Playback", "play/pause", "play/pause", func(k keyMap) key.Binding { return k.PlayPause }},
-	{"next", "Playback", "next track", "next track", func(k keyMap) key.Binding { return k.Next }},
-	{"prev", "Playback", "previous track", "previous track", func(k keyMap) key.Binding { return k.Prev }},
-	{"shuffle", "Playback", "shuffle", "shuffle", func(k keyMap) key.Binding { return k.Shuffle }},
-	{"loop", "Playback", "repeat", "repeat", func(k keyMap) key.Binding { return k.Loop }},
-	{"vol_up", "Playback", "volume up", "volume up", func(k keyMap) key.Binding { return k.VolUp }},
-	{"vol_down", "Playback", "volume down", "volume down", func(k keyMap) key.Binding { return k.VolDown }},
-	{"seek_back", "Playback", "seek back", "seek back", func(k keyMap) key.Binding { return k.SeekBack }},
-	{"seek_fwd", "Playback", "seek forward", "seek forward", func(k keyMap) key.Binding { return k.SeekFwd }},
-	{"tab", "Navigation", "switch tab", "switch tab", func(k keyMap) key.Binding { return k.Tab }},
-	{"refresh", "Navigation", "refresh library", "refresh library", func(k keyMap) key.Binding { return k.Refresh }},
-	{"filter", "Navigation", "search filter", "search filter", func(k keyMap) key.Binding { return k.Filter }},
-	{"select", "Navigation", "select / play", "select / play", func(k keyMap) key.Binding { return k.Select }},
-	{"toggle_help", "Navigation", "toggle help", "toggle help", func(k keyMap) key.Binding { return k.ToggleHelp }},
-	{"settings", "Navigation", "open settings", "open settings", func(k keyMap) key.Binding { return k.Settings }},
-	{"close_modal", "Navigation", "close modal", "close modal", func(k keyMap) key.Binding { return k.CloseModal }},
-	{"quit", "Navigation", "quit (ctrl+c always quits)", "quit", func(k keyMap) key.Binding { return k.Quit }},
-	{"queue_up", "Queue", "queue cursor up", "cursor up", func(k keyMap) key.Binding { return k.QueueUp }},
-	{"queue_down", "Queue", "queue cursor down", "cursor down", func(k keyMap) key.Binding { return k.QueueDown }},
-	{"queue_jump", "Queue", "play from queue row", "play from row", func(k keyMap) key.Binding { return k.QueueJump }},
-	{"queue_remove", "Queue", "remove queue row", "remove row", func(k keyMap) key.Binding { return k.QueueRemove }},
-	{"queue_move_up", "Queue", "move queue row up", "move row up", func(k keyMap) key.Binding { return k.QueueMoveUp }},
-	{"queue_move_down", "Queue", "move queue row down", "move row down", func(k keyMap) key.Binding { return k.QueueMoveDown }},
+	{"play_pause", "Playback", "play/pause", "play/pause", func(k keyMap) key.Binding { return k.PlayPause }, func(m *keyMap, keys []string) { m.PlayPause = overrideBinding(m.PlayPause, keys) }},
+	{"next", "Playback", "next track", "next track", func(k keyMap) key.Binding { return k.Next }, func(m *keyMap, keys []string) { m.Next = overrideBinding(m.Next, keys) }},
+	{"prev", "Playback", "previous track", "previous track", func(k keyMap) key.Binding { return k.Prev }, func(m *keyMap, keys []string) { m.Prev = overrideBinding(m.Prev, keys) }},
+	{"shuffle", "Playback", "shuffle", "shuffle", func(k keyMap) key.Binding { return k.Shuffle }, func(m *keyMap, keys []string) { m.Shuffle = overrideBinding(m.Shuffle, keys) }},
+	{"loop", "Playback", "repeat", "repeat", func(k keyMap) key.Binding { return k.Loop }, func(m *keyMap, keys []string) { m.Loop = overrideBinding(m.Loop, keys) }},
+	{"vol_up", "Playback", "volume up", "volume up", func(k keyMap) key.Binding { return k.VolUp }, func(m *keyMap, keys []string) { m.VolUp = overrideBinding(m.VolUp, keys) }},
+	{"vol_down", "Playback", "volume down", "volume down", func(k keyMap) key.Binding { return k.VolDown }, func(m *keyMap, keys []string) { m.VolDown = overrideBinding(m.VolDown, keys) }},
+	{"seek_back", "Playback", "seek back", "seek back", func(k keyMap) key.Binding { return k.SeekBack }, func(m *keyMap, keys []string) { m.SeekBack = overrideBinding(m.SeekBack, keys) }},
+	{"seek_fwd", "Playback", "seek forward", "seek forward", func(k keyMap) key.Binding { return k.SeekFwd }, func(m *keyMap, keys []string) { m.SeekFwd = overrideBinding(m.SeekFwd, keys) }},
+	{"tab", "Navigation", "switch tab", "switch tab", func(k keyMap) key.Binding { return k.Tab }, func(m *keyMap, keys []string) { m.Tab = overrideBinding(m.Tab, keys) }},
+	{"refresh", "Navigation", "refresh library", "refresh library", func(k keyMap) key.Binding { return k.Refresh }, func(m *keyMap, keys []string) { m.Refresh = overrideBinding(m.Refresh, keys) }},
+	{"filter", "Navigation", "search filter", "search filter", func(k keyMap) key.Binding { return k.Filter }, func(m *keyMap, keys []string) { m.Filter = overrideBinding(m.Filter, keys) }},
+	{"select", "Navigation", "select / play", "select / play", func(k keyMap) key.Binding { return k.Select }, func(m *keyMap, keys []string) { m.Select = overrideBinding(m.Select, keys) }},
+	{"toggle_help", "Navigation", "toggle help", "toggle help", func(k keyMap) key.Binding { return k.ToggleHelp }, func(m *keyMap, keys []string) { m.ToggleHelp = overrideBinding(m.ToggleHelp, keys) }},
+	{"settings", "Navigation", "open settings", "open settings", func(k keyMap) key.Binding { return k.Settings }, func(m *keyMap, keys []string) { m.Settings = overrideBinding(m.Settings, keys) }},
+	{"close_modal", "Navigation", "close modal", "close modal", func(k keyMap) key.Binding { return k.CloseModal }, func(m *keyMap, keys []string) { m.CloseModal = overrideBinding(m.CloseModal, keys) }},
+	{"quit", "Navigation", "quit (ctrl+c always quits)", "quit", func(k keyMap) key.Binding { return k.Quit }, func(m *keyMap, keys []string) {
+		if !slices.Contains(keys, "ctrl+c") {
+			keys = append(append([]string{}, keys...), "ctrl+c")
+		}
+		m.Quit = overrideBinding(m.Quit, keys)
+	}},
+	{"queue_up", "Queue", "queue cursor up", "cursor up", func(k keyMap) key.Binding { return k.QueueUp }, func(m *keyMap, keys []string) { m.QueueUp = overrideBinding(m.QueueUp, keys) }},
+	{"queue_down", "Queue", "queue cursor down", "cursor down", func(k keyMap) key.Binding { return k.QueueDown }, func(m *keyMap, keys []string) { m.QueueDown = overrideBinding(m.QueueDown, keys) }},
+	{"queue_jump", "Queue", "play from queue row", "play from row", func(k keyMap) key.Binding { return k.QueueJump }, func(m *keyMap, keys []string) { m.QueueJump = overrideBinding(m.QueueJump, keys) }},
+	{"queue_remove", "Queue", "remove queue row", "remove row", func(k keyMap) key.Binding { return k.QueueRemove }, func(m *keyMap, keys []string) { m.QueueRemove = overrideBinding(m.QueueRemove, keys) }},
+	{"queue_move_up", "Queue", "move queue row up", "move row up", func(k keyMap) key.Binding { return k.QueueMoveUp }, func(m *keyMap, keys []string) { m.QueueMoveUp = overrideBinding(m.QueueMoveUp, keys) }},
+	{"queue_move_down", "Queue", "move queue row down", "move row down", func(k keyMap) key.Binding { return k.QueueMoveDown }, func(m *keyMap, keys []string) { m.QueueMoveDown = overrideBinding(m.QueueMoveDown, keys) }},
 }
 
-// helpGroupsLayout derives the help modal's titled rows from the registry.
 var helpGroupsLayout = func() []struct {
 	title  string
 	action string
@@ -134,14 +141,9 @@ var helpGroupsLayout = func() []struct {
 	return out
 }()
 
-// helpGroupLines renders one group as label……key lines. Labels are padded
-// in display cells; keys come from the live keyMap so rebinds reflect.
-// helpGroupLines renders one group: title, then label/key rows with the key
-// right-aligned at the column's own edge instead of trailing the label
-// column. colW is the column's allotted share of the modal width, so the
-// three columns spread across the full body instead of hugging the left.
+// Keys right-align at their column's edge and come from the live keyMap so rebinds reflect.
 func (m model) helpGroupLines(title string, labelWidth, colW int) []string {
-	lines := []string{styleSectionLabel.Render(title)}
+	lines := []string{m.styles.styleSectionLabel.Render(title)}
 	for _, g := range helpGroupsLayout {
 		if g.title != title {
 			continue
@@ -150,14 +152,24 @@ func (m model) helpGroupLines(title string, labelWidth, colW int) []string {
 		if !ok {
 			continue
 		}
-		lines = append(lines, styleQueueTrack.Render(padCell(g.label, labelWidth))+
-			styleTrackPopupTitle.Render(alignRight(shortKeyLabel(keys), max(0, colW-labelWidth))))
+		lines = append(lines, m.styles.styleQueueTrack.Render(padCell(g.label, labelWidth))+
+			m.styles.styleTrackPopupTitle.Render(alignRight(shortKeyLabel(keys), max(0, colW-labelWidth))))
 	}
 	return lines
 }
 
+func helpGroupTitles() []string {
+	titles := []string{}
+	for _, meta := range actionRegistry {
+		if !slices.Contains(titles, meta.group) {
+			titles = append(titles, meta.group)
+		}
+	}
+	return titles
+}
+
 func (m model) helpGroupedBody(contentW, availH int) string {
-	groups := []string{"Playback", "Navigation", "Queue"}
+	groups := helpGroupTitles()
 	labelWidth := 0
 	for _, g := range helpGroupsLayout {
 		lw := lipgloss.Width(g.label)
@@ -168,33 +180,27 @@ func (m model) helpGroupedBody(contentW, availH int) string {
 	labelWidth += 4
 
 	const gutter = 4
-	// Three columns, each an equal share of the full content width with the
-	// keys right-aligned at their column's edge - natural-width columns
-	// hugged the left and left a dead band on the right of the modal.
-	colW := (contentW - 2*gutter) / 3
+	colW := (contentW - (len(groups)-1)*gutter) / len(groups)
 	if colW >= labelWidth+6 {
-		var cols [][]string
+		cols := make([][]string, 0, len(groups))
 		for _, title := range groups {
 			cols = append(cols, m.helpGroupLines(title, labelWidth, colW))
 		}
-		three := joinTopAligned(cols[0], cols[1], cols[2])
+		three := joinTopAligned(cols...)
 		if lipgloss.Width(three) <= contentW {
-			return three + "\n\n" + styleTrackPopupHint.Render("ctrl+c always quits")
+			return three + "\n\n" + m.styles.styleTrackPopupHint.Render("ctrl+c always quits")
 		}
 	}
 
-	// Stacked fallback: keys right-align at the full content width so the
-	// narrow-terminal layout fills the row too.
+	// Stacked fallback for narrow terminals.
 	parts := make([]string, 0, len(groups))
 	for _, title := range groups {
 		parts = append(parts, strings.Join(m.helpGroupLines(title, labelWidth, contentW), "\n"))
 	}
 	// No clipping here: the caller (help viewport) decides overflow.
-	return strings.Join(parts, "\n\n") + "\n\n" + styleTrackPopupHint.Render("ctrl+c always quits")
+	return strings.Join(parts, "\n\n") + "\n\n" + m.styles.styleTrackPopupHint.Render("ctrl+c always quits")
 }
 
-// joinTopAligned pads each column to the tallest height and places them
-// side by side with a shared gutter.
 func joinTopAligned(cols ...[]string) string {
 	blocks := make([]string, 0, len(cols))
 	for _, col := range cols {
@@ -205,4 +211,203 @@ func joinTopAligned(cols ...[]string) string {
 		out = lipgloss.JoinHorizontal(lipgloss.Top, out, "    ", b)
 	}
 	return out
+}
+
+// Key identity: dispatch reduces bindings and presses to the same v2 identity
+// (modifier flags + base code), so aliases and reordered modifiers resolve to one key.
+
+// isQuitSignal is structurally Ctrl+C and nothing else; it deliberately does
+// not consult the registry, so the rebindable quit binding cannot punch through modals.
+func isQuitSignal(msg tea.KeyPressMsg) bool {
+	k := msg.Key()
+	if k.Mod&tea.ModCtrl == 0 {
+		return false
+	}
+	return k.Code == 'c' || k.Code == 'C' || k.Text == "c" || k.Text == "C"
+}
+
+// Capture controls match by identity, so they hold however close/select are rebound.
+func isCancelPress(msg tea.KeyPressMsg) bool {
+	return msg.Key().Code == tea.KeyEscape
+}
+
+func isConfirmPress(msg tea.KeyPressMsg) bool {
+	return msg.Key().Code == tea.KeyEnter
+}
+
+// Bare modifiers carry no base key and can never match a binding on their own.
+func isModifierCode(code rune) bool {
+	switch code {
+	case tea.KeyLeftShift, tea.KeyRightShift,
+		tea.KeyLeftAlt, tea.KeyRightAlt,
+		tea.KeyLeftCtrl, tea.KeyRightCtrl,
+		tea.KeyLeftSuper, tea.KeyRightSuper,
+		tea.KeyLeftHyper, tea.KeyRightHyper,
+		tea.KeyLeftMeta, tea.KeyRightMeta:
+		return true
+	}
+	return false
+}
+
+var keySpecModifiers = []struct {
+	name string
+	mod  tea.KeyMod
+}{
+	{"ctrl", tea.ModCtrl},
+	{"alt", tea.ModAlt},
+	{"shift", tea.ModShift},
+	{"meta", tea.ModMeta},
+	{"hyper", tea.ModHyper},
+	{"super", tea.ModSuper},
+	{"capslock", tea.ModCapsLock},
+	{"scrolllock", tea.ModScrollLock},
+	{"numlock", tea.ModNumLock},
+}
+
+func keyModFlag(s string) (tea.KeyMod, bool) {
+	for _, m := range keySpecModifiers {
+		if s == m.name {
+			return m.mod, true
+		}
+	}
+	return 0, false
+}
+
+func isKeyModName(s string) bool {
+	_, ok := keyModFlag(s)
+	return ok
+}
+
+// Aliases share a code, so they match the same press.
+func keySpecBaseCode(name string) (rune, bool) {
+	switch name {
+	case "enter", "return":
+		return tea.KeyEnter, true
+	case "tab":
+		return tea.KeyTab, true
+	case "esc", "escape":
+		return tea.KeyEscape, true
+	case "space":
+		return tea.KeySpace, true
+	case "up":
+		return tea.KeyUp, true
+	case "down":
+		return tea.KeyDown, true
+	case "left":
+		return tea.KeyLeft, true
+	case "right":
+		return tea.KeyRight, true
+	case "home":
+		return tea.KeyHome, true
+	case "end":
+		return tea.KeyEnd, true
+	case "pgup":
+		return tea.KeyPgUp, true
+	case "pgdown":
+		return tea.KeyPgDown, true
+	case "delete":
+		return tea.KeyDelete, true
+	case "backspace":
+		return tea.KeyBackspace, true
+	case "insert":
+		return tea.KeyInsert, true
+	}
+	return 0, false
+}
+
+// ok=false means the string names no key (loaders drop it).
+func parseKeySpec(spec string) (mod tea.KeyMod, code rune, text string, ok bool) {
+	if spec == "" {
+		return 0, 0, "", false
+	}
+	parts := strings.Split(spec, "+")
+	base := parts[len(parts)-1]
+	modParts := parts[:len(parts)-1]
+	if base == "" {
+		// A trailing "+" names the plus key itself ("ctrl++"); "ctrl+" names no key.
+		if len(parts) == 2 && parts[0] != "" {
+			return 0, 0, "", false
+		}
+		base = "+"
+		modParts = parts[:len(parts)-2]
+	}
+	for _, part := range modParts {
+		flag, ok := keyModFlag(part)
+		if !ok {
+			return 0, 0, "", false
+		}
+		mod |= flag
+	}
+	if base == " " {
+		code = tea.KeySpace
+	} else if c, named := keySpecBaseCode(base); named {
+		code = c
+	} else if utf8.RuneCountInString(base) == 1 {
+		code, _ = utf8.DecodeRuneInString(base)
+	} else {
+		return 0, 0, "", false
+	}
+	// Mirrors ultraviolet's matcher so "shift+j" matches a bare "J" press.
+	if rest := mod &^ (tea.ModShift | tea.ModCapsLock); rest == 0 && text == "" && unicode.IsPrint(code) {
+		if mod&(tea.ModShift|tea.ModCapsLock) != 0 {
+			text = string(unicode.ToUpper(code))
+		} else {
+			text = string(code)
+		}
+	}
+	return mod, code, text, true
+}
+
+// The comparison itself is ultraviolet's; this wrapper only rewrites the two
+// forms uv cannot parse: a "return" base (uv knows just "enter") and
+// a literal "+" base (a trailing "+" is uv's separator, with no
+// escape for naming the plus key itself).
+func matchKeySpec(k tea.Key, spec string) bool {
+	if isLiteralPlusSpec(spec) {
+		mod, code, text, ok := parseKeySpec(spec)
+		if !ok {
+			return false
+		}
+		// Same comparison ultraviolet performs (mod+code, else text);
+		// kept inline because no uv-parseable spelling names this key.
+		return (k.Mod == mod && k.Code == code) || (k.Text != "" && k.Text == text)
+	}
+	return uv.Key(k).MatchString(foldReturnSpec(spec))
+}
+
+// isLiteralPlusSpec reports whether spec binds the literal "+" key: a
+// trailing "+" with no key after it. parseKeySpec stays the authority
+// on the shape (a lone "ctrl+" still names no key).
+func isLiteralPlusSpec(spec string) bool {
+	return strings.HasSuffix(spec, "+")
+}
+
+// ultraviolet's vocabulary has no "return" alias; non-final segments are validated
+// modifiers, so the fold cannot rescue a malformed binding.
+func foldReturnSpec(spec string) string {
+	if spec == "return" {
+		return "enter"
+	}
+	if rest, found := strings.CutSuffix(spec, "+return"); found {
+		return rest + "+enter"
+	}
+	return spec
+}
+
+// The modifier vocabulary stays local because uv's renderer drops the lock
+// modifiers the conflict scan must keep distinct.
+func canonicalKeySpec(spec string) string {
+	mod, code, _, ok := parseKeySpec(spec)
+	if !ok {
+		return spec
+	}
+	var b strings.Builder
+	for _, m := range keySpecModifiers {
+		if mod&m.mod != 0 {
+			b.WriteString(m.name)
+			b.WriteByte('+')
+		}
+	}
+	b.WriteString(uv.Key{Code: code}.Keystroke())
+	return b.String()
 }

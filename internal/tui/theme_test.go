@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 func loadThemeColors(preset, path string) themeColors {
@@ -99,8 +99,8 @@ func TestUnknownPresetFallsBackToDefault(t *testing.T) {
 
 func TestMinimalPresetUsesANSIAndNoColor(t *testing.T) {
 	colors := loadThemeColors("minimal", "")
-	// D5: minimal must keep roles distinguishable — accent (bold 7), bright
-	// (15), dim (8) and selection inverted (black on 7) — not one flat "".
+	// Minimal must keep roles distinguishable — accent (bold 7), dim (8),
+	// selection inverted (black on 7) — not one flat "".
 	if colors.Blue == colors.OffWhite && colors.Blue == colors.Gray {
 		t.Fatal("minimal preset must keep at least three distinguishable roles")
 	}
@@ -109,25 +109,30 @@ func TestMinimalPresetUsesANSIAndNoColor(t *testing.T) {
 	}
 }
 
-func TestApplyThemeAppliesAndIsIdempotent(t *testing.T) {
+func TestBuildThemeStylesAppliesAndIsIdempotent(t *testing.T) {
 	colors := loadThemeColors("minimal", "")
 	state := themeState{colors: colors}
-	applyTheme(state)
-	if colorBlue != lipgloss.Color("7") {
-		t.Fatalf("minimal blue not applied, got %v", colorBlue)
+	first := buildThemeStyles(state)
+	if first.colorBlue != lipgloss.Color("7") {
+		t.Fatalf("minimal blue not applied, got %v", first.colorBlue)
 	}
-	first := colorGray
-	applyTheme(state)
-	if colorGray != first {
-		t.Fatal("applyTheme is not idempotent")
+	second := buildThemeStyles(state)
+	if second.colorGray != first.colorGray {
+		t.Fatal("buildThemeStyles is not idempotent")
+	}
+	if second.tabBar == first.tabBar || second.bars == first.bars {
+		t.Fatal("bundles must not share memo caches")
 	}
 
-	applyTheme(themePresetState("default"))
-	if c := lipgloss.Color("#4A90D9"); colorBlue != c {
-		t.Fatalf("default restore drifted, colorBlue = %v", colorBlue)
+	def := buildThemeStyles(themePresetState("default"))
+	if c := lipgloss.Color("#4A90D9"); def.colorBlue != c {
+		t.Fatalf("default drifted, colorBlue = %v", def.colorBlue)
 	}
-	if colorGray == first {
-		t.Fatal("restoring default theme produced no color change")
+	if def.colorGray == first.colorGray {
+		t.Fatal("building default theme produced no color change")
+	}
+	if first.colorBlue != lipgloss.Color("7") {
+		t.Fatal("building a second bundle mutated the first")
 	}
 }
 
@@ -205,9 +210,8 @@ func TestSaveThemeOptionsTransparentRoundTrip(t *testing.T) {
 }
 
 func TestThemeJSONInvalidBackgroundStyleIgnored(t *testing.T) {
-	// Unknown values — including the retired "divided" mode, which still
-	// sits in theme.json files written before its removal — degrade
-	// silently to the default instead of breaking the theme load.
+	// The retired "divided" mode still sits in theme.json files written
+	// before its removal: unknown values degrade silently, not break loads.
 	for _, style := range []string{"neon", "divided"} {
 		path := filepath.Join(t.TempDir(), "theme.json")
 		if err := os.WriteFile(path, []byte(`{"backgrounds": {"style": "`+style+`"}}`), 0o600); err != nil {
@@ -220,12 +224,7 @@ func TestThemeJSONInvalidBackgroundStyleIgnored(t *testing.T) {
 	}
 }
 
-// TestThemeOptionsBackgroundCycleReachesAllStyles walks the Backgrounds
-// editor row through every choice: each step must live-preview (the
-// package style follows the pending draft) and a full cycle returns to
-// the start.
 func TestThemeOptionsBackgroundCycleReachesAllStyles(t *testing.T) {
-	t.Cleanup(func() { applyTheme(themePresetState("default")) })
 	m, _, _, _ := newSettingsTestModel(t)
 	m.openThemeOptions()
 	m.ui.settings.optionsCursor = 3
@@ -236,7 +235,7 @@ func TestThemeOptionsBackgroundCycleReachesAllStyles(t *testing.T) {
 		m = next.(model)
 		style := m.ui.settings.themeStatePending.backgrounds.Style
 		seen[style] = true
-		if activeBackgrounds.Style != style {
+		if m.styles.activeBackgrounds.Style != style {
 			t.Fatalf("preview did not apply cycled style %q", style)
 		}
 	}
@@ -262,5 +261,51 @@ func TestValidColorValue(t *testing.T) {
 		if validColorValue(s) {
 			t.Errorf("validColorValue(%q) = true, want false", s)
 		}
+	}
+}
+
+func TestThemeOptionsRowsDriveEditor(t *testing.T) {
+	wantLabels := []string{"Base palette", "Page tone", "Accent", "Backgrounds", "Border", "Queue cursor", "Play/pause", "Spinner", "Progress bar", "Titles bold", "Descriptions italic", "Cover frame", "Save to theme.json", "Reset to preset"}
+	if len(themeOptionsRowsList) != len(wantLabels) {
+		t.Fatalf("themeOptionsRowsList has %d rows, want %d", len(themeOptionsRowsList), len(wantLabels))
+	}
+	for i, row := range themeOptionsRowsList {
+		if row.label != wantLabels[i] {
+			t.Fatalf("row %d label = %q, want %q", i, row.label, wantLabels[i])
+		}
+		if row.kind == optionCycle && (row.value == nil || row.cycle == nil) {
+			t.Fatalf("cycle row %q must have value and cycle", row.label)
+		}
+		if (row.kind == optionSave || row.kind == optionReset) && (row.value != nil || row.cycle != nil) {
+			t.Fatalf("action row %q must not carry value/cycle", row.label)
+		}
+	}
+	if themeOptionsRowCount() != len(themeOptionsRowsList) {
+		t.Fatalf("row count = %d, table has %d", themeOptionsRowCount(), len(themeOptionsRowsList))
+	}
+}
+
+func TestThemeQueueCursorLegacyAlias(t *testing.T) {
+	// Old theme.json files name the cursor glyph now_playing; queue_cursor
+	// wins when both keys are present.
+	write := func(content string) themeState {
+		path := filepath.Join(t.TempDir(), "theme.json")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, _ := LoadTheme("default", path)
+		return loaded
+	}
+	if got := write(`{"glyphs": {"now_playing": "play"}}`); got.glyphs.QueueCursor != "play" {
+		t.Fatalf("legacy now_playing must map onto the cursor, got %q", got.glyphs.QueueCursor)
+	}
+	if got := write(`{"glyphs": {"queue_cursor": "dot", "now_playing": "play"}}`); got.glyphs.QueueCursor != "dot" {
+		t.Fatalf("queue_cursor must win over the legacy key, got %q", got.glyphs.QueueCursor)
+	}
+	if got := write(`{"glyphs": {"queue_cursor": "play", "now_playing": "bogus"}}`); got.glyphs.QueueCursor != "play" {
+		t.Fatalf("invalid legacy value must not clobber queue_cursor, got %q", got.glyphs.QueueCursor)
+	}
+	if got := write(`{"glyphs": {"queue_cursor": "bogus"}}`); got.glyphs.QueueCursor != "arrow" {
+		t.Fatalf("invalid cursor value must keep the default, got %q", got.glyphs.QueueCursor)
 	}
 }

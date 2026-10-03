@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/list"
+	"charm.land/bubbles/v2/list"
 
 	"orpheus/internal/spotify"
 )
@@ -21,13 +21,14 @@ func popupItems(n int) []list.Item {
 }
 
 func TestTrackPopupFooterVisible(t *testing.T) {
-	popup := newTrackPopupList(100, 40)
+	st := buildThemeStyles(themePresetState("default"))
+	popup := newTrackPopupList(st, 100, 40)
 	popup.SetItems(popupItems(5))
 	if view := popup.View(); !strings.Contains(view, "5 tracks") {
 		t.Fatalf("single-page popup should show the item count, got %q", lastLine(view))
 	}
 
-	paged := newTrackPopupList(100, 40)
+	paged := newTrackPopupList(st, 100, 40)
 	paged.SetItems(popupItems(80))
 	view := paged.View()
 	if !strings.Contains(view, "80 tracks") {
@@ -39,12 +40,11 @@ func TestTrackPopupFooterVisible(t *testing.T) {
 }
 
 func TestTrackPopupDotsOnFirstOpen(t *testing.T) {
-	// Regression: the first SetItems derived PerPage while TotalPages was
-	// still 0, overflowing the modal budget by exactly the pagination row —
-	// the dots only appeared after a resize event.
+	// First SetItems derived PerPage while TotalPages was still 0, overflowing
+	// the modal budget by the pagination row — dots only appeared after resize.
 	m := guardModel(t, frameVariant{name: "popup", width: 100, height: 40, tab: tabPlaylists})
 	m.ui.trackPopupOpen = true
-	m.ui.trackPopupList = newTrackPopupList(m.ui.width, m.ui.height)
+	m.ui.trackPopupList = newTrackPopupList(m.styles, m.ui.width, m.ui.height)
 	m.ui.trackPopupWidth = m.ui.trackPopupList.Width() - 4
 	qi := make([]spotify.QueueItem, 0, 80)
 	for i := range 80 {

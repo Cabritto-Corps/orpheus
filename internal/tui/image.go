@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
-	"image/color"
 	_ "image/jpeg"
 	"image/png"
 	_ "image/png"
@@ -19,8 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"github.com/charmbracelet/colorprofile"
+
+	"golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 
 	"orpheus/internal/cache"
@@ -50,13 +50,7 @@ type imgCache struct {
 	rendering        map[coverKey]chan struct{}
 	protocol         imageProtocol
 	protocolExplicit bool
-	lastKittyOverlay string
-	lastKittyURL     string
-	kittyVisible     bool
-	kittyForceRedraw bool
-	kittyImageID     uint64
-	kittyChunks      map[string][]string
-	kittyChunkOrder  []string
+	overlay          overlayState
 	coverKeysByURL   map[string]map[coverKey]struct{}
 	pinned           map[string]struct{}
 }
@@ -85,8 +79,6 @@ func newImgCacheWithSelection(style string, managed bool, getenv func(string) st
 		failedAt:         make(map[string]time.Time),
 		rendering:        make(map[coverKey]chan struct{}),
 		protocol:         protocol,
-		kittyChunks:      make(map[string][]string),
-		kittyChunkOrder:  make([]string, 0, maxKittyChunkCacheEntries),
 		protocolExplicit: explicit,
 		coverKeysByURL:   make(map[string]map[coverKey]struct{}),
 		pinned:           make(map[string]struct{}),
@@ -120,111 +112,8 @@ func (c *imgCache) encodedFor(url string) string {
 	return c.encoded[url]
 }
 
-func kittyOverlayPlacement(key string) string {
-	n := 0
-	for i := 0; i < len(key); i++ {
-		if key[i] == ':' {
-			n++
-			if n == 4 {
-				return key[:i]
-			}
-		}
-	}
-	return key
-}
-
-func (c *imgCache) beginKittyOverlayState(key, url string) (changed bool, shouldDelete bool, placementChanged bool, urlChanged bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	wasVisible := c.kittyVisible
-	forceRedraw := c.kittyForceRedraw
-	prevURL := c.lastKittyURL
-	if key == "" {
-		c.lastKittyOverlay = ""
-		c.lastKittyURL = ""
-		c.kittyVisible = false
-		return false, wasVisible, false, strings.TrimSpace(prevURL) != ""
-	}
-	if wasVisible && c.lastKittyOverlay == key && !forceRedraw {
-		return false, false, false, false
-	}
-	placementChanged = kittyOverlayPlacement(c.lastKittyOverlay) != kittyOverlayPlacement(key)
-	trimmedURL := strings.TrimSpace(url)
-	urlChanged = strings.TrimSpace(prevURL) != trimmedURL
-	c.lastKittyOverlay = key
-	c.lastKittyURL = trimmedURL
-	c.kittyVisible = true
-	c.kittyForceRedraw = false
-	return true, wasVisible || forceRedraw, placementChanged, urlChanged
-}
-
-func (c *imgCache) resetKittyOverlayState() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.resetKittyOverlayStateLocked()
-}
-
-func (c *imgCache) resetKittyOverlayStateLocked() {
-	c.lastKittyOverlay = ""
-	c.lastKittyURL = ""
-	c.kittyVisible = false
-	c.kittyForceRedraw = true
-}
-
-func (c *imgCache) forceKittyRedraw() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.kittyForceRedraw = true
-}
-
-func (c *imgCache) nextKittyImageID() uint64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.kittyImageID++
-	return c.kittyImageID
-}
-
-func (c *imgCache) kittyDisplayedURL() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.lastKittyURL
-}
-
-func (c *imgCache) buildKittyPayload(url, encoded string, cols, rows int, imageID uint64) string {
-	if encoded == "" || cols <= 0 || rows <= 0 {
-		return ""
-	}
-	c.mu.Lock()
-	chunks := c.kittyChunks[url]
-	if chunks == nil {
-		chunks = chunkBase64(encoded, 4096)
-		for len(c.kittyChunks) >= maxKittyChunkCacheEntries {
-			oldest := c.kittyChunkOrder[0]
-			delete(c.kittyChunks, oldest)
-			c.kittyChunkOrder = c.kittyChunkOrder[1:]
-		}
-		c.kittyChunks[url] = chunks
-		c.kittyChunkOrder = append(c.kittyChunkOrder, url)
-	}
-	localChunks := append([]string(nil), chunks...)
-	c.mu.Unlock()
-	return encodeKittyChunks(localChunks, cols, rows, imageID)
-}
-
-func chunkBase64(encoded string, size int) []string {
-	if size <= 0 {
-		return nil
-	}
-	var parts []string
-	for off := 0; off < len(encoded); off += size {
-		end := min(off+size, len(encoded))
-		parts = append(parts, encoded[off:end])
-	}
-	return parts
-}
-
 func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRows int) {
+	img = fitCachedImage(img)
 	c.mu.RLock()
 	protocol := c.protocol
 	c.mu.RUnlock()
@@ -241,7 +130,6 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 	evictedURL, evictedImg, evicted := c.imgs.Set(url, img)
 	if encoded != "" {
 		c.encoded[url] = encoded
-		c.deleteKittyChunksLocked(url)
 	}
 	for evicted {
 		if _, pinned := c.pinned[evictedURL]; pinned {
@@ -253,9 +141,18 @@ func (c *imgCache) setImage(url string, img image.Image, displayCols, displayRow
 		}
 		c.deleteCoversForURLLocked(evictedURL)
 		delete(c.encoded, evictedURL)
-		c.deleteKittyChunksLocked(evictedURL)
 		break
 	}
+}
+
+// Both switch paths call it under the lock so the two resets cannot
+// drift apart (payloads re-encode on demand from retained sources).
+func (c *imgCache) clearRenderCachesLocked() {
+	c.covers.Clear()
+	for url := range c.coverKeysByURL {
+		delete(c.coverKeysByURL, url)
+	}
+	clear(c.encoded)
 }
 
 func (c *imgCache) setProtocol(protocol imageProtocol) {
@@ -265,10 +162,7 @@ func (c *imgCache) setProtocol(protocol imageProtocol) {
 		return
 	}
 	c.protocol = protocol
-	c.covers.Clear()
-	for url := range c.coverKeysByURL {
-		delete(c.coverKeysByURL, url)
-	}
+	c.clearRenderCachesLocked()
 	c.resetKittyOverlayStateLocked()
 }
 
@@ -280,16 +174,10 @@ func (c *imgCache) setImageStyle(style string, managed bool, getenv func(string)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.protocol = protocol
-	// A forced pixelated choice must behave like an environment override:
-	// the automatic fallback and recovery paths must not restore kitty.
+	// A forced pixelated choice must act like an env override:
+	// fallback/recovery must not restore kitty.
 	c.protocolExplicit = explicit
-	c.covers.Clear()
-	for url := range c.coverKeysByURL {
-		delete(c.coverKeysByURL, url)
-	}
-	clear(c.encoded)
-	clear(c.kittyChunks)
-	c.kittyChunkOrder = c.kittyChunkOrder[:0]
+	c.clearRenderCachesLocked()
 	c.resetKittyOverlayStateLocked()
 }
 
@@ -309,8 +197,7 @@ func imageProtocolEnvOverride(getenv func(string) string) (imageProtocol, bool) 
 	}
 }
 
-// refreshURL replaces an image and drops every cached render of the old
-// one — used when a procedurally generated cover's palette changes.
+// For procedural covers whose palette changed.
 func (c *imgCache) refreshURL(url string, img image.Image, w, h int) {
 	c.mu.Lock()
 	c.deleteCoversForURLLocked(url)
@@ -324,7 +211,13 @@ func (c *imgCache) pinURL(url string) {
 	c.pinned[url] = struct{}{}
 }
 
-func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
+func (c *imgCache) unpinURL(url string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.pinned, url)
+}
+
+func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int, profile colorprofile.Profile) {
 	c.mu.RLock()
 	protocol := c.protocol
 	if protocol == imageProtocolKitty {
@@ -332,7 +225,6 @@ func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
 		return
 	}
 	img, ok := c.imgs.Peek(url)
-	encoded := c.encoded[url]
 	c.mu.RUnlock()
 	if !ok {
 		return
@@ -357,9 +249,9 @@ func (c *imgCache) preRenderCovers(url string, coverSizes [][2]int) {
 		c.rendering[key] = ch
 		c.mu.Unlock()
 
-		// Resize+render happens outside the lock so per-frame View() reads
-		// are not blocked behind bilinear work.
-		s := renderCover(protocol, img, encoded, cols, rows)
+		// Outside the lock: per-frame View() reads must not block
+		// behind bilinear work.
+		s := renderCover(img, cols, rows, profile)
 
 		c.mu.Lock()
 		delete(c.rendering, key)
@@ -453,8 +345,7 @@ func (c *imgCache) shouldQueuePriorityLoad(url string) bool {
 	return true
 }
 
-// protocolForRender reads the negotiated protocol under the lock so render
-// paths cannot race the writer (the bare field read was a latent race).
+// Under the lock: the bare field read was a latent race.
 func (c *imgCache) protocolForRender() imageProtocol {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -532,7 +423,7 @@ func (c *imgCache) invalidateCovers() {
 	}
 }
 
-func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
+func (c *imgCache) cover(url string, cols, rows int, profile colorprofile.Profile) (string, bool) {
 	if url == "" || cols <= 0 || rows <= 0 {
 		return "", true
 	}
@@ -548,21 +439,22 @@ func (c *imgCache) cover(url string, cols, rows int) (string, bool) {
 			c.mu.Unlock()
 			return "", false
 		}
-		encoded := c.encoded[url]
-		protocol := c.protocol
-		if _, rendering := c.rendering[key]; rendering {
+		if ch, rendering := c.rendering[key]; rendering {
+			// Wait for the in-flight render instead of hot-spinning;
+			// the channel closes exactly once.
 			c.mu.Unlock()
+			<-ch
 			continue
 		}
 		ch := make(chan struct{})
 		c.rendering[key] = ch
 		c.mu.Unlock()
-		return c.renderAndCache(key, url, img, encoded, protocol, cols, rows, ch)
+		return c.renderAndCache(key, url, img, cols, rows, ch, profile)
 	}
 }
 
-func (c *imgCache) renderAndCache(key coverKey, url string, img image.Image, encoded string, protocol imageProtocol, cols, rows int, ch chan struct{}) (string, bool) {
-	s := renderCover(protocol, img, encoded, cols, rows)
+func (c *imgCache) renderAndCache(key coverKey, url string, img image.Image, cols, rows int, ch chan struct{}, profile colorprofile.Profile) (string, bool) {
+	s := renderCover(img, cols, rows, profile)
 
 	c.mu.Lock()
 	var result string
@@ -588,11 +480,37 @@ const (
 	imageFetchTimeout              = 6 * time.Second
 	imageFetchFailCooldown         = 30 * time.Second
 	imageFetchPriorityFailCooldown = 5 * time.Second
-	maxCachedImages                = 256
+	maxCachedImages                = 96
 	maxCachedCoverRenders          = 512
-	maxKittyChunkCacheEntries      = 64
 	kittyEncodePixelBudget         = 512
+	// Consumers resample below this; larger originals only burn memory.
+	maxCachedImageLongestSide = 512
 )
+
+func fitCachedImage(img image.Image) image.Image {
+	if img == nil {
+		return nil
+	}
+	sb := img.Bounds()
+	pw, ph := sb.Dx(), sb.Dy()
+	if pw <= 0 || ph <= 0 || max(pw, ph) <= maxCachedImageLongestSide {
+		return img
+	}
+	if pw >= ph {
+		ph = ph * maxCachedImageLongestSide / pw
+		pw = maxCachedImageLongestSide
+	} else {
+		pw = pw * maxCachedImageLongestSide / ph
+		ph = maxCachedImageLongestSide
+	}
+	if pw < 1 {
+		pw = 1
+	}
+	if ph < 1 {
+		ph = 1
+	}
+	return resizeBilinear(img, pw, ph)
+}
 
 func (c *imgCache) deleteCoversForURLLocked(url string) {
 	if keys, ok := c.coverKeysByURL[url]; ok {
@@ -608,18 +526,6 @@ func (c *imgCache) removeCoverKeyFromURLMap(key coverKey) {
 		delete(keys, key)
 		if len(keys) == 0 {
 			delete(c.coverKeysByURL, key.url)
-		}
-	}
-}
-
-func (c *imgCache) deleteKittyChunksLocked(url string) {
-	if _, exists := c.kittyChunks[url]; exists {
-		delete(c.kittyChunks, url)
-		for i, u := range c.kittyChunkOrder {
-			if u == url {
-				c.kittyChunkOrder = append(c.kittyChunkOrder[:i], c.kittyChunkOrder[i+1:]...)
-				break
-			}
 		}
 	}
 }
@@ -654,25 +560,8 @@ func encodeImageAsPNGBase64(img image.Image) (string, error) {
 	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 }
 
-func renderCover(protocol imageProtocol, img image.Image, encoded string, cols, rows int) string {
-	if protocol == imageProtocolKitty && encoded != "" {
-		return renderKittyImage(encoded, cols, rows)
-	}
-	return renderHalfBlock(img, cols, rows)
-}
-
-func renderKittyImage(encoded string, cols, rows int) string {
-	if encoded == "" || cols <= 0 || rows <= 0 {
-		return ""
-	}
-	s := renderKittyImageRaw(encoded, cols, rows)
-	if s == "" {
-		return ""
-	}
-	if rows > 1 {
-		s += strings.Repeat("\n", rows-1)
-	}
-	return s
+func renderCover(img image.Image, cols, rows int, profile colorprofile.Profile) string {
+	return renderHalfBlock(img, cols, rows, profile)
 }
 
 func detectImageProtocol(getenv func(string) string) imageProtocol {
@@ -692,39 +581,6 @@ func detectTerminalImageProtocol(getenv func(string) string) imageProtocol {
 		return imageProtocolKitty
 	}
 	return imageProtocolNone
-}
-
-const kittyDeleteAll = "\x1b_Ga=d,d=A\x1b\\"
-
-func renderKittyImageRaw(encoded string, cols, rows int) string {
-	return renderKittyImageRawWithID(encoded, cols, rows, 0)
-}
-
-func renderKittyImageRawWithID(encoded string, cols, rows int, imageID uint64) string {
-	if encoded == "" || cols <= 0 || rows <= 0 {
-		return ""
-	}
-	return encodeKittyChunks(chunkBase64(encoded, 4096), cols, rows, imageID)
-}
-
-func encodeKittyChunks(chunks []string, cols, rows int, imageID uint64) string {
-	var sb strings.Builder
-	for i, part := range chunks {
-		more := 0
-		if i < len(chunks)-1 {
-			more = 1
-		}
-		if i == 0 {
-			if imageID > 0 {
-				fmt.Fprintf(&sb, "\x1b_Ga=T,f=100,i=%d,c=%d,r=%d,q=2,m=%d;%s\x1b\\", imageID, cols, rows, more, part)
-			} else {
-				fmt.Fprintf(&sb, "\x1b_Ga=T,f=100,c=%d,r=%d,q=2,m=%d;%s\x1b\\", cols, rows, more, part)
-			}
-		} else {
-			fmt.Fprintf(&sb, "\x1b_Gm=%d;%s\x1b\\", more, part)
-		}
-	}
-	return sb.String()
 }
 
 var imageHTTPClient = &http.Client{
@@ -766,76 +622,22 @@ func (httpImageProvider) Fetch(ctx context.Context, url string) ([]byte, error) 
 func resizeBilinear(src image.Image, width, height int) *image.RGBA {
 	dst := image.NewRGBA(image.Rect(0, 0, width, height))
 	sb := src.Bounds()
-	sw := sb.Dx()
-	sh := sb.Dy()
-	if sw <= 0 || sh <= 0 || width <= 0 || height <= 0 {
+	if sb.Dx() <= 0 || sb.Dy() <= 0 || width <= 0 || height <= 0 {
 		return dst
 	}
-	if sw == 1 || sh == 1 || width == 1 || height == 1 {
-		for y := range height {
-			sy := sb.Min.Y + y*sh/height
-			for x := range width {
-				sx := sb.Min.X + x*sw/width
-				r, g, b, _ := src.At(sx, sy).RGBA()
-				dst.SetRGBA(x, y, color.RGBA{
-					R: uint8(r >> 8),
-					G: uint8(g >> 8),
-					B: uint8(b >> 8),
-					A: 255,
-				})
-			}
-		}
-		return dst
-	}
-
-	scaleX := float64(sw-1) / float64(width-1)
-	scaleY := float64(sh-1) / float64(height-1)
-	for y := range height {
-		fy := float64(y) * scaleY
-		y0 := int(fy)
-		y1 := y0 + 1
-		if y1 >= sh {
-			y1 = sh - 1
-		}
-		wy := fy - float64(y0)
-		for x := range width {
-			fx := float64(x) * scaleX
-			x0 := int(fx)
-			x1 := x0 + 1
-			if x1 >= sw {
-				x1 = sw - 1
-			}
-			wx := fx - float64(x0)
-
-			r00, g00, b00, _ := src.At(sb.Min.X+x0, sb.Min.Y+y0).RGBA()
-			r10, g10, b10, _ := src.At(sb.Min.X+x1, sb.Min.Y+y0).RGBA()
-			r01, g01, b01, _ := src.At(sb.Min.X+x0, sb.Min.Y+y1).RGBA()
-			r11, g11, b11, _ := src.At(sb.Min.X+x1, sb.Min.Y+y1).RGBA()
-
-			interp := func(c00, c10, c01, c11 uint32) uint8 {
-				top := (1.0-wx)*float64(c00) + wx*float64(c10)
-				bot := (1.0-wx)*float64(c01) + wx*float64(c11)
-				v := (1.0-wy)*top + wy*bot
-				return uint8((uint32(v) >> 8) & 0xff)
-			}
-			dst.SetRGBA(x, y, color.RGBA{
-				R: interp(r00, r10, r01, r11),
-				G: interp(g00, g10, g01, g11),
-				B: interp(b00, b10, b01, b11),
-				A: 255,
-			})
-		}
-	}
+	// Nearest/bilinear mix; preserves source alpha instead of forcing
+	// opaque.
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, sb, draw.Src, nil)
 	return dst
 }
 
-func renderHalfBlock(img image.Image, cols, rows int) string {
+func renderHalfBlock(img image.Image, cols, rows int, profile colorprofile.Profile) string {
 	if cols <= 0 || rows <= 0 || img == nil {
 		return ""
 	}
-	if lipgloss.DefaultRenderer().ColorProfile() == termenv.Ascii {
-		// NO_COLOR / no-color terminals strip truecolor ANSI, turning the
-		// half-block mosaic into meaningless blank blocks.
+	if profile <= colorprofile.Ascii {
+		// Such terminals strip truecolor ANSI, leaving meaningless
+		// blank blocks.
 		return ""
 	}
 

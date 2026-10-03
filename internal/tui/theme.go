@@ -27,41 +27,27 @@ type themeColors struct {
 	Panel       string `json:"panel"`
 }
 
-// themeGlyphs picks the character families a theme can swap without
-// touching the palette: box border family, the now-playing marker, the
-// transport play/pause pair, the spinner animation and the progress bar
-// charset.
 type themeGlyphs struct {
-	Border     string `json:"border"`
-	NowPlaying string `json:"now_playing"`
-	PlayPause  string `json:"play_pause"`
-	Spinner    string `json:"spinner"`
-	Bar        string `json:"bar"`
+	Border      string `json:"border"`
+	QueueCursor string `json:"queue_cursor"`
+	PlayPause   string `json:"play_pause"`
+	Spinner     string `json:"spinner"`
+	Bar         string `json:"bar"`
 }
 
-// themeTypography is the text-attribute layer: weight for title lines,
-// italics for description lines.
 type themeTypography struct {
 	BoldTitles  bool `json:"bold_titles"`
 	ItalicDescs bool `json:"italic_descriptions"`
 }
 
-// themeBackgrounds picks how the frame's background zones are painted:
-// "solid" uses one uniform color for the whole frame; "transparent"
-// paints no frame background at all, leaving the terminal's own
-// background visible.
 type themeBackgrounds struct {
 	Style string `json:"style"`
 }
 
-// themeCover styles the cover-art cell: a themed frame drawn around the
-// art (none keeps the bare look).
 type themeCover struct {
 	Frame string `json:"frame"`
 }
 
-// themeState is one fully-resolved theme: palette plus the glyph,
-// typography and cover layers.
 type themeState struct {
 	colors      themeColors
 	glyphs      themeGlyphs
@@ -70,15 +56,13 @@ type themeState struct {
 	backgrounds themeBackgrounds
 }
 
-// themeEntry is one shipped preset in the registry.
 type themeEntry struct {
 	name   string
 	colors themeColors
 }
 
-// themeRegistry is the single source of truth for shipped presets: order
-// drives the picker, and the lookup helpers below derive from it, so adding
-// a theme is one entry here and nothing else.
+// Order drives the picker, so adding a theme is one entry here and
+// nothing else.
 var themeRegistry = []themeEntry{
 	{"default", themeColors{
 		Blue:      "#4A90D9",
@@ -249,24 +233,22 @@ var themeRegistry = []themeEntry{
 	}},
 }
 
-// The curated value sets for every glyph/background/cover option; the
-// entries below are the display names used by both the JSON schema and
-// the settings cycles.
+// Display names shared by the JSON schema and the settings cycles.
 var (
-	glyphBorderChoices     = []string{"rounded", "thick", "double", "ascii"}
-	glyphNowPlayingChoices = []string{"note", "dot", "play", "arrow", "plain"}
-	glyphPlayPauseChoices  = []string{"modern", "bold", "thin", "ascii"}
-	glyphSpinnerChoices    = []string{"minidot", "dot", "line", "points", "meter", "pulse"}
-	glyphBarChoices        = []string{"block", "line"}
+	glyphBorderChoices      = []string{"rounded", "thick", "double", "ascii"}
+	glyphQueueCursorChoices = []string{"note", "dot", "play", "arrow", "plain"}
+	glyphPlayPauseChoices   = []string{"modern", "bold", "thin", "ascii"}
+	glyphSpinnerChoices     = []string{"minidot", "dot", "line", "points", "meter", "pulse"}
+	glyphBarChoices         = []string{"block", "line"}
 )
 
-var defaultGlyphs = themeGlyphs{Border: "rounded", NowPlaying: "note", PlayPause: "modern", Spinner: "minidot", Bar: "block"}
+var defaultGlyphs = themeGlyphs{Border: "rounded", QueueCursor: "arrow", PlayPause: "modern", Spinner: "minidot", Bar: "block"}
 var defaultTypography = themeTypography{}
 var defaultCover = themeCover{Frame: "none"}
 var defaultBackgrounds = themeBackgrounds{Style: "solid"}
 
 var validGlyphBorder = stringSet(glyphBorderChoices)
-var validGlyphNowPlaying = stringSet(glyphNowPlayingChoices)
+var validGlyphQueueCursor = stringSet(glyphQueueCursorChoices)
 var validGlyphPlayPause = stringSet(glyphPlayPauseChoices)
 var validGlyphSpinner = stringSet(glyphSpinnerChoices)
 var validGlyphBar = stringSet(glyphBarChoices)
@@ -290,11 +272,8 @@ func stringSet(values []string) map[string]bool {
 	return out
 }
 
-// LoadTheme resolves the configured preset plus optional per-color and
-// section overrides from a theme.json file. Unknown or invalid input warns
-// and falls back, so the result is always renderable. The returned name is
-// the preset that actually won — the file's marker wins over the env one —
-// so the UI can show and save the theme that is really active.
+// Unknown/invalid input warns and falls back, so the result is always
+// renderable; the file's marker wins over the env preset.
 func LoadTheme(preset, path string) (themeState, string) {
 	st := themePresetState(preset)
 	name := themePresetName(preset)
@@ -324,8 +303,6 @@ func LoadTheme(preset, path string) (themeState, string) {
 	return st, name
 }
 
-// colorOverridesOnly strips the structured sections (and the preset marker)
-// from a raw theme.json map, leaving only the flat per-color overrides.
 func colorOverridesOnly(raw map[string]any) map[string]any {
 	out := make(map[string]any, len(raw))
 	for k, v := range raw {
@@ -338,11 +315,10 @@ func colorOverridesOnly(raw map[string]any) map[string]any {
 	return out
 }
 
-// applyGlyphOverrides merges a raw glyphs map into g, warning and keeping
-// the current value on unknown or wrongly-typed entries.
 func applyGlyphOverrides(g *themeGlyphs, raw map[string]any) {
 	applyStringField(raw, "border", validGlyphBorder, &g.Border, "glyphs.border")
-	applyStringField(raw, "now_playing", validGlyphNowPlaying, &g.NowPlaying, "glyphs.now_playing")
+	applyStringField(raw, "now_playing", validGlyphQueueCursor, &g.QueueCursor, "glyphs.now_playing")
+	applyStringField(raw, "queue_cursor", validGlyphQueueCursor, &g.QueueCursor, "glyphs.queue_cursor")
 	applyStringField(raw, "play_pause", validGlyphPlayPause, &g.PlayPause, "glyphs.play_pause")
 	applyStringField(raw, "spinner", validGlyphSpinner, &g.Spinner, "glyphs.spinner")
 	applyStringField(raw, "bar", validGlyphBar, &g.Bar, "glyphs.bar")
@@ -361,8 +337,6 @@ func applyStringField(raw map[string]any, key string, valid map[string]bool, dst
 	*dst = s
 }
 
-// applyThemeStateOverrides merges the structured sections of a raw
-// theme.json into glyph/typography/cover/backgrounds values.
 func applyThemeStateOverrides(g *themeGlyphs, typ *themeTypography, cover *themeCover, bg *themeBackgrounds, raw map[string]any) {
 	if gm, ok := raw["glyphs"].(map[string]any); ok {
 		applyGlyphOverrides(g, gm)
@@ -383,8 +357,7 @@ func applyThemeStateOverrides(g *themeGlyphs, typ *themeTypography, cover *theme
 	}
 }
 
-// loadThemeOverrides reads the valid per-color overrides stored in a
-// theme.json, so previews can resolve preset + user tweaks.
+// Lets previews resolve preset + user tweaks.
 func loadThemeOverrides(path string) map[string]any {
 	if path == "" {
 		return nil
@@ -401,15 +374,12 @@ func loadThemeOverrides(path string) map[string]any {
 	return raw
 }
 
-// resolveThemeColors combines a preset with stored per-color overrides.
 func resolveThemeColors(preset string, overrides map[string]any) themeColors {
 	colors := themePreset(preset)
 	applyThemeOverrides(&colors, colorOverridesOnly(overrides))
 	return colors
 }
 
-// resolveThemeState combines a preset with stored per-color and section
-// overrides — the preview path for the options editor.
 func resolveThemeState(preset string, overrides map[string]any) themeState {
 	st := themePresetState(preset)
 	applyThemeStateOverrides(&st.glyphs, &st.typography, &st.cover, &st.backgrounds, overrides)
@@ -417,15 +387,12 @@ func resolveThemeState(preset string, overrides map[string]any) themeState {
 	return st
 }
 
-// themePresetState resolves a preset into all layers.
 func themePresetState(name string) themeState {
 	return themeState{colors: themePreset(name), glyphs: defaultGlyphs, typography: defaultTypography, cover: defaultCover, backgrounds: defaultBackgrounds}
 }
 
-// SaveThemeOptions persists the full resolved state: the preset marker,
-// per-color deltas against the preset, and the glyph/typography/cover
-// sections. Deltas only, so a saved file keeps tracking its preset for
-// everything the user left untouched. The write is atomic.
+// Deltas only: the file keeps tracking its preset for everything
+// untouched.
 func SaveThemeOptions(path, preset string, state themeState) error {
 	if path == "" {
 		return fmt.Errorf("no theme file path configured")
@@ -478,9 +445,8 @@ func SaveThemeOptions(path, preset string, state themeState) error {
 	return writeThemeFile(path, marshaled)
 }
 
-// SaveThemePreset persists the chosen preset as a marker in theme.json.
-// Per-color overrides already in the file are preserved and keep applying
-// on top of the preset. The write is atomic.
+// Existing per-color overrides are preserved and keep applying on
+// top of the preset.
 func SaveThemePreset(path, preset string) error {
 	if path == "" {
 		return fmt.Errorf("no theme file path configured")
@@ -577,8 +543,7 @@ func themePreset(name string) themeColors {
 	return themeRegistry[0].colors
 }
 
-// themePresetName normalizes a preset name for round-tripping; unknown
-// names resolve to the default preset so saves stay renderable.
+// Unknown names resolve to default so saves stay renderable.
 func themePresetName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	name = strings.ReplaceAll(name, "-", "_")

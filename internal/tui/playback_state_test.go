@@ -1,12 +1,13 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	golibrespot "github.com/elxgy/go-librespot"
 
 	"orpheus/internal/librespot"
@@ -356,8 +357,9 @@ func TestAdvancePlayerCoverEpochOnQueueHeadChange(t *testing.T) {
 	if m.transport.playerCoverEpoch == 0 {
 		t.Fatal("expected player cover epoch to advance when queue head changes")
 	}
-	if !m.ui.imgs.kittyForceRedraw {
-		t.Fatal("expected kitty redraw to be forced when epoch advances")
+	// The revision drives retransmission; force must stay clear.
+	if m.ui.imgs.overlay.force {
+		t.Fatal("expected no force flag when epoch advances; the revision drives retransmission")
 	}
 }
 
@@ -371,7 +373,7 @@ func TestAdvancePlayerCoverEpochNoChangeWhenSignalsMissing(t *testing.T) {
 	if m.transport.playerCoverEpoch != 0 {
 		t.Fatal("expected player cover epoch to remain unchanged")
 	}
-	if m.ui.imgs.kittyForceRedraw {
+	if m.ui.imgs.overlay.force {
 		t.Fatal("expected no kitty redraw force when transition signals are absent")
 	}
 }
@@ -386,18 +388,18 @@ func TestAdvancePlayerCoverEpochOnTrackChangeEvenWithEmptyURL(t *testing.T) {
 	if m.transport.playerCoverEpoch == 0 {
 		t.Fatal("expected player cover epoch to advance on track change even when next push lacks an AlbumImageURL")
 	}
-	if !m.ui.imgs.kittyForceRedraw {
-		t.Fatal("expected kitty redraw to be forced on track change with empty URL")
+	if m.ui.imgs.overlay.force {
+		t.Fatal("expected no force flag on track change with empty URL; the clear path handles it")
 	}
 }
 
 func TestTransportTransitionBlocksTransportKeys(t *testing.T) {
 	m := model{ui: uiModel{keys: newKeys()}}
 	m.beginTransportTransition()
-	if !m.shouldBlockTransportInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}) {
+	if !m.shouldBlockTransportInput(tea.KeyPressMsg{Code: 'n', Text: "n"}) {
 		t.Fatal("expected transport key to be blocked while transition pending")
 	}
-	if m.shouldBlockTransportInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}}) {
+	if m.shouldBlockTransportInput(tea.KeyPressMsg{Code: '?', Text: "?"}) {
 		t.Fatal("expected non-transport key to remain allowed")
 	}
 }
@@ -406,7 +408,7 @@ func TestHandlePlaybackKeyQueuesSkipWhenBlocked(t *testing.T) {
 	ch := make(chan librespot.TUICommand, 1)
 	m := model{ui: uiModel{keys: newKeys()}, tuiCmdCh: ch}
 	m.beginTransportTransition()
-	next, _ := m.handlePlaybackKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	next, _ := m.handlePlaybackKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	got := next.(model)
 	if len(got.transport.inputQueue) != 1 || got.transport.inputQueue[0].kind != playbackInputNext {
 		t.Fatalf("expected one queued next input action, got %+v", got.transport.inputQueue)
@@ -474,6 +476,33 @@ func TestStuckTransportTransitionSetsPlaybackErr(t *testing.T) {
 	}
 }
 
+func TestFrozenHeartbeatPreservesLivePlaybackErr(t *testing.T) {
+	m := NewLoaderModel()
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "spotify:track:t", Playing: true, ProgressMS: 5000}
+	m.transport.queue = []spotify.QueueItem{{ID: "spotify:track:n"}}
+	m.transport.playbackErr = errors.New("playback stuck: failed to advance to the next track")
+	frozen := playbackStateMsg{
+		seq:           1,
+		status:        &spotify.PlaybackStatus{TrackID: "spotify:track:t", Playing: true, ProgressMS: 5000},
+		queue:         []spotify.QueueItem{{ID: "spotify:track:n"}},
+		queueIncluded: true,
+	}
+	next, _ := m.handlePlaybackStateMsg(frozen)
+	if next.(model).transport.playbackErr == nil {
+		t.Fatal("frozen heartbeat must not clear a live terminal error")
+	}
+	moved := playbackStateMsg{
+		seq:           2,
+		status:        &spotify.PlaybackStatus{TrackID: "spotify:track:t", Playing: true, ProgressMS: 9000},
+		queue:         []spotify.QueueItem{{ID: "spotify:track:n"}},
+		queueIncluded: true,
+	}
+	next, _ = next.(model).handlePlaybackStateMsg(moved)
+	if next.(model).transport.playbackErr != nil {
+		t.Fatal("real progress must clear the error")
+	}
+}
+
 func TestStuckTransportTransitionErrorSurvivesPlaybackStateMsg(t *testing.T) {
 	m := NewLoaderModel()
 	m.beginTransportTransition()
@@ -538,8 +567,6 @@ func volSettleTestModel(vol int) model {
 
 func TestVolumePushDuringPendingBurstKeepsOptimistic(t *testing.T) {
 	m := volSettleTestModel(60)
-	// Previous burst committed 50 a second ago (inside the settle window)
-	// while a new burst is still pending at 65.
 	m.transport.volSentTarget = 50
 	m.transport.volSentAt = time.Now().Add(-1 * time.Second)
 	m.transport.volDebouncePending = 65
@@ -552,8 +579,6 @@ func TestVolumePushDuringPendingBurstKeepsOptimistic(t *testing.T) {
 
 func TestVolumePushAfterCommitPinsToSentTarget(t *testing.T) {
 	m := volSettleTestModel(60)
-	// Burst fully committed a second ago: divergent pushes (e.g. another
-	// client) stay pinned for the settle window, as before.
 	m.transport.volSentTarget = 60
 	m.transport.volSentAt = time.Now().Add(-1 * time.Second)
 	incoming := &spotify.PlaybackStatus{Volume: 55, TrackID: "t1", Playing: true, DurationMS: 200000, ProgressMS: 1000}

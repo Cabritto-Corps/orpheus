@@ -538,7 +538,7 @@ theme_json_template() {
     "frame": "none"
   },
   "backgrounds": {
-    "style": "divided"
+    "style": "solid"
   }
 }
 EOF

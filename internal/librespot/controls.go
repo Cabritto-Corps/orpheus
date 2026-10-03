@@ -22,10 +22,8 @@ import (
 	"orpheus/internal/playbackdomain"
 )
 
-// prefetchFanOutMax bounds how many streams one prefetch pass may warm.
-// The transition cache holds 16, but warming all of them hammers spclient
-// with metadata/storage requests for tracks the user will likely never
-// reach before the next context change; the next few tracks cover skips.
+// prefetchFanOutMax bounds streams warmed per pass: warming the whole cache hammers
+// spclient for tracks the user likely never reaches; the next few cover skips.
 const prefetchFanOutMax = 3
 
 func (p *AppPlayer) prefetchCandidateIDs() []golibrespot.SpotifyId {
@@ -197,9 +195,8 @@ func (p *AppPlayer) prefetchNext(_ context.Context) {
 	repeatTrack := p.state != nil && p.state.player != nil && p.state.player.Options != nil && p.state.player.Options.RepeatingTrack
 	for i := range candidates {
 		id := candidates[i]
-		// In repeat-track mode the next track is the current one, so the
-		// primary stream must stay a prefetch target; its result is routed
-		// to the transition cache instead of the secondary slot.
+		// In repeat-track mode the next track is the current one: keep the primary a
+		// prefetch target, routed to the transition cache instead of the secondary slot.
 		if p.primaryStream != nil && p.primaryStream.Is(id) && !repeatTrack {
 			continue
 		}
@@ -227,18 +224,15 @@ func (p *AppPlayer) prefetchNext(_ context.Context) {
 	}
 }
 
-// scheduleQueueTopUp arms the deferred queue-extension tick. The Run
-// goroutine emits queue state from already-loaded pages only (B3); this
-// schedules the single bounded extending fetch that keeps the full queue
-// visible in the TUI and in connect state, without stalling emits.
+// scheduleQueueTopUp arms the deferred extending fetch: Run emits loaded pages
+// only, and this single bounded fetch keeps the full queue visible without
+// stalling emits.
 func (p *AppPlayer) scheduleQueueTopUp() {
 	if p == nil || p.queueTopUpInFlight {
 		return
 	}
-	// A top-up's own emit would otherwise re-arm forever while the loaded
-	// window stays at the cap: back-to-back bounded fetches that stall Run
-	// and starve skip commands on slow networks (observed). One top-up per
-	// triggering event; fresh events re-arm.
+	// A top-up's own emit would otherwise re-arm forever at the cap, stalling Run
+	// and starving skips on slow networks. One top-up per triggering event.
 	if p.topUpSuppressArm {
 		p.topUpSuppressArm = false
 		return
@@ -247,10 +241,8 @@ func (p *AppPlayer) scheduleQueueTopUp() {
 	stopAndResetTimer(p.queueTopUpTimer, queueTopUpDelay)
 }
 
-// topUpQueue performs the deferred extending fetch on the Run goroutine.
-// The fetch mutates the tracks list (pagedList is single-goroutine by
-// design), so it must run here; the timer keeps it out of the dealer-reply
-// critical path and the bounded timeout caps the block.
+// topUpQueue performs the deferred extending fetch on the Run goroutine: the
+// tracks list is single-goroutine, and the timer keeps it off the dealer path.
 func (p *AppPlayer) topUpQueue(ctx context.Context) {
 	p.queueTopUpInFlight = false
 	if p.state == nil || p.state.tracks == nil || p.primaryStream == nil {
@@ -266,6 +258,9 @@ func (p *AppPlayer) topUpQueue(ctx context.Context) {
 	p.topUpSuppressArm = true
 	p.updateState()
 	p.emitPlaybackState()
+	// New pages arrive imageless: sweep them in the background so a skip
+	// into the extended region is as warm as the head.
+	p.maybeSweepQueueImages()
 }
 
 func (p *AppPlayer) schedulePrefetchNext() {
@@ -343,8 +338,8 @@ func (p *AppPlayer) handlePrefetchResult(res prefetchResult) {
 		p.state.player.Options != nil &&
 		p.state.player.Options.RepeatingTrack
 	if repeatTrack {
-		// The advance path clears the secondary slot but keeps the
-		// transition cache, so a repeat-one loop stays gapless.
+		// The advance path clears the secondary slot but keeps the transition cache,
+		// so a repeat-one loop stays gapless.
 		p.runtime.Log.WithField("uri", res.target.Uri()).Trace("repeat-track mode: keeping prefetched stream in transition cache")
 		p.putTransitionCachedStream(res.target, res.stream)
 		return
@@ -404,13 +399,13 @@ func (p *AppPlayer) runAdvanceNextTransition(source string, forceNext, dropTrans
 	transitionCancel()
 	if err != nil {
 		if source == "end_guard" || source == "player_not_playing" {
-			// Bounded retry: without a cap the 500ms end-of-track ticker
-			// would retry a permanently failing advance forever, each
-			// attempt able to block Run for a full transition timeout.
+			// Bounded retry: an uncapped end-of-track ticker would retry a failing
+			// advance forever, each attempt able to block Run for a full timeout.
 			p.endGuardFailures++
 			if p.endGuardFailures >= endGuardMaxFailures {
 				p.runtime.Log.WithError(err).WithField("source", source).
 					Errorf("giving up end-of-track advance after %d failures", p.endGuardFailures)
+				p.terminalErrActive = true
 				p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "playback stuck: failed to advance to the next track"})
 				return false, nil
 			}
@@ -512,13 +507,10 @@ const (
 	stopActionGiveUp
 )
 
-// planStopRecovery decides how to answer a fork output-device Stop. The fork
-// emits Stop both for output failures and for our own Stop() call
-// (stopPlayback, which nils the primary first), so only a live, unpaused
-// primary means something broke mid-track. It records the attempt: each
-// reload/advance it returns counts toward the give-up cap. A committed load
-// of a different track clears the guard; a same-track commit keeps it, so
-// repeated failures on one track accumulate instead of looping reloads.
+// planStopRecovery answers a fork output-device Stop. Stop fires both for output
+// failures and our own Stop() (which nils the primary first), so only a live,
+// unpaused primary means something broke mid-track. Same-track commits keep the
+// guard so repeated failures accumulate instead of looping reloads.
 func (p *AppPlayer) planStopRecovery() (stopRecoveryAction, string) {
 	if p.state == nil || p.state.player == nil || p.primaryStream == nil {
 		return stopActionIgnore, ""
@@ -548,32 +540,25 @@ func (p *AppPlayer) planStopRecovery() (stopRecoveryAction, string) {
 	return stopActionReload, uri
 }
 
-// resetStopRecoveryGuard clears the stop-recovery episode. Fresh,
-// user-driven loads (new contexts) call this directly; recovery and
-// advance loads go through maybeResetStopRecoveryGuard so failures on one
-// track accumulate toward the give-up cap.
+// resetStopRecoveryGuard clears the stop-recovery episode; fresh user-driven
+// loads call this directly so failures on one track accumulate toward the cap.
 func (p *AppPlayer) resetStopRecoveryGuard() {
 	p.stopRecoveryURI = ""
 	p.stopRecoveryFailures = 0
 }
 
-// maybeResetStopRecoveryGuard clears the guard when the committed track
-// differs from the armed one. A same-track commit is the recovery's own
-// reload (or an advance that wrapped back to it) and must keep the guard,
-// or the cap resets on every success and one persistently failing track
-// reloads forever.
+// maybeResetStopRecoveryGuard clears the guard when the committed track differs;
+// a same-track commit is the recovery's own reload and must keep the guard, or
+// one persistently failing track reloads forever.
 func (p *AppPlayer) maybeResetStopRecoveryGuard(committedURI string) {
 	if p.stopRecoveryURI == "" || committedURI != p.stopRecoveryURI {
 		p.resetStopRecoveryGuard()
 	}
 }
 
-// isStaleStopSource reports whether a fork Stop names a source that is no
-// longer primary. The output loop reads ahead while the Run goroutine loads
-// the next track synchronously, so a Stop for the previous track can arrive
-// after the new track committed: without this check the recovery would
-// restart a healthy track from zero. A nil source (explicit stops and
-// untagged failures) is never stale.
+// isStaleStopSource reports whether a fork Stop names a superseded source: the
+// output loop reads ahead while Run loads the next track, so a previous-track
+// Stop can arrive after the new commit. A nil source is never stale.
 func (p *AppPlayer) isStaleStopSource(failedSource golibrespot.AudioSource) bool {
 	if failedSource == nil || p.primaryStream == nil || p.primaryStream.Source == nil {
 		return false
@@ -581,18 +566,13 @@ func (p *AppPlayer) isStaleStopSource(failedSource golibrespot.AudioSource) bool
 	return p.primaryStream.Source != failedSource
 }
 
-// isUnplayableMediaError reports the typed permanent failures: the backend
-// will reject these tracks the same way on every attempt, so they are safe
-// to remember and skip without retry. Everything else (network, deadline,
-// 5xx, undecodable-but-retryable) stays retryable.
+// isUnplayableMediaError reports typed permanent failures, safe to remember and
+// skip without retry; everything else stays retryable.
 func isUnplayableMediaError(err error) bool {
 	return errors.Is(err, golibrespot.ErrMediaRestricted) ||
 		errors.Is(err, golibrespot.ErrNoSupportedFormats)
 }
 
-// rememberDeadTrack records a permanently unplayable URI for the session.
-// Evicts oldest-first at the cap; duplicates and empty URIs are no-ops so
-// the order slice stays a set in insertion order.
 func (p *AppPlayer) rememberDeadTrack(uri string) {
 	if uri == "" {
 		return
@@ -624,13 +604,10 @@ func (p *AppPlayer) clearDeadTracks() {
 	p.deadTrackOrder = nil
 }
 
-// handleUnexpectedStop answers a fork output-device Stop with a bounded,
-// visible recovery. Stop (unlike NotPlaying) advances nothing and surfaces
-// nothing, so without this the player sits silent until restart.
-//
-// Every path sends state before the error-only push: a state push resets the
-// TUI's playback error, while the error-only push sets it, so the error must
-// be the final send to survive.
+// handleUnexpectedStop answers a fork output-device Stop with a bounded, visible
+// recovery (Stop advances and surfaces nothing, so without this the player sits
+// silent). The error-only push must be the final send: a state push resets the
+// TUI's playback error.
 func (p *AppPlayer) handleUnexpectedStop(failedSource golibrespot.AudioSource) {
 	if p.isStaleStopSource(failedSource) {
 		p.runtime.Log.Debug("ignoring stale stop for a superseded source")
@@ -641,12 +618,10 @@ func (p *AppPlayer) handleUnexpectedStop(failedSource golibrespot.AudioSource) {
 	switch action {
 	case stopActionPaused:
 		p.runtime.Log.Warn("output stopped while paused")
-		// Stay paused but mark the transport dead: the TUI derives its
-		// play/pause toggle from Playing, and only a not-playing state
-		// routes the next press to Resume instead of Pause. The output
-		// itself is gone (the fork closed it), so that play recreates
-		// it — see outputRecreateOnPlay.
+		// Stay paused but mark the transport dead: only a not-playing state routes
+		// the next press to Resume, and that play recreates the gone output.
 		p.outputRecreateOnPlay = true
+		p.terminalErrActive = true
 		p.setPlayerTransportState(false, false, true)
 		p.emitPlaybackStateLight()
 		p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "playback stopped — press play to retry"})
@@ -656,9 +631,9 @@ func (p *AppPlayer) handleUnexpectedStop(failedSource golibrespot.AudioSource) {
 		p.advanceAfterOutputFailure()
 	case stopActionGiveUp:
 		p.runtime.Log.WithField("uri", uri).Error("giving up output-error recovery after repeated failures")
-		// Same transport-dead reasoning as the paused branch: report
-		// stopped so the toggle reaches Resume, and let play rebuild.
+		// Same transport-dead reasoning: report stopped so the toggle reaches Resume.
 		p.outputRecreateOnPlay = true
+		p.terminalErrActive = true
 		p.setPlayerTransportState(false, false, false)
 		p.emitPlaybackStateLight()
 		p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "playback stopped after repeated output errors — press play to retry"})
@@ -667,9 +642,7 @@ func (p *AppPlayer) handleUnexpectedStop(failedSource golibrespot.AudioSource) {
 	}
 }
 
-// reloadAfterOutputFailure rebuilds the current track from the last known
-// position after an output failure. One attempt per track; failure falls
-// through to the advance path instead of looping.
+// Rebuilds once; failure falls through to the advance path instead of looping.
 func (p *AppPlayer) reloadAfterOutputFailure(uri string) {
 	p.runtime.Log.WithField("uri", uri).Warn("output device failed, reloading current track")
 	p.dropSuspectCachedStream(uri)
@@ -684,8 +657,6 @@ func (p *AppPlayer) reloadAfterOutputFailure(uri string) {
 	p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "output error — playback recovered"})
 }
 
-// advanceAfterOutputFailure skips past a track the output cannot play, using
-// the same force-next transition as a manual skip.
 func (p *AppPlayer) advanceAfterOutputFailure() {
 	advanced, err := p.runAdvanceNextTransition("output_error_recovery", true, true)
 	msg := "output error — skipped to next track"
@@ -693,19 +664,18 @@ func (p *AppPlayer) advanceAfterOutputFailure() {
 	case err != nil:
 		p.runtime.Log.WithError(err).Error("output-error advance failed")
 		msg = "output error — could not advance, press next to continue"
+		p.terminalErrActive = true
 	case !advanced:
-		// Contention and an exhausted queue are indistinguishable here;
-		// either way only a manual next helps.
+		// Contention and an exhausted queue are indistinguishable; only a manual next helps.
 		msg = "output error — press next to continue"
+		p.terminalErrActive = true
 	}
 	p.emitPlaybackStateLight()
 	p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: msg})
 }
 
-// dropSuspectCachedStream discards the pre-failure cached copy of the track
-// being reloaded so recovery always builds a fresh stream. The cached copy
-// predates the output failure that just killed playback; re-promoting it
-// risks replaying the same failure instead of recovering.
+// dropSuspectCachedStream discards the pre-failure cached copy so recovery builds
+// a fresh stream; re-promoting it risks replaying the same failure.
 func (p *AppPlayer) dropSuspectCachedStream(uri string) {
 	if p.transitionCache == nil || uri == "" {
 		return
@@ -723,10 +693,8 @@ func (p *AppPlayer) dropSuspectCachedStream(uri string) {
 type skipToFunc func(*connectpb.ContextTrack) bool
 
 func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context, skipTo skipToFunc, paused, drop bool) error {
-	// A user-driven context load abandons any stop-recovery episode on the
-	// old context: the guard tracks consecutive failures on one track.
-	// Dead-track memory is context-scoped the same way: a new context has
-	// a new track set, so past restrictions must be re-proven there.
+	// A user-driven context load abandons the old stop-recovery episode and dead-track
+	// memory: both track one context's failures, and a new track set re-proves both.
 	p.resetStopRecoveryGuard()
 	p.clearDeadTracks()
 	ctxTracks, err := tracks.NewTrackListFromContext(ctx, p.runtime.Log, p.sess.Spclient(), spotCtx, 0)
@@ -780,11 +748,18 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 	p.resetPlaybackCaches(true)
 	p.syncPlayerTrackState(ctxTracks, nil)
 	allTracks := ctxTracks.AllTracks(ctx)
+	// Head cover URLs are computed on Run (tracks.List is single-goroutine);
+	// the batch itself runs off it.
+	headURIs := headImageURIs(ctxTracks.UpcomingTracksLoaded(headImageWindow), p.queueHeadImageMissing, headImageWindow)
 	p.scheduleQueueTopUp()
+	p.queueHeadWarmInFlight.Store(true)
 	go func() {
+		defer p.queueHeadWarmInFlight.Store(false)
 		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
 		defer metaCancel()
-		p.resolveContextQueueMetadata(metaCtx, allTracks)
+		if p.resolveContextQueueMetadata(metaCtx, allTracks, headURIs) {
+			p.signalQueueMetaUpdated()
+		}
 	}()
 	if err := p.loadCurrentTrack(ctx, paused, drop); err != nil {
 		if isUnplayableMediaError(err) {
@@ -800,9 +775,11 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 }
 
 func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) error {
-	// Defer closing the old primary until SetPrimaryStream replaces it in the
-	// SwitchingAudioSource — closing first leaves a window where the output
-	// goroutine reads from a closed cgo decoder.
+	if p.state == nil || p.state.player == nil || p.state.player.Track == nil || p.state.player.Track.Uri == "" {
+		return fmt.Errorf("no current track")
+	}
+	// Defer closing the old primary until SetPrimaryStream replaces it: closing first
+	// leaves the output goroutine reading a closed cgo decoder.
 	var oldStream *player.Stream
 	var setPrimaryDone bool
 	defer func() {
@@ -825,17 +802,11 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	if spotId.Type() != golibrespot.SpotifyIdTypeTrack && spotId.Type() != golibrespot.SpotifyIdTypeEpisode {
 		return fmt.Errorf("unsupported spotify type: %s", spotId.Type())
 	}
-	// The intended start position is read BEFORE the wall-clock rebase below:
-	// UpdateTimestamp inflates PositionAsOfTimestamp by elapsed*speed, and a
-	// "fresh start" inferred from the inflated value missed the transition-
-	// cache promotion on any >=1ms scheduling delay, cold-loading a stream
-	// staged for exactly this moment. Callers encode intent in the pre-rebase
-	// value: 0 on advance/skip/transfer, setPlayerPositionAtNow for output-
-	// failure reloads.
-	trackPosition := p.state.player.PositionAsOfTimestamp
-	if trackPosition < 0 {
-		trackPosition = 0
-	}
+	// Read the intended start position BEFORE the wall-clock rebase: UpdateTimestamp
+	// inflates PositionAsOfTimestamp, and a "fresh start" inferred from the inflated
+	// value misses the staged transition-cache promotion. Callers encode intent in the
+	// pre-rebase value: 0 on advance/skip/transfer, setPlayerPositionAtNow on reloads.
+	trackPosition := max(p.state.player.PositionAsOfTimestamp, 0)
 	golibrespot.UpdateTimestamp(p.state.player, 0)
 	if p.state.player.PositionAsOfTimestamp < 0 {
 		p.state.player.PositionAsOfTimestamp = 0
@@ -845,10 +816,9 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	var prefetched bool
 	var promotedSecondary bool
 	if p.secondaryStream != nil && p.secondaryStream.Is(*spotId) {
-		// Promote the prefetched stream without clearing the player's
-		// secondary slot: SetSecondaryStream(nil) closes the displaced source,
-		// which mid-track is this very stream (the audio source only
-		// auto-promotes it at track end). SetPrimaryStream drops the alias.
+		// Promote without clearing the player's secondary slot: SetSecondaryStream(nil)
+		// closes the displaced source, which mid-track is this very stream.
+		// SetPrimaryStream drops the alias.
 		p.primaryStream = p.secondaryStream
 		p.secondaryStream = nil
 		promotedSecondary = true
@@ -875,8 +845,8 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 		p.primaryStream = oldStream
 		oldStream = nil
 		if promotedSecondary {
-			// The alias never got dropped by SetPrimaryStream; clear it so the
-			// dead stream cannot be auto-promoted when the old track ends.
+			// The alias survived SetPrimaryStream; clear it so the dead stream cannot
+			// auto-promote when the old track ends.
 			p.player.SetSecondaryStream(nil)
 		}
 		if failed != nil && failed != p.primaryStream {
@@ -885,17 +855,14 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 		return fmt.Errorf("failed setting stream for %s: %w", spotId, err)
 	}
 	setPrimaryDone = true
-	// The output is alive again on any committed load; a same-track
-	// commit keeps the stop-recovery guard so one failing track cannot
-	// loop reloads (see maybeResetStopRecoveryGuard).
+	// Any committed load revives the output; a same-track commit keeps the
+	// stop-recovery guard.
 	p.outputRecreateOnPlay = false
+	p.terminalErrActive = false
 	p.maybeResetStopRecoveryGuard(spotId.Uri())
-	// A promoted secondary is already playing when the fork crossfaded into
-	// it ahead of this advance (SetPrimaryStream above only acknowledged the
-	// same source): seeking to 0 would rewind the fade-consumed decoder and
-	// reset the fade, restarting the track the listener already hears. Fresh
-	// decoders start at 0 anyway, so the post-load seek only matters for a
-	// nonzero resume position.
+	// A promoted secondary is already playing (the fork crossfaded into it ahead of
+	// this advance): seeking to 0 would rewind the fade-consumed decoder and restart
+	// the heard track. Fresh decoders start at 0, so seek only for nonzero resume.
 	if trackPosition != 0 || !promotedSecondary {
 		if err := p.player.SeekMs(trackPosition); err != nil {
 			p.runtime.Log.WithError(err).WithField("position_ms", trackPosition).Warn("seek after load failed")
@@ -913,13 +880,22 @@ func (p *AppPlayer) loadCurrentTrack(ctx context.Context, paused, drop bool) err
 	p.updateState()
 	p.schedulePrefetchNext()
 	p.emitPlaybackState()
+	// Warm the coming covers ahead of the next skip; no-op when warm or busy.
+	p.maybeWarmQueueHeadImages()
 	return nil
 }
 
-func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repeatingTrack *bool, shufflingContext *bool) error {
+func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repeatingTrack *bool, shufflingContext *bool, modes map[string]string) error {
 	var scheduleQueueTopUp bool
-	if p == nil || p.state == nil || p.state.player == nil || p.state.player.Options == nil {
+	if p == nil || p.state == nil || p.state.player == nil {
 		return nil
+	}
+	if p.state.player.Options == nil {
+		// A modes-only set_options has nothing to resolve without existing options.
+		if len(modes) == 0 {
+			return nil
+		}
+		p.state.player.Options = &connectpb.ContextPlayerOptions{}
 	}
 	curr := playbackdomain.TraversalOptions{
 		RepeatContext: p.state.player.Options.RepeatingContext,
@@ -928,8 +904,8 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 	}
 	next := playbackdomain.ResolveOptions(curr, repeatingContext, repeatingTrack, shufflingContext)
 
-	// Try the shuffle toggle first — it's the only operation that can fail.
-	// If it fails, repeat options remain unchanged.
+	// Toggle shuffle first: it is the only fallible operation, so repeat options stay
+	// unchanged on failure.
 	if p.state.tracks != nil && next.Shuffle != curr.Shuffle {
 		if err := p.state.tracks.ToggleShuffle(ctx, next.Shuffle); err != nil {
 			p.runtime.Log.WithError(err).Errorf("failed toggling shuffle context (value: %t)", next.Shuffle)
@@ -960,6 +936,16 @@ func (p *AppPlayer) setOptions(ctx context.Context, repeatingContext *bool, repe
 	if next.Shuffle != curr.Shuffle {
 		requiresUpdate = true
 	}
+	// Modes are opaque echo state, merged without changing playback.
+	for k, v := range modes {
+		if p.state.player.Options.Modes[k] != v {
+			if p.state.player.Options.Modes == nil {
+				p.state.player.Options.Modes = map[string]string{}
+			}
+			p.state.player.Options.Modes[k] = v
+			requiresUpdate = true
+		}
+	}
 	if requiresUpdate {
 		p.logRepeatShuffleInvariant("set_options")
 		p.updateState()
@@ -987,51 +973,55 @@ func (p *AppPlayer) addToQueue(_ context.Context, track *connectpb.ContextTrack)
 	p.emitPlaybackState()
 }
 
-func (p *AppPlayer) queueRemove(index int) {
+func (p *AppPlayer) queueRemove(index int) error {
 	if p.state == nil || p.state.tracks == nil {
-		return
+		return errors.New("no queue loaded")
 	}
 	if !p.state.tracks.RemoveFromQueue(index) {
-		p.runtime.Log.WithField("index", index).Warn("queue remove out of range")
-		return
+		p.emitQueueEditError("queue changed — retry the edit")
+		return errors.New("queue remove out of range")
 	}
 	p.afterQueueEdit()
+	return nil
 }
 
-func (p *AppPlayer) queueReorder(from, to int) {
+func (p *AppPlayer) queueReorder(from, to int) error {
 	if p.state == nil || p.state.tracks == nil {
-		return
+		return errors.New("no queue loaded")
 	}
 	if !p.state.tracks.ReorderQueue(from, to) {
-		p.runtime.Log.WithField("from", from).WithField("to", to).Warn("queue reorder out of range")
-		return
+		p.emitQueueEditError("queue changed — retry the edit")
+		return errors.New("queue reorder out of range")
 	}
 	p.afterQueueEdit()
+	return nil
 }
 
-// queueJump promotes the up-next entry at `index` to the current position and
-// starts playing it; the target becomes queue[0] (the "playing" head).
-func (p *AppPlayer) queueJump(ctx context.Context, index int) {
+// Surface stale-index edits as playback errors; Run only logs.
+func (p *AppPlayer) emitQueueEditError(msg string) {
+	p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: msg})
+}
+
+func (p *AppPlayer) queueJump(ctx context.Context, index int) error {
 	if p.state == nil || p.state.tracks == nil {
-		return
+		return errors.New("no queue loaded")
 	}
 	if !p.state.tracks.GoToQueueEntry(index) {
-		p.runtime.Log.WithField("index", index).Warn("queue jump out of range")
-		return
+		p.emitQueueEditError("queue changed — retry the edit")
+		return errors.New("queue jump out of range")
 	}
 	p.syncPlayerTrackState(p.state.tracks, nil)
 	p.updateState()
 	p.emitPlaybackState()
 	if p.player == nil {
-		return
+		return nil
 	}
 	if err := p.loadCurrentTrackFromTransition(ctx, false, true, "queue jump"); err != nil {
 		p.runtime.Log.WithError(err).Error("failed loading queue-jump target")
 	}
+	return nil
 }
 
-// afterQueueEdit refreshes everything a queue mutation affects: track state,
-// connect-state, prefetch targets and the pushed TUI queue.
 func (p *AppPlayer) afterQueueEdit() {
 	p.syncPlayerTrackState(p.state.tracks, nil)
 	p.updateState()
@@ -1056,9 +1046,8 @@ func (p *AppPlayer) play(_ context.Context) error {
 		return fmt.Errorf("no primary stream")
 	}
 	if p.outputRecreateOnPlay {
-		// The last stop closed the output device, and the fork answers
-		// Play with silent success when out == nil — a plain Play would
-		// report playing with no audio. Rebuild the output instead.
+		// The last stop closed the output and fork Play answers silent success with
+		// out == nil, so rebuild the output instead of reporting playing with no audio.
 		return p.retryPlaybackAfterOutputFailure()
 	}
 	seekPos := golibrespot.TrackPosition(p.state.player, 0)
@@ -1078,10 +1067,8 @@ func (p *AppPlayer) play(_ context.Context) error {
 	return nil
 }
 
-// retryPlaybackAfterOutputFailure rebuilds the output for an explicit play
-// press after an output failure. Unlike the automatic reload it never
-// advances on failure: the user asked for this track, so a failure stays
-// put and says so.
+// retryPlaybackAfterOutputFailure rebuilds the output for an explicit play press;
+// unlike the automatic reload it never advances: a failure stays put and says so.
 func (p *AppPlayer) retryPlaybackAfterOutputFailure() error {
 	uri := ""
 	if p.state.player.Track != nil {
@@ -1148,6 +1135,9 @@ func (p *AppPlayer) seek(_ context.Context, position int64) error {
 }
 
 func (p *AppPlayer) skipPrev(ctx context.Context, allowSeeking bool) error {
+	if p.state == nil || p.state.player == nil || p.state.player.Track == nil {
+		return fmt.Errorf("no current track")
+	}
 	if allowSeeking && p.currentPositionMs() > 3000 {
 		return p.seek(ctx, 0)
 	}
@@ -1157,8 +1147,7 @@ func (p *AppPlayer) skipPrev(ctx context.Context, allowSeeking bool) error {
 		p.syncPlayerTrackState(p.state.tracks, nil)
 	}
 	if err := p.loadCurrentTrackFromTransition(ctx, p.state.player.IsPaused, true, "skip prev"); err != nil {
-		// Emit even on failure: the TUI holds a transport transition open and
-		// only releases it when a playback update arrives.
+		// Emit even on failure: the TUI releases a transport transition only on update.
 		p.emitPlaybackState()
 		return err
 	}
@@ -1175,15 +1164,14 @@ func (p *AppPlayer) skipNext(ctx context.Context, track *connectpb.ContextTrack)
 		p.bumpPrefetchGeneration()
 		p.syncPlayerTrackState(p.state.tracks, nil)
 		if err := p.loadCurrentTrackFromTransition(ctx, p.state.player.IsPaused, true, "skip next"); err != nil {
-			// Emit even on failure: the TUI holds a transport transition open and
-			// only releases it when a playback update arrives.
+			// Emit even on failure: the TUI releases a transport transition only on update.
 			p.emitPlaybackState()
 			return err
 		}
 		return nil
 	}
-	// Share the transition wrapper with auto-advance so a failed skip emits
-	// state and cannot interleave with an advance already in flight.
+	// Share the transition wrapper with auto-advance so a failed skip emits state
+	// and cannot interleave with an in-flight advance.
 	if _, err := p.runAdvanceNextTransition("skip_next", true, true); err != nil {
 		return fmt.Errorf("failed skipping to next track: %w", err)
 	}
@@ -1304,10 +1292,8 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 	}
 	p.logAdvanceInvariants(forceNext, selection, beforeTrackID)
 
-	// Only real load attempts count toward the cap: tracks already proven
-	// dead this session are stepped over without a load and without
-	// burning an attempt, so a context with more dead tracks than the cap
-	// still reaches the live ones.
+	// Only real loads count toward the cap: known-dead tracks are stepped over
+	// without burning attempts, so dead-heavy contexts still reach live tracks.
 	maxRetries := 10
 	attempts := 0
 	for {
@@ -1343,12 +1329,7 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 	}
 }
 
-// advanceToNextCandidate moves the selection past the current track and
-// applies it, returning the new current URI. It is the single shared step
-// for skipping dead and unplayable tracks so neither duplicates the
-// queue-exhaustion handling. A false return means the queue is exhausted
-// (the transport is already marked stopped); the attempt counter is
-// untouched, so callers decide separately what a skip costs.
+// Shared dead/unplayable skip step; leaves the attempt counter untouched.
 func (p *AppPlayer) advanceToNextCandidate(ctx context.Context) (string, bool) {
 	selection := p.selectAdvanceNextTarget(ctx, true)
 	if !selection.hasNextTrack {
@@ -1380,8 +1361,7 @@ func (p *AppPlayer) updateVolume(newVal uint32) {
 	if err := p.runtime.State.Write(); err != nil {
 		p.runtime.Log.WithError(err).Error("failed writing state after volume change")
 	}
-	// Latest-value semantics: drain any pending report (e.g. from the audio
-	// backend) so a fresh value can never be lost to the cap-1 buffer.
+	// Drain any pending report so a fresh value is never lost to the cap-1 buffer.
 	select {
 	case <-p.volumeUpdate:
 	default:
@@ -1393,11 +1373,7 @@ func (p *AppPlayer) updateVolume(newVal uint32) {
 }
 
 func (p *AppPlayer) volumeUpdated(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, shuffleContextTimeout)
-	defer cancel()
-	if err := p.putConnectState(ctx, connectpb.PutStateReason_VOLUME_CHANGED); err != nil {
-		p.runtime.Log.WithError(err).Error("failed put state after volume change")
-	}
+	p.enqueueConnectPut(p.buildConnectPut(connectpb.PutStateReason_VOLUME_CHANGED))
 	p.emitPlaybackStateLight()
 }
 

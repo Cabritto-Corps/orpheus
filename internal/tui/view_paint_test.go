@@ -8,14 +8,13 @@ import (
 
 	"orpheus/internal/spotify"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/bubbles/v2/list"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 // The view paints backgrounds by re-asserting them after every style reset,
-// so any rendered row must never print text with no background set. This
-// replays the SGR state and counts violations (holes), which would show as
+// so no rendered text may print with no background set; violations show as
 // page-colored notches inside themed bands.
 var paintTokenRe = regexp.MustCompile(`(\x1b\[[0-9;]*m)|([^\x1b]+)`)
 
@@ -47,20 +46,14 @@ func withPaintTestModel(t *testing.T, w, h int) model {
 	return withPaintTestModelStyle(t, w, h, "solid")
 }
 
-// withPaintTestModelStyle renders under one background mode: solid is
-// the shipped default, transparent the unpainted one. The theme is restored afterwards so mode switches never
-// leak between tests (newModel re-applies the stored theme anyway).
+// Styles live on the returned model, so mode switches cannot leak between tests.
 func withPaintTestModelStyle(t *testing.T, w, h int, style string) model {
 	t.Helper()
 	m, _, _, _ := newSettingsTestModel(t)
 	st := themePresetState("default")
 	st.backgrounds.Style = style
-	applyTheme(st)
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() {
-		lipgloss.SetColorProfile(termenv.Ascii)
-		applyTheme(themePresetState("default"))
-	})
+	m.styles = buildThemeStyles(st)
+	m.styles.colorProfile = colorprofile.TrueColor
 	m.ui.width = w
 	m.ui.height = h
 	return m
@@ -77,11 +70,15 @@ func TestModalPaintNeverLosesBackground(t *testing.T) {
 		}},
 		{"keys", func(m *model) string {
 			m.ui.settings.mode = settingsModeKeys
-			m.ui.settings.keysTableDirty = true
 			return m.settingsModalView()
 		}},
 		{"theme", func(m *model) string {
 			m.ui.settings.mode = settingsModeTheme
+			return m.settingsModalView()
+		}},
+		{"theme-options", func(m *model) string {
+			m.openSettings()
+			m.openThemeOptions()
 			return m.settingsModalView()
 		}},
 		{"help", func(m *model) string {
@@ -91,8 +88,7 @@ func TestModalPaintNeverLosesBackground(t *testing.T) {
 		}},
 	}
 	for _, variant := range variants {
-		// The painted mode only: in transparent mode the backdrop keeps
-		// no page fill by design (see TestTransparentModalKeepsChrome).
+		// Transparent keeps no page fill by design (TestTransparentModalKeepsChrome).
 		for _, style := range []string{"solid"} {
 			for _, size := range [][2]int{{100, 40}, {80, 30}, {60, 24}} {
 				m := withPaintTestModelStyle(t, size[0], size[1], style)
@@ -108,12 +104,11 @@ func TestModalPaintNeverLosesBackground(t *testing.T) {
 }
 
 func TestFramePaintNeverLosesBackground(t *testing.T) {
-	// The painted mode only: transparent frames are unpainted by design
-	// (covered by TestTransparentFramePaintsNoPageBackground instead).
+	// Transparent frames are unpainted by design (TestTransparentFramePaintsNoPageBackground).
 	for _, style := range []string{"solid"} {
 		for _, size := range [][2]int{{100, 40}, {80, 30}, {60, 24}} {
 			m := withPaintTestModelStyle(t, size[0], size[1], style)
-			out := m.View()
+			out := m.View().Content
 			holes, samples := countPaintHoles(out)
 			if holes != 0 {
 				t.Fatalf("%s frame at %dx%d: %d unpainted text runs, samples %q", style, size[0], size[1], holes, samples)
@@ -122,31 +117,25 @@ func TestFramePaintNeverLosesBackground(t *testing.T) {
 	}
 }
 
-// TestTransparentFramePaintsNoPageBackground pins the transparent
-// contract: no page surface anywhere in the frame, while overlay chrome
-// (here: the active-tab highlight) keeps working.
 func TestTransparentFramePaintsNoPageBackground(t *testing.T) {
 	m := withPaintTestModelStyle(t, 100, 40, "transparent")
-	out := m.View()
-	pageSeq := bgSequence(colorPage)
+	out := m.View().Content
+	pageSeq := m.styles.bgSequence(m.styles.colorPage)
 	if pageSeq == "" {
 		t.Fatal("need TrueColor background sequences")
 	}
 	if strings.Contains(out, pageSeq) {
 		t.Fatal("transparent frame paints the page background")
 	}
-	// Chrome keeps working: match the bare SGR params, not the standalone
-	// sequence — lipgloss merges the tab highlight's fg+bg into one
-	// combined sequence (the TestSelectedRowKeepsHighlightThroughFragments
-	// pattern).
-	if dimParams := strings.TrimPrefix(bgSequence(colorDimBlue), "\x1b["); !strings.Contains(out, dimParams) {
+	// lipgloss merges the tab highlight's fg+bg into one combined sequence,
+	// so match the bare SGR params, not the standalone sequence.
+	if dimParams := strings.TrimPrefix(m.styles.bgSequence(m.styles.colorDimBlue), "\x1b["); !strings.Contains(out, dimParams) {
 		t.Fatal("transparent frame lost the active-tab highlight")
 	}
 }
 
-// TestTransparentModalKeepsChrome: modals are floating chrome, not frame
-// zones, so the box, the dim pattern and the selection highlight all
-// survive transparent mode — only the page fill goes away.
+// Modals are floating chrome, not frame zones: only the page fill goes
+// away in transparent mode.
 func TestTransparentModalKeepsChrome(t *testing.T) {
 	m := withPaintTestModelStyle(t, 100, 40, "transparent")
 	m.openSettings()
@@ -158,44 +147,54 @@ func TestTransparentModalKeepsChrome(t *testing.T) {
 	if !strings.Contains(out, "╭") && !strings.Contains(out, "┌") {
 		t.Fatal("transparent modal lost its border")
 	}
-	if !strings.Contains(out, bgSequence(colorSelectionBg)) {
+	if !strings.Contains(out, m.styles.bgSequence(m.styles.colorSelectionBg)) {
 		t.Fatal("transparent modal lost the selection highlight")
 	}
-	if strings.Contains(out, bgSequence(colorPage)) {
+	if strings.Contains(out, m.styles.bgSequence(m.styles.colorPage)) {
 		t.Fatal("transparent modal paints the page background")
 	}
 }
 
 func TestSelectedRowKeepsHighlightThroughFragments(t *testing.T) {
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	// A styled fragment inside a selected row, like the real gauge bar.
+	st := buildThemeStyles(themePresetState("default"))
+	st.colorProfile = colorprofile.TrueColor
+	row := "Crossfade|" + lipgloss.NewStyle().Foreground(st.colorBlue).Render("██████") + "|end"
+	out := st.modalRow(row, "", true, 96)
 
-	// a styled fragment inside a selected row, like the real gauge bar
-	row := "Crossfade|" + lipgloss.NewStyle().Foreground(colorBlue).Render("██████") + "|end"
-	out := modalRow(row, "", true, 96)
-
-	selBg := bgSequence(colorSelectionBg)
+	selBg := st.bgSequence(st.colorSelectionBg)
 	selParams := strings.TrimPrefix(selBg, "\x1b[")
-	reset := "\x1b[0m"
+	// v1 terminates styles with \x1b[0m, v2 abbreviates to \x1b[m; matching
+	// one literal passed vacuously after the migration (the loop below never
+	// iterated), so the guard matches both spellings.
+	nextReset := func(s string) (idx, length int) {
+		idx, length = -1, 0
+		for _, r := range []string{"\x1b[0m", "\x1b[m"} {
+			if i := strings.Index(s, r); i >= 0 && (idx < 0 || i < idx) {
+				idx, length = i, len(r)
+			}
+		}
+		return idx, length
+	}
 	if !strings.Contains(out[:80], selParams) {
 		t.Fatalf("selection bg missing at the row start: %q", out)
 	}
 	pos := 0
 	for {
-		rel := strings.Index(out[pos:], reset)
+		rel, ln := nextReset(out[pos:])
 		if rel < 0 {
 			break
 		}
 		idx := pos + rel
-		after := out[idx+len(reset):]
+		after := out[idx+ln:]
 		segment := after
-		if before, _, ok := strings.Cut(after, reset); ok {
-			segment = before
+		if j, _ := nextReset(after); j >= 0 {
+			segment = after[:j]
 		}
 		if !strings.Contains(segment, selBg) {
 			t.Fatalf("selection bg lost after a fragment reset at %d: %q", idx, out)
 		}
-		pos = idx + len(reset)
+		pos = idx + ln
 	}
 }
 
@@ -210,7 +209,7 @@ func TestTrackPopupPaintNeverLosesBackground(t *testing.T) {
 		m.ui.trackPopupName = "Some Playlist"
 		m.ui.trackPopupItems = items
 		_, listW, listH := popupModalSize(m.ui.width, m.ui.height)
-		m.ui.trackPopupList = newTrackPopupList(m.ui.width, m.ui.height)
+		m.ui.trackPopupList = newTrackPopupList(m.styles, m.ui.width, m.ui.height)
 		m.ui.trackPopupList.SetSize(listW, listH)
 		listItems := make([]list.Item, 0, len(items))
 		for _, it := range items {

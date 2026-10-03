@@ -10,8 +10,6 @@ import (
 func TestRequeueFrontCarriesRetryCount(t *testing.T) {
 	m := model{}
 
-	// requeueFront prepends; the pump dequeues before executing, so each
-	// requeue decision is made against a fresh queue.
 	m.requeueFront(playbackInputNext, 0)
 	if len(m.transport.inputQueue) != 1 || m.transport.inputQueue[0].retryCount != 1 {
 		t.Fatalf("expected requeued next with retryCount=1, got %+v", m.transport.inputQueue)
@@ -23,7 +21,6 @@ func TestRequeueFrontCarriesRetryCount(t *testing.T) {
 		t.Fatalf("expected retryCount=2, got %+v", m.transport.inputQueue)
 	}
 
-	// The 3-retry cap: prevRetries == maxRequeueRetries-1 drops the action.
 	m.transport.inputQueue = nil
 	m.requeueFront(playbackInputNext, maxRequeueRetries-1)
 	if len(m.transport.inputQueue) != 0 {
@@ -34,7 +31,6 @@ func TestRequeueFrontCarriesRetryCount(t *testing.T) {
 func TestExecutePlaybackInputRequeuesOnFullChannel(t *testing.T) {
 	ch := make(chan librespot.TUICommand, 1)
 	m := model{ui: uiModel{keys: newKeys()}, tuiCmdCh: ch}
-	// Fill the channel so skip sends fail.
 	ch <- librespot.TUICommand{Kind: librespot.TUICommandSkipNext}
 
 	m.executePlaybackInput(playbackInputNext, 0)
@@ -186,8 +182,7 @@ func TestVolumeChannelFullFallsBackToDebounce(t *testing.T) {
 }
 
 func TestSeekStillTrailingDebounce(t *testing.T) {
-	// Seeks stay trailing-edge on purpose: a scrub burst coalesces into
-	// one player seek, while the display already moves optimistically.
+	// A scrub burst coalesces into one trailing seek while the display moves optimistically.
 	ch := make(chan librespot.TUICommand, 8)
 	m := volTestModel(ch, 50)
 	m.transport.status.DurationMS = 200000
@@ -202,5 +197,49 @@ func TestSeekStillTrailingDebounce(t *testing.T) {
 	}
 	if m.transport.seekDebouncePending != 65000 {
 		t.Fatal("seek target must stay pending for the debounce tick")
+	}
+}
+
+func TestRequeueFrontGiveUpSurfacesBusyError(t *testing.T) {
+	m := model{}
+	m.requeueFront(playbackInputNext, maxRequeueRetries-1)
+	if len(m.transport.inputQueue) != 0 {
+		t.Fatalf("expected the action to be dropped after %d retries, got %+v", maxRequeueRetries, m.transport.inputQueue)
+	}
+	if m.transport.playbackErr == nil || m.transport.playbackErr.Error() != "command could not be sent — player busy" {
+		t.Fatalf("expected the give-up to surface a busy-player error, got %v", m.transport.playbackErr)
+	}
+}
+
+func TestRequeueFrontSchedulesInputRetry(t *testing.T) {
+	m := model{}
+	cmd := m.requeueFront(playbackInputNext, 0)
+	if cmd == nil {
+		t.Fatal("expected a requeued action to schedule its own retry")
+	}
+	if _, ok := cmd().(inputRetryMsg); !ok {
+		t.Fatalf("expected an input retry message, got %T", cmd())
+	}
+	if len(m.transport.inputQueue) != 1 || m.transport.inputQueue[0].retryCount != 1 {
+		t.Fatalf("expected requeued next with retryCount=1, got %+v", m.transport.inputQueue)
+	}
+}
+
+func TestRequeuedTransportActionRetriesOnInputTick(t *testing.T) {
+	ch := make(chan librespot.TUICommand, 1)
+	ch <- librespot.TUICommand{Kind: librespot.TUICommandShuffle}
+	m := model{ui: uiModel{keys: newKeys()}, tuiCmdCh: ch}
+	m.enqueuePlaybackInput(playbackInputNext)
+	cmd := m.pumpInputExecutor()
+	if cmd == nil {
+		t.Fatal("expected a busy channel to schedule an input retry")
+	}
+	msg, ok := cmd().(inputRetryMsg)
+	if !ok {
+		t.Fatalf("expected an input retry message, got %T", msg)
+	}
+	next, _ := m.Update(msg)
+	if got := next.(model); len(got.transport.inputQueue) != 1 || got.transport.inputQueue[0].kind != playbackInputNext {
+		t.Fatalf("expected the retry tick to keep pumping the queued action, got %+v", got.transport.inputQueue)
 	}
 }

@@ -19,7 +19,7 @@ func TestSetActiveTrue(t *testing.T) {
 func TestSetActiveTrueWhenAlreadyActive(t *testing.T) {
 	s := &State{active: true, activeSince: time.Now().Add(-time.Hour)}
 	before := s.activeSince
-	s.setActive(true) // should be no-op
+	s.setActive(true)
 	if !s.activeSince.Equal(before) {
 		t.Fatal("expected activeSince to remain unchanged")
 	}

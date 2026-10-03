@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 
 	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
@@ -41,14 +41,56 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 	return m, tea.Batch(
 		m.loadVisiblePlaylistCoversCmd(),
+		m.kittyOverlayCmd(),
 	)
 }
 
+func (m model) nextTickInterval() time.Duration {
+	if m.transport.playerConnecting {
+		return uiTickInterval
+	}
+	if m.transport.status != nil && m.transport.status.Playing {
+		return uiTickInterval
+	}
+	if m.transport.transition.Pending() {
+		return uiTickInterval
+	}
+	if m.modalKind() != modalNone {
+		return uiTickInterval
+	}
+	if len(m.transport.inputQueue) > 0 {
+		return uiTickInterval
+	}
+	if m.browse.playlistsLoading {
+		return uiTickInterval
+	}
+	if m.transport.volDebouncePending >= 0 || m.transport.seekDebouncePending >= 0 {
+		return uiTickInterval
+	}
+	if m.ui.startupCoverBoostTicks > 0 {
+		return uiTickInterval
+	}
+	if len(m.ui.cover.imageRetryCount) > 0 || len(m.ui.cover.resolveInFlight) > 0 {
+		return uiTickInterval
+	}
+	if m.ui.cover.queue != nil && m.ui.cover.queue.Len() > 0 {
+		return uiTickInterval
+	}
+	if m.ui.imgs != nil {
+		m.ui.imgs.mu.RLock()
+		pending := len(m.ui.imgs.inflight) > 0
+		m.ui.imgs.mu.RUnlock()
+		if pending {
+			return uiTickInterval
+		}
+	}
+	return uiIdleTickInterval
+}
+
 func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
+	m.maybeClearTransportTransition(m.transport.status)
 	m.interpolatePlaybackProgress(uiTickInterval)
-	// Advance the loading spinner from the app tick (the list package's own
-	// pattern for tick-driven spinners); the next-tick cmd is dropped
-	// because the app tick is the clock.
+	// Drive the list spinner from the app tick; it is already the clock.
 	m.ui.spinner, _ = m.ui.spinner.Update(spinner.TickMsg{Time: time.Now(), ID: m.ui.spinner.ID()})
 	popupTimeoutCmd := m.tickTrackPopupWait()
 	inputCmd := m.pumpInputExecutor()
@@ -91,8 +133,8 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	cmds := make([]tea.Cmd, 0, 7)
-	cmds = append(cmds, m.tickCmd(), inputCmd)
+	cmds := make([]tea.Cmd, 0, 8)
+	cmds = append(cmds, m.tickCmdWithInterval(m.nextTickInterval()), inputCmd, m.kittyOverlayCmd())
 	if popupTimeoutCmd != nil {
 		cmds = append(cmds, popupTimeoutCmd)
 	}
@@ -116,6 +158,8 @@ func (m model) handleTickMsg() (tea.Model, tea.Cmd) {
 
 func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	m.browse.playlistsLoading = false
+	// Startup reveal gate resolves on the first load outcome, not on success.
+	m.browse.librarySettled = true
 	if msg.err != nil {
 		m.browse.playlistsErr = msg.err
 		slog.Error("fetch playlists failed", "error", msg.err)
@@ -196,14 +240,14 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	if m.browse.playlistList.FilterState() == list.Unfiltered {
 		m.browse.playlistList.SetItems(plItems)
 		if len(plItems) > 0 {
-			idx := clampInt(prevPlaylistIndex, 0, len(plItems)-1)
+			idx := min(max(prevPlaylistIndex, 0), len(plItems)-1)
 			m.browse.playlistList.Select(idx)
 		}
 	}
 	if m.browse.albumList.FilterState() == list.Unfiltered {
 		m.browse.albumList.SetItems(alItems)
 		if len(alItems) > 0 {
-			idx := clampInt(prevAlbumIndex, 0, len(alItems)-1)
+			idx := min(max(prevAlbumIndex, 0), len(alItems)-1)
 			m.browse.albumList.Select(idx)
 		}
 	}
@@ -255,32 +299,42 @@ func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 		}
 		m.maybeRecoverKittyProtocol()
 		m.ui.cover.clearRetry(msg.url)
-		return m, nil
+		return m, m.kittyOverlayCmd()
 	}
 	if m.transport.status != nil && strings.TrimSpace(m.transport.status.AlbumImageURL) == strings.TrimSpace(msg.url) {
 		m.ui.cover.playerCoverFailStreak++
 		m.maybeFallbackFromKittyOnPlayerFailures(msg.url)
 	}
-	return m, m.handleImageLoadFailure(msg.url, msg.err)
+	return m.handleImageLoadFailure(msg.url, msg.err)
 }
 
-// handleImageLoadFailure applies the shared retry ladder for one failed image
-// load: backoff retries, then a failed stamp and a re-resolve for library URLs
-// whose CDN entry went dead. Used by both the single-load and batch paths so
-// queue-loaded covers get the same recovery as priority loads.
-func (m model) handleImageLoadFailure(url string, err error) tea.Cmd {
+// Shared retry ladder for single and batch image loads. A server penalty
+// skips the ladder entirely: mark-and-park instead of retrying into it,
+// and park the background sweep for the server's wait (priority loads
+// keep flowing). shouldQueueLoad's fail cooldown paces re-evaluation.
+func (m model) handleImageLoadFailure(url string, err error) (model, tea.Cmd) {
+	if spotify.IsRateLimitError(err) {
+		m.ui.imgs.markFailed(url)
+		m.ui.cover.clearRetry(url)
+		if wait, ok := spotify.RateLimitRetryAfter(err); ok {
+			m.ui.cover.pauseSweep(min(wait, sweepPauseMax))
+		} else {
+			m.ui.cover.pauseSweep(time.Minute)
+		}
+		return m, nil
+	}
 	attempt := m.ui.cover.imageRetryCount[url] + 1
 	if attempt > imageLoadRetryMax {
 		m.ui.cover.clearRetry(url)
 		m.ui.imgs.markFailed(url)
 		slog.Warn("image load retries exhausted", "url", url, "error", err)
 		if m.libraryHasImageURL(url) {
-			return m.queueResolvesForImageURLCmd(url, libraryCoverRefreshBatch)
+			return m, m.queueResolvesForImageURLCmd(url, libraryCoverRefreshBatch)
 		}
-		return nil
+		return m, nil
 	}
 	_, token := m.ui.cover.nextRetry(url)
-	return m.imageRetryCmd(url, attempt, token)
+	return m, m.imageRetryCmd(url, attempt, token)
 }
 
 func (m model) handleImageRetryMsg(msg imageRetryMsg) (tea.Model, tea.Cmd) {
@@ -301,6 +355,13 @@ func (m model) handleCoverImageResolvedMsg(msg coverImageResolvedMsg) (tea.Model
 	key := coverResolveKey(msg.kind, msg.id)
 	delete(m.ui.cover.resolveInFlight, key)
 	if msg.err != nil {
+		if spotify.IsRateLimitError(msg.err) {
+			if wait, ok := spotify.RateLimitRetryAfter(msg.err); ok {
+				m.ui.cover.pauseSweep(min(wait, sweepPauseMax))
+			} else {
+				m.ui.cover.pauseSweep(time.Minute)
+			}
+		}
 		slog.Warn("resolve context image URL failed", "kind", msg.kind, "id", msg.id, "error", msg.err)
 		return m, nil
 	}
@@ -318,8 +379,7 @@ func (m model) handleTUICmdRetryMsg(msg tuiCmdRetryMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.left <= 1 {
-		// The command never reached the player: surface it instead of
-		// silently returning to a stale transport.
+		// The command never reached the player: surface it instead of returning stale.
 		m.transport.playbackErr = errors.New("command could not be sent — player busy")
 		m.transport.transition.Clear()
 		return m, nil
@@ -413,16 +473,11 @@ func (m *model) retruncateTrackPopupTitles() {
 		items = append(items, trackItem{item: qi})
 	}
 	m.ui.trackPopupList.SetItems(items)
-	// The first SetItems derives PerPage while TotalPages is still 0, so the
-	// pagination row counts as one line instead of two (dots + margin) and
-	// the modal's exact-fit clamp cuts the dots. Re-running SetSize re-derives
-	// PerPage against the real pagination height; this is why the dots only
-	// appeared after a resize event.
+	// The first SetItems leaves TotalPages at 0, so re-run SetSize; otherwise the modal clamp cuts the dots.
 	m.ui.trackPopupList.SetSize(m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height())
 }
 
-// tickTrackPopupWait closes the popup with an error when a pending
-// load never gets a reply (dropped command or a wedged backend).
+// Close the popup when a pending load never gets a reply.
 func (m *model) tickTrackPopupWait() tea.Cmd {
 	if !m.ui.trackPopupOpen || m.ui.trackPopupItems != nil {
 		return nil
@@ -441,7 +496,17 @@ func (m model) handleCoverImageURLsBatchResolvedMsg(msg coverImageURLsBatchResol
 	for _, r := range msg.results {
 		key := coverResolveKey(r.kind, r.id)
 		delete(m.ui.cover.resolveInFlight, key)
-		if r.err != nil || strings.TrimSpace(r.url) == "" {
+		if r.err != nil {
+			if spotify.IsRateLimitError(r.err) {
+				if wait, ok := spotify.RateLimitRetryAfter(r.err); ok {
+					m.ui.cover.pauseSweep(min(wait, sweepPauseMax))
+				} else {
+					m.ui.cover.pauseSweep(time.Minute)
+				}
+			}
+			continue
+		}
+		if strings.TrimSpace(r.url) == "" {
 			continue
 		}
 		if !m.applyResolvedContextImageURL(r.kind, r.id, r.url) {
@@ -460,7 +525,9 @@ func (m model) handleImagesBatchLoadedMsg(msg imagesBatchLoadedMsg) (tea.Model, 
 	for _, r := range msg.results {
 		m.ui.imgs.finishLoad(r.url)
 		if r.err != nil {
-			if retryCmd := m.handleImageLoadFailure(r.url, r.err); retryCmd != nil {
+			var retryCmd tea.Cmd
+			m, retryCmd = m.handleImageLoadFailure(r.url, r.err)
+			if retryCmd != nil {
 				cmds = append(cmds, retryCmd)
 			}
 			continue
@@ -471,6 +538,10 @@ func (m model) handleImagesBatchLoadedMsg(msg imagesBatchLoadedMsg) (tea.Model, 
 		}
 	}
 	if cmd := m.drainCoverQueueCmd(coverQueueDrainBatch); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	// Batch loads can also complete covers: restore art immediately.
+	if cmd := m.kittyOverlayCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	if len(cmds) == 0 {

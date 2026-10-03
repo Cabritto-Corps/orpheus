@@ -6,15 +6,14 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
-// DefaultDelegate.Render is the most expensive per-frame call on list tabs
-// (word-wrap + grapheme width passes per visible row), yet its output is a
-// pure function of (item text, width, selection, filter state, delegate
-// height, styles). Rendering is memoized on that key; the theme's
-// applyTheme clears the registry so style swaps never serve stale rows.
+// The memo for the most expensive per-frame list-tab render (word-wrap +
+// width passes per row). Delegates are rebuilt on every theme change, so a
+// fresh empty cache can never serve stale rows — no epoch, no reset step.
 
 type delegateKey struct {
 	width    int
@@ -46,46 +45,24 @@ func (c *delegateCache) put(k delegateKey, s string) {
 	c.mu.Unlock()
 }
 
-func (c *delegateCache) reset() {
-	c.mu.Lock()
-	c.entries = make(map[delegateKey]string, 64)
-	c.mu.Unlock()
-}
-
-// delegateCaches is bounded: a theme rebuild creates fresh caches and the
-// replaced objects are garbage, so the oldest registry slot is recycled.
-var delegateCaches []*delegateCache
-
-const maxDelegateCaches = 16
-
-func registerDelegateCache(c *delegateCache) {
-	if len(delegateCaches) >= maxDelegateCaches {
-		delegateCaches = delegateCaches[1:]
-	}
-	delegateCaches = append(delegateCaches, c)
-}
-
-type placeholderCacheKey struct {
-	cols, rows int
-	epoch      uint64
-}
-
-var placeholderCache = newStringCache[placeholderCacheKey]()
-
 type tabBarCacheKey struct {
 	width  int
 	active tab
-	epoch  uint64
 }
 
-var (
-	themeEpoch  uint64
-	tabBarCache = newStringCache[tabBarCacheKey]()
-)
+// Output varies only by width and quantized fill cell, so one key covers a geometry.
+type barCacheKey struct {
+	width  int
+	filled int
+}
 
-// stringCache is a tiny memo for constant-per-key view fragments. Entries
-// are only valid until the theme changes (resetStringCaches clears the
-// whole registry).
+type dividerCacheKey struct {
+	horizontal bool
+	n          int
+}
+
+// stringCache memos constant-per-key view fragments. It lives on the theme
+// bundle, so a theme change builds fresh cold caches and no reset step exists.
 type stringCache[K comparable] struct {
 	mu      sync.Mutex
 	entries map[K]string
@@ -111,45 +88,29 @@ func (c *stringCache[K]) put(k K, s string) {
 	c.mu.Unlock()
 }
 
-func (c *stringCache[K]) reset() {
-	c.mu.Lock()
-	c.entries = make(map[K]string, 8)
-	c.mu.Unlock()
-}
-
-func resetStringCaches() {
-	for _, c := range delegateCaches {
-		c.reset()
-	}
-	tabBarCache.reset()
-	placeholderCache.reset()
-}
-
-// cachedDelegate wraps list.DefaultDelegate. It is stored by value inside
-// list.Model (which bubbletea copies freely), so the cache lives behind a
-// pointer shared by every copy.
+// cachedDelegate is stored by value in list.Model (copied freely), so the
+// cache rides behind a shared pointer written once by the event loop.
 type cachedDelegate struct {
 	list.DefaultDelegate
 	cache *delegateCache
 }
 
-// nowPlayingContextURI identifies the playlist/album the player is currently
-// drawing from; written only from the event loop (same goroutine View runs
-// on), read inside the delegate render.
-var nowPlayingContextURI string
-
-func newCachedPlaylistDelegate() cachedDelegate {
+func newCachedPlaylistDelegate(s *themeStyles) cachedDelegate {
 	c := &delegateCache{entries: make(map[delegateKey]string, 64)}
-	registerDelegateCache(c)
-	return cachedDelegate{DefaultDelegate: newPlaylistDelegate(), cache: c}
+	return cachedDelegate{DefaultDelegate: newPlaylistDelegate(s), cache: c}
 }
 
-// trackRow composes a track row: name left, duration right-aligned at the
-// row edge — the default delegate leaves the right half of full-size lists
-// empty. During filtering the rune-highlight path falls back to the
-// framework renderer (no duration shown while filtering).
+// trackRow right-aligns the duration at the row edge (the default delegate
+// leaves the right half empty). Filtering falls back to the framework
+// renderer, so no duration shows while filtering.
 func (d cachedDelegate) trackRow(m list.Model, index int, item trackItem) (string, bool) {
-	if m.FilterState() == list.Filtering || m.Width() <= 0 {
+	if m.Width() <= 0 {
+		return "", false
+	}
+	// The framework renderer shows no selection while the filter input is
+	// active; the inline path below marks the cursor row the same as it
+	// does once the filter is applied.
+	if m.FilterState() == list.Filtering && (m.FilterValue() == "" || index != m.Index()) {
 		return "", false
 	}
 	dur := ""
@@ -182,6 +143,36 @@ func (d cachedDelegate) trackRow(m list.Model, index int, item trackItem) (strin
 	return out, true
 }
 
+// renderFilteringSelected marks the cursor row while the filter input is
+// active: bubbles' default delegate renders no selection while typing, so
+// the row would sit unmarked through the whole search session. Mirrors the
+// delegate's own selected branch, including match highlighting.
+func (d cachedDelegate) renderFilteringSelected(m list.Model, index int, title, desc string) (string, bool) {
+	if m.FilterState() != list.Filtering || m.FilterValue() == "" || index != m.Index() {
+		return "", false
+	}
+	textwidth := m.Width() - d.Styles.NormalTitle.GetPaddingLeft() - d.Styles.NormalTitle.GetPaddingRight()
+	title = ansi.Truncate(title, textwidth, "…")
+	if d.ShowDescription {
+		var lines []string
+		for i, line := range strings.Split(desc, "\n") {
+			if i >= d.Height()-1 {
+				break
+			}
+			lines = append(lines, ansi.Truncate(line, textwidth, "…"))
+		}
+		desc = strings.Join(lines, "\n")
+	}
+	unmatched := d.Styles.SelectedTitle.Inline(true)
+	matched := unmatched.Inherit(d.Styles.FilterMatch)
+	title = lipgloss.StyleRunes(title, m.MatchesForItem(index), matched, unmatched)
+	var sb strings.Builder
+	sb.WriteString(d.Styles.SelectedTitle.Render(title))
+	sb.WriteString("\n")
+	sb.WriteString(d.Styles.SelectedDesc.Render(desc))
+	return sb.String(), true
+}
+
 func (d cachedDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	pi, ok := item.(playlistItem)
 	if !ok {
@@ -194,10 +185,6 @@ func (d cachedDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		d.DefaultDelegate.Render(w, m, index, item)
 		return
 	}
-	// Stamp the now-playing flag before reading the title: the glyph
-	// becomes part of Title(), which automatically invalidates the cache
-	// key for that row when playback moves to another context.
-	pi.nowPlaying = strings.TrimSpace(pi.summary.URI) == nowPlayingContextURI
 	title := pi.Title()
 	desc := pi.Description()
 	key := delegateKey{
@@ -207,6 +194,12 @@ func (d cachedDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		filter:   m.FilterValue(),
 		filtered: m.FilterState() == list.Filtering || m.FilterState() == list.FilterApplied,
 		text:     title + "\x00" + desc,
+	}
+	// The override render is deliberately not cached: the applied-filter
+	// state must keep serving the delegate's own bytes, not a replica.
+	if s, ok := d.renderFilteringSelected(m, index, title, desc); ok {
+		fmt.Fprint(w, s)
+		return
 	}
 	if s, hit := d.cache.get(key); hit {
 		fmt.Fprint(w, s)

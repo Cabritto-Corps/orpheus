@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi/kitty"
+
 	"orpheus/internal/spotify"
 )
 
@@ -54,25 +56,37 @@ func TestDetectImageProtocol(t *testing.T) {
 	}
 }
 
-func TestRenderKittyImageChunks(t *testing.T) {
+func TestEncodeKittyChunksCanonicalFraming(t *testing.T) {
+	t.Setenv("TMUX", "")
 	payload := strings.Repeat("A", 9000)
-	out := renderKittyImage(payload, 10, 6)
+	out := encodeKittyChunks(chunkBase64(payload, kitty.MaxChunkSize), 10, 6, 7)
 
-	if !strings.Contains(out, "\x1b_Ga=T,f=100,c=10,r=6,q=2,m=1;") {
-		t.Fatalf("missing kitty first chunk header")
+	for _, want := range []string{"f=100", "q=2", "i=7", "c=10", "r=6", "C=1", "a=T", "m=1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("first chunk missing %q in %q", want, out[:120])
+		}
 	}
-	if strings.Count(out, "\x1b_Gm=") < 1 {
-		t.Fatalf("expected continuation chunks")
+	if strings.Count(out, "\x1b_G") != 3 {
+		t.Fatal("expected three chunk packets")
 	}
-	if !strings.HasSuffix(out, strings.Repeat("\n", 5)) {
-		t.Fatalf("expected row padding to preserve panel height")
+	if !strings.Contains(out, "\x1b_Gm=1;") {
+		t.Fatal("expected middle chunks as bare m=1 continuations")
+	}
+	if !strings.HasSuffix(out, "\x1b_Gm=0;"+strings.Repeat("A", 9000%kitty.MaxChunkSize)+"\x1b\\") {
+		t.Fatal("expected last chunk to terminate with m=0")
 	}
 }
 
-func TestRenderKittyImageRawWithIDIncludesImageID(t *testing.T) {
-	out := renderKittyImageRawWithID("ZmFrZQ==", 10, 6, 42)
+func TestEncodeKittyChunksOmitsMoreFlagForSingleChunk(t *testing.T) {
+	out := buildKittyPayload("ZmFrZQ==", 10, 6, 42)
 	if !strings.Contains(out, "i=42") {
 		t.Fatalf("expected kitty payload to include image id, got %q", out)
+	}
+	if !strings.Contains(out, "a=T") {
+		t.Fatalf("expected transmit-and-display action, got %q", out)
+	}
+	if strings.Contains(out, "m=") {
+		t.Fatalf("single-chunk payload must not carry a more flag, got %q", out)
 	}
 }
 

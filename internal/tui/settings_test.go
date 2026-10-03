@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"orpheus/internal/config"
 	"orpheus/internal/librespot"
@@ -34,22 +36,26 @@ func newSettingsTestModel(t *testing.T) (model, string, string, string) {
 	return newModel(context.Background(), nil, cfg, nil, make(chan librespot.ContextTracksResult, 1), nil), keysPath, themePath, configPath
 }
 
-func send(m model, msg tea.KeyMsg) model {
+func send(m model, msg tea.KeyPressMsg) model {
 	next, _ := m.handleSettingsKey(msg)
 	return next.(model)
 }
 
 func sendKey(m model, runes string) model {
-	return send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(runes)})
+	code := '?'
+	if r := []rune(runes); len(r) > 0 {
+		code = r[0]
+	}
+	return send(m, tea.KeyPressMsg{Code: code, Text: runes})
 }
 
 func openViaKey(m model) model {
-	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	next, _ := m.handleKey(tea.KeyPressMsg{Code: 'o', Text: "o"})
 	return next.(model)
 }
 
-func sendEnter(m model) model { return send(m, tea.KeyMsg{Type: tea.KeyEnter}) }
-func sendEsc(m model) model   { return send(m, tea.KeyMsg{Type: tea.KeyEscape}) }
+func sendEnter(m model) model { return send(m, tea.KeyPressMsg{Code: tea.KeyEnter}) }
+func sendEsc(m model) model   { return send(m, tea.KeyPressMsg{Code: tea.KeyEscape}) }
 
 func TestSettingsModalOpenCloseCursor(t *testing.T) {
 	m, _, _, _ := newSettingsTestModel(t)
@@ -59,11 +65,11 @@ func TestSettingsModalOpenCloseCursor(t *testing.T) {
 		t.Fatal("expected settings modal open in root mode")
 	}
 
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	if next.ui.settings.cursor != 1 {
 		t.Fatalf("down should move cursor to 1, got %d", next.ui.settings.cursor)
 	}
-	next = send(next, tea.KeyMsg{Type: tea.KeyUp})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyUp})
 	if next.ui.settings.cursor != 0 {
 		t.Fatalf("up should move cursor to 0, got %d", next.ui.settings.cursor)
 	}
@@ -76,17 +82,15 @@ func TestSettingsModalOpenCloseCursor(t *testing.T) {
 
 func TestSettingsThemePickerLiveAppliesAndPersists(t *testing.T) {
 	m, _, themePath, _ := newSettingsTestModel(t)
-	applyTheme(themePresetState("default"))
 
 	next := openViaKey(m)
-	next = sendEnter(next) // theme row: open the picker
+	next = sendEnter(next)
 	if next.ui.settings.mode != settingsModeTheme {
 		t.Fatal("enter on the theme row should open the theme picker")
 	}
 
-	// moving down previews the next theme live
 	idx := next.ui.settings.themeCursor
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	if next.ui.settings.themeCursor != idx+1 {
 		t.Fatalf("down should advance the theme cursor, got %d", next.ui.settings.themeCursor)
 	}
@@ -94,7 +98,6 @@ func TestSettingsThemePickerLiveAppliesAndPersists(t *testing.T) {
 		t.Fatal("preset must not change until enter persists")
 	}
 
-	// enter persists the previewed theme
 	next = sendEnter(next)
 	picked := settingsThemeOrder[idx+1]
 	if next.ui.settings.themePreset != themePresetName(picked) {
@@ -116,7 +119,6 @@ func TestSettingsThemePickerLiveAppliesAndPersists(t *testing.T) {
 		t.Fatalf("theme.json preset = %v, want %q", saved["preset"], themePresetName(picked))
 	}
 
-	// the persisted marker survives a reload
 	if got := themePresetName("minimal"); got != "minimal" {
 		t.Fatalf("preset name normalization broken: %q", got)
 	}
@@ -124,15 +126,14 @@ func TestSettingsThemePickerLiveAppliesAndPersists(t *testing.T) {
 
 func TestSettingsThemePickerEscReverts(t *testing.T) {
 	m, _, _, _ := newSettingsTestModel(t)
-	applyTheme(themePresetState("default"))
 
 	next := openViaKey(m)
-	next = sendEnter(next) // open picker
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	next = sendEnter(next)
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	if next.ui.settings.themeBackup != "default" {
 		t.Fatalf("backup preset = %q, want default", next.ui.settings.themeBackup)
 	}
-	next = sendEsc(next) // revert
+	next = sendEsc(next)
 	if next.ui.settings.mode != settingsModeRoot {
 		t.Fatal("esc should return to the settings root")
 	}
@@ -143,23 +144,20 @@ func TestSettingsThemePickerEscReverts(t *testing.T) {
 
 func TestSettingsThemePickerDefersArtRegenToSave(t *testing.T) {
 	m, _, _, _ := newSettingsTestModel(t)
-	applyTheme(themePresetState("default"))
 	m.refreshLikedSongsArt()
 	t.Cleanup(func() {
-		applyTheme(themePresetState("default"))
 		m.refreshLikedSongsArt()
 	})
 
 	defaultKey := likedArtPaletteKey(m.likedArtThemeColors())
 	next := openViaKey(m)
-	next = sendEnter(next) // open picker
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
-	// Live preview moves the styles but must not pay the procedural
-	// cover regen per keypress: the art stays on the old palette.
+	next = sendEnter(next)
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	// Live preview must not pay the procedural regen per keypress.
 	if likedArtKey != defaultKey {
 		t.Fatal("preview must leave the liked-songs art unsynced until save")
 	}
-	next = sendEnter(next) // save: the art syncs once to the picked palette
+	next = sendEnter(next)
 	if next.ui.settings.mode != settingsModeRoot {
 		t.Fatal("enter should return to the settings root")
 	}
@@ -172,9 +170,9 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 	m, keysPath, _, _ := newSettingsTestModel(t)
 
 	next := openViaKey(m)
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown}) // to theme options row
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown}) // to keybinds row
-	next = sendEnter(next)                           // -> keys list
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = sendEnter(next)
 	if next.ui.settings.mode != settingsModeKeys {
 		t.Fatalf("enter on keybinds row should open the keys list, mode=%v", next.ui.settings.mode)
 	}
@@ -182,9 +180,9 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 		if entry.action == "play_pause" {
 			break
 		}
-		next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+		next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	next = sendEnter(next) // start capture
+	next = sendEnter(next)
 	if next.ui.settings.mode != settingsModeCapture || next.ui.settings.captureKey != "play_pause" {
 		t.Fatalf("capture mode not entered: mode=%v capture=%q", next.ui.settings.mode, next.ui.settings.captureKey)
 	}
@@ -194,12 +192,12 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 		t.Fatal("esc should cancel capture back to the keys list")
 	}
 
-	next = sendEnter(next) // capture again
+	next = sendEnter(next)
 	next = sendKey(next, "j")
 	if next.ui.settings.pendingKey != "j" {
 		t.Fatalf("capture should arm pending key after first press, got %q", next.ui.settings.pendingKey)
 	}
-	next = sendEnter(next) // confirm
+	next = sendEnter(next)
 	if next.ui.settings.captureKey != "" || next.ui.settings.pendingKey != "" {
 		t.Fatal("capture should complete after enter confirm")
 	}
@@ -212,10 +210,10 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected keys.json content: %q", string(data))
 	}
 
-	if !keyMatches(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, next.ui.keys.PlayPause) {
+	if !keyMatches(tea.KeyPressMsg{Code: 'j', Text: "j"}, next.ui.keys.PlayPause) {
 		t.Fatal("captured key should match play_pause after rebind")
 	}
-	if keyMatches(tea.KeyMsg{Type: tea.KeySpace}, next.ui.keys.PlayPause) {
+	if keyMatches(tea.KeyPressMsg{Code: tea.KeySpace}, next.ui.keys.PlayPause) {
 		t.Fatal("space should no longer match play_pause after rebind")
 	}
 	if LoadKeys(keysPath)["play_pause"] == nil {
@@ -227,14 +225,14 @@ func TestSettingsCrossfadePersistsToConfigFileWithRestartHint(t *testing.T) {
 	m, _, _, configPath := newSettingsTestModel(t)
 
 	next := openViaKey(m)
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	if next.ui.settings.cursor != 3 {
 		t.Fatalf("cursor = %d, want 3", next.ui.settings.cursor)
 	}
 
-	next = sendEnter(next) // toggle on
+	next = sendEnter(next)
 	if !next.ui.settings.crossfadeEnabled {
 		t.Fatal("enter should toggle crossfade on")
 	}
@@ -251,7 +249,7 @@ func TestSettingsCrossfadePersistsToConfigFileWithRestartHint(t *testing.T) {
 		t.Fatalf("crossfade not persisted:\n%s", got)
 	}
 
-	next = sendKey(next, "+") // + steps seconds
+	next = sendKey(next, "+")
 	if next.ui.settings.crossfadeSeconds != 4 {
 		t.Fatalf("crossfadeSeconds = %v, want 4", next.ui.settings.crossfadeSeconds)
 	}
@@ -265,10 +263,10 @@ func TestSettingsCacheTogglePersistsToConfigFile(t *testing.T) {
 	m, _, _, configPath := newSettingsTestModel(t)
 
 	next := openViaKey(m)
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	if next.ui.settings.cursor != 4 {
 		t.Fatalf("cursor = %d, want 4", next.ui.settings.cursor)
 	}
@@ -297,10 +295,10 @@ func TestSettingsCaptureEscAndNavigation(t *testing.T) {
 	m, _, _, _ := newSettingsTestModel(t)
 
 	next := openViaKey(m)
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown}) // theme options row
-	next = send(next, tea.KeyMsg{Type: tea.KeyDown}) // keybinds row
-	next = sendEnter(next)                           // keys list
-	next = sendEnter(next)                           // capture for "tab"
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = sendEnter(next)
+	next = sendEnter(next)
 	if next.ui.settings.mode != settingsModeCapture {
 		t.Fatal("expected capture mode")
 	}
@@ -315,5 +313,113 @@ func TestSettingsCaptureEscAndNavigation(t *testing.T) {
 	next = sendEsc(next)
 	if next.ui.settings.open {
 		t.Fatal("esc on root should close the modal")
+	}
+}
+
+// Cursor wrap follows the table length, not a hardcoded count.
+func TestSettingsRootRowsDriveMenu(t *testing.T) {
+	wantLabels := []string{"Theme", "Theme options", "Keybinds", "Crossfade", "Audio cache", "Images"}
+	if len(settingsRootRows) != len(wantLabels) {
+		t.Fatalf("settingsRootRows has %d rows, want %d", len(settingsRootRows), len(wantLabels))
+	}
+	for i, row := range settingsRootRows {
+		if row.label != wantLabels[i] {
+			t.Fatalf("row %d label = %q, want %q", i, row.label, wantLabels[i])
+		}
+		if row.value == nil || row.activate == nil {
+			t.Fatalf("row %q must have value and activate", row.label)
+		}
+		if row.kind == settingsRowOpen && row.adjust != nil {
+			t.Fatalf("open row %q must ignore the volume keys", row.label)
+		}
+		if row.kind == settingsRowAdjustable && row.adjust == nil {
+			t.Fatalf("adjustable row %q must handle the volume keys", row.label)
+		}
+	}
+
+	m, _, _, _ := newSettingsTestModel(t)
+	next := openViaKey(m)
+	next.ui.settings.cursor = 0
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyUp})
+	if next.ui.settings.cursor != len(settingsRootRows)-1 {
+		t.Fatalf("up from 0 wrapped to %d, want %d", next.ui.settings.cursor, len(settingsRootRows)-1)
+	}
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	if next.ui.settings.cursor != 0 {
+		t.Fatalf("down from last wrapped to %d, want 0", next.ui.settings.cursor)
+	}
+}
+
+func TestKeysTableRendersRows(t *testing.T) {
+	m := guardModel(t, frameVariant{width: 100, height: 40, tab: tabPlaylists})
+	m.ui.settings.open = true
+	m.ui.settings.mode = settingsModeKeys
+	plain := ansi.Strip(m.View().Content)
+	for _, want := range []string{"Action", "play/pause", "volume up", "next track"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("keys menu missing %q; body renders without rows", want)
+		}
+	}
+}
+
+func TestKeysTableLinesFitBudget(t *testing.T) {
+	m := guardModel(t, frameVariant{width: 100, height: 40, modal: "settings-keys"})
+	for _, w := range []int{12, 24, 40, 80, 120} {
+		out := m.settingsKeysTable(w, 12).View()
+		for line := range strings.SplitSeq(out, "\n") {
+			if got := lipgloss.Width(line); got > w {
+				t.Fatalf("budget %d: table line rendered %d wide, want <= %d: %q", w, got, w, line)
+			}
+		}
+		if !strings.Contains(ansi.Strip(out), "space") {
+			t.Fatalf("budget %d: key label truncated away: %q", w, ansi.Strip(out))
+		}
+	}
+}
+
+func TestKeysModalDividerDoesNotWrap(t *testing.T) {
+	for _, width := range []int{80, 100, 140} {
+		m := guardModel(t, frameVariant{width: width, height: 40, modal: "settings-keys"})
+		lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+		idx := -1
+		for i, line := range lines {
+			if strings.Contains(line, "Action") && strings.Contains(line, "Key") {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			t.Fatalf("width %d: keys header row not found", width)
+		}
+		trim := func(s string) string { return strings.TrimSpace(strings.Trim(s, "│░ ")) }
+		if div := trim(lines[idx+1]); div == "" || strings.Trim(div, "─") != "" {
+			t.Fatalf("width %d: expected a divider under the keys header, got %q", width, lines[idx+1])
+		}
+		if next := trim(lines[idx+2]); next == "" || strings.Trim(next, "─") == "" {
+			t.Fatalf("width %d: wrapped divider fragment between the column titles and the options: %q", width, lines[idx+2])
+		}
+	}
+}
+
+// No dirty flag or cache stands between a rebind and the next render.
+func TestKeysTableReflectsRebindDirectly(t *testing.T) {
+	m := testListModel()
+	m.ui.settings.keysPath = filepath.Join(t.TempDir(), "keys.json")
+	rowWith := func(out, label string) string {
+		for line := range strings.SplitSeq(out, "\n") {
+			if strings.Contains(line, label) {
+				return line
+			}
+		}
+		return ""
+	}
+	if row := rowWith(m.settingsKeysTable(100, 20).View(), "repeat"); !strings.Contains(row, "l") {
+		t.Fatalf("expected loop row bound to l before rebind: %q", row)
+	}
+	if err := m.applyCapture("loop", "z"); err != nil {
+		t.Fatalf("applyCapture: %v", err)
+	}
+	if row := rowWith(m.settingsKeysTable(100, 20).View(), "repeat"); !strings.Contains(row, "z") {
+		t.Fatalf("expected loop row bound to z after rebind: %q", row)
 	}
 }

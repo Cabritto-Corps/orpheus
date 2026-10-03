@@ -2,10 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/muesli/termenv"
 )
 
@@ -34,50 +35,51 @@ func CaptureTerminalBG() {
 	terminalBGLast = ""
 }
 
-// terminalBGTarget is the pure decision behind ApplyTerminalBG: the spec
-// to emit via OSC 11, or "" for silence. Transparent mode hands the
-// background back to the terminal instead of claiming it, so entering it
-// mid-session restores the captured original exactly once (Last clears,
-// making the release idempotent); leaving it re-applies the page because
-// Last no longer matches. Kept pure so the transitions are unit-testable
-// without emitting escape sequences.
-func terminalBGTarget(page lipgloss.Color) string {
+// terminalBGTarget is the pure decision behind ApplyTerminalBG: the spec to
+// emit via OSC 11, or "" for silence. Transparent mode hands the background
+// back to the terminal: entering it restores the captured original exactly
+// once, leaving it re-applies the page. Pure so transitions unit-test
+// without emitting escapes.
+func terminalBGTarget(page color.Color, transparent bool, profile colorprofile.Profile) string {
 	if terminalBGOriginal == "" {
 		return ""
 	}
-	if lipgloss.DefaultRenderer().ColorProfile() == termenv.Ascii {
+	if profile <= colorprofile.Ascii {
 		return ""
 	}
-	if transparentFrame() {
+	if transparent {
 		if terminalBGLast == "" {
 			return ""
 		}
 		return terminalBGOriginal
 	}
-	hex := string(page)
-	if !validHexColor(hex) || hex == terminalBGLast {
+	// Only hex-origin (RGB) pages get a spec: ANSI-name pages keep the
+	// transparent look, as before.
+	rgba, ok := page.(color.RGBA)
+	if !ok {
 		return ""
 	}
-	if r, g, b, ok := hexToRGB(hex); ok {
-		return rgbSpec8(r, g, b)
+	spec := rgbSpec8(rgba.R, rgba.G, rgba.B)
+	if spec == terminalBGLast {
+		return ""
 	}
-	return ""
+	return spec
 }
 
 // ApplyTerminalBG sets the terminal's own background to the theme's page
 // color: the padding around the grid is painted with the terminal
 // background, so matching it makes the page fill read as whole-window.
 // ANSI-name pages (no hex) and ASCII profiles keep the transparent look.
-func ApplyTerminalBG(page lipgloss.Color) {
-	spec := terminalBGTarget(page)
+func ApplyTerminalBG(page color.Color, transparent bool, profile colorprofile.Profile) {
+	spec := terminalBGTarget(page, transparent, profile)
 	if spec == "" {
 		return
 	}
 	fmt.Fprintf(os.Stdout, "\x1b]11;%s\x1b\\", spec)
-	if transparentFrame() {
+	if transparent {
 		terminalBGLast = ""
 	} else {
-		terminalBGLast = string(page)
+		terminalBGLast = spec
 	}
 }
 
@@ -93,10 +95,10 @@ func RestoreTerminalBG() {
 
 // TerminalBGSync re-syncs the terminal background with the page color
 // captured at theme-apply time; theme changes return it as a tea.Cmd so
-// the padding follows the live preview without reading theme globals off
+// the padding follows the live preview without reading theme state off
 // the event loop.
-func TerminalBGSync(page lipgloss.Color) tea.Msg {
-	ApplyTerminalBG(page)
+func TerminalBGSync(page color.Color, transparent bool, profile colorprofile.Profile) tea.Msg {
+	ApplyTerminalBG(page, transparent, profile)
 	return nil
 }
 

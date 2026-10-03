@@ -37,9 +37,7 @@ func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUp
 	if includeQueue {
 		out.QueueIncluded = true
 		if p.state.tracks != nil {
-			// Loaded-only read: this runs on the Run goroutine where a page
-			// fetch would stall the select loop (B3). The queue top-up timer
-			// extends the loaded pages off the emit path.
+			// Loaded-only read: a page fetch would stall the Run loop; the top-up timer extends pages off the emit path.
 			upcoming := p.state.tracks.UpcomingTracksLoaded(queueOverrideMaxTracks)
 			out.Queue = providedTracksToQueueEntries(p, upcoming)
 			out.QueueHasMore = len(upcoming) >= queueOverrideMaxTracks
@@ -55,6 +53,7 @@ func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUp
 	if p.state.player.Track != nil {
 		out.TrackID = golibrespot.NormalizeSpotifyId(p.state.player.Track.Uri)
 	}
+	out.ContextURI = strings.TrimSpace(p.state.player.ContextUri)
 	if p.primaryStream == nil && p.state.player.Track != nil && p.state.player.Track.Metadata != nil {
 		out.TrackName = metadataValue(p.state.player.Track.Metadata, "title", "name", "track_name")
 		out.ArtistName = metadataValue(p.state.player.Track.Metadata, "artist_name", "artist", "artists", "show_name")
@@ -84,6 +83,10 @@ func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUp
 	if out.DurationMS <= 0 && p.state.player.Duration > 0 {
 		out.DurationMS = int(p.state.player.Duration)
 	}
+	// A stale transfer can push the derived position below zero; clamp it.
+	if out.ProgressMS < 0 {
+		out.ProgressMS = 0
+	}
 	return out
 }
 
@@ -94,9 +97,12 @@ func providedTracksToQueueEntries(p *AppPlayer, tracks []*connectpb.ProvidedTrac
 	out := make([]PlaybackStateQueueEntry, 0, len(tracks))
 	for _, t := range tracks {
 		id := golibrespot.NormalizeSpotifyId(t.Uri)
-		e := PlaybackStateQueueEntry{ID: id}
+		// Origin follows the fork's is_queued marker.
+		e := PlaybackStateQueueEntry{ID: id, Queued: t.Metadata["is_queued"] == "true"}
 		if cached := p.getCachedQueueMeta(id); cached != nil {
 			e = *cached
+			// Re-read origin: the same ID can move between regions.
+			e.Queued = t.Metadata["is_queued"] == "true"
 			out = append(out, e)
 			continue
 		}

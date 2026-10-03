@@ -1,26 +1,36 @@
 package tui
 
 import (
+	stdlist "container/list"
 	"log/slog"
 	"strings"
+	"time"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 
 	"orpheus/internal/spotify"
 )
 
 type coverManager struct {
-	imageRetryCount       map[string]int
-	imageRetryToken       map[string]int
-	resolveInFlight       map[string]struct{}
-	queue                 []string
-	queued                map[string]int
+	imageRetryCount map[string]int
+	imageRetryToken map[string]int
+	resolveInFlight map[string]struct{}
+	queue           *stdlist.List
+	queued          map[string]*stdlist.Element
+	// pinnedHead tracks the head-window URLs pinned against LRU eviction.
+	// A map, not a scalar: coverManager travels by value, so scalar
+	// writes would be silently dropped.
+	pinnedHead map[string]struct{}
+	// sweepPausedUntil parks background sweeps behind a server penalty
+	// while priority (player-cover) loads keep flowing.
+	sweepPausedUntil time.Time
+	// Element pointers stay valid across pops and removes, so queued needs
+	// no index bookkeeping that could desync.
 	playerCoverFailStreak int
 	kittyRecoveryStreak   int
-	// kittyFellBack records that kitty was disabled by the failure
-	// fallback, as opposed to never having been detected. Recovery must
-	// only re-enable a protocol that actually worked before.
+	// kittyFellBack: kitty was disabled by the failure fallback, not merely
+	// undetected — recovery must only re-enable a protocol that worked before.
 	kittyFellBack bool
 }
 
@@ -29,7 +39,9 @@ func newCoverManager() coverManager {
 		imageRetryCount: make(map[string]int),
 		imageRetryToken: make(map[string]int),
 		resolveInFlight: make(map[string]struct{}),
-		queued:          make(map[string]int),
+		queue:           stdlist.New(),
+		queued:          make(map[string]*stdlist.Element),
+		pinnedHead:      make(map[string]struct{}),
 	}
 }
 
@@ -71,53 +83,46 @@ func (c *coverManager) enqueueURL(url string) bool {
 	if _, exists := c.queued[url]; exists {
 		return false
 	}
-	c.queued[url] = len(c.queue)
-	c.queue = append(c.queue, url)
+	c.queued[url] = c.queue.PushBack(url)
 	return true
 }
 
 func (c *coverManager) popURL() (string, bool) {
-	if len(c.queue) == 0 {
+	el := c.queue.Front()
+	if el == nil {
 		return "", false
 	}
-	url := c.queue[0]
-	c.queue = c.queue[1:]
+	url := el.Value.(string)
+	_ = c.queue.Remove(el)
 	delete(c.queued, url)
-	for i, u := range c.queue {
-		c.queued[u] = i
-	}
 	return url, true
 }
 
-// pruneExcept drops queued URLs outside the currently interesting set so a
-// fast scroll does not leave hundreds of off-screen loads queued ahead of
-// what the user is looking at.
+// pruneExcept bounds the queue to the currently interesting set: fast scrolls
+// must not strand hundreds of off-screen loads ahead of the visible ones.
 func (c *coverManager) pruneExcept(keep map[string]struct{}) {
-	if len(c.queue) == 0 {
+	if c.queue.Len() == 0 {
 		return
 	}
-	filtered := c.queue[:0]
-	for _, u := range c.queue {
-		if _, ok := keep[u]; ok {
-			filtered = append(filtered, u)
-		} else {
+	for el := c.queue.Front(); el != nil; {
+		next := el.Next()
+		u := el.Value.(string)
+		if _, ok := keep[u]; !ok {
+			_ = c.queue.Remove(el)
 			delete(c.queued, u)
 		}
+		el = next
 	}
-	c.queue = filtered
 }
 
 func (c *coverManager) removeFromQueue(url string) bool {
 	url = strings.TrimSpace(url)
-	idx, ok := c.queued[url]
+	el, ok := c.queued[url]
 	if !ok {
 		return false
 	}
-	c.queue = append(c.queue[:idx], c.queue[idx+1:]...)
+	_ = c.queue.Remove(el)
 	delete(c.queued, url)
-	for i := idx; i < len(c.queue); i++ {
-		c.queued[c.queue[i]] = i
-	}
 	return true
 }
 
@@ -143,7 +148,7 @@ func (m *model) queueCoverResolveCmd(kind, id string) tea.Cmd {
 }
 
 func (m *model) queueMissingLibraryImageResolvesCmd(limit int) tea.Cmd {
-	if limit <= 0 {
+	if limit <= 0 || m.ui.cover.sweepPaused() {
 		return nil
 	}
 	items := make([]struct{ Kind, ID string }, 0, limit)
@@ -232,7 +237,7 @@ func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
 			urls = append(urls, playerURL)
 		}
 	}
-	for len(m.ui.cover.queue) > 0 && len(urls) < limit {
+	for m.ui.cover.queue.Len() > 0 && len(urls) < limit {
 		url, _ := m.ui.cover.popURL()
 		if !m.ui.imgs.shouldQueueLoad(url) {
 			continue
@@ -242,6 +247,105 @@ func (m *model) drainCoverQueueCmd(limit int) tea.Cmd {
 	return m.loadImagesBatchCmd(urls)
 }
 
+// sweepPaused reports a server-penalty park: background sweeps stop
+// enqueueing until the wait elapses, while priority loads keep flowing.
+func (c *coverManager) sweepPaused() bool {
+	return time.Now().Before(c.sweepPausedUntil)
+}
+
+// pauseSweep parks background sweeps for d: hammering a penalizing server
+// is exactly what the non-transient 429 policy forbids.
+func (c *coverManager) pauseSweep(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	if until := time.Now().Add(d); until.After(c.sweepPausedUntil) {
+		c.sweepPausedUntil = until
+	}
+}
+
+// promoteURL moves an already-queued URL to the drain head so a rapid skip
+// re-prioritizes the new head ahead of stale sweep entries.
+func (c *coverManager) promoteURL(url string) {
+	url = strings.TrimSpace(url)
+	if el, ok := c.queued[url]; ok {
+		c.queue.MoveToFront(el)
+	}
+}
+
+// sweepQueueCoversCmd warms the whole pushed queue head-first so any skip
+// swaps from cache. The queue dedupes, shouldQueueLoad gates dead URLs
+// behind the fail cooldown, and the chained drain runs the sweep across
+// ticks. Head starvation is impossible: the player cover loads direct and
+// head URLs promote to front.
+func (m *model) sweepQueueCoversCmd() tea.Cmd {
+	if m.ui.imgs == nil || m.ui.cover.sweepPaused() {
+		return nil
+	}
+	q := m.visibleQueue()
+	if len(q) == 0 {
+		return nil
+	}
+	current := ""
+	if m.transport.status != nil {
+		current = strings.TrimSpace(m.transport.status.AlbumImageURL)
+	}
+	enqueued := 0
+	for _, item := range q {
+		if enqueued >= queueCoverSweepBatch {
+			break
+		}
+		url := strings.TrimSpace(item.ImageURL)
+		if url == "" || url == current {
+			continue
+		}
+		if !m.ui.imgs.shouldQueueLoad(url) {
+			continue
+		}
+		if m.ui.cover.enqueueURL(url) {
+			enqueued++
+		}
+	}
+	// Newest head first: rapid skips re-prioritize ahead of stale entries.
+	for i := min(len(q), queueHeadPinWindow) - 1; i >= 0; i-- {
+		m.ui.cover.promoteURL(q[i].ImageURL)
+	}
+	return m.drainCoverQueueCmd(coverQueueDrainBatch)
+}
+
+// pinQueueHeadCovers pins the current cover plus the head window against
+// LRU eviction: a full-context sweep must never push out the art the next
+// skip needs. Stale pins release as the window moves.
+func (m *model) pinQueueHeadCovers() {
+	if m.ui.imgs == nil {
+		return
+	}
+	want := make(map[string]struct{}, queueHeadPinWindow+1)
+	if m.transport.status != nil {
+		if url := strings.TrimSpace(m.transport.status.AlbumImageURL); url != "" {
+			want[url] = struct{}{}
+		}
+	}
+	q := m.visibleQueue()
+	for i := range min(len(q), queueHeadPinWindow) {
+		if url := strings.TrimSpace(q[i].ImageURL); url != "" {
+			want[url] = struct{}{}
+		}
+	}
+	for url := range m.ui.cover.pinnedHead {
+		if _, ok := want[url]; !ok {
+			m.ui.imgs.unpinURL(url)
+			delete(m.ui.cover.pinnedHead, url)
+		}
+	}
+	for url := range want {
+		if _, ok := m.ui.cover.pinnedHead[url]; !ok {
+			m.ui.imgs.pinURL(url)
+			m.ui.cover.pinnedHead[url] = struct{}{}
+		}
+	}
+}
+
 func (m *model) maybeRecoverKittyProtocol() {
 	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() == imageProtocolKitty {
 		return
@@ -249,8 +353,8 @@ func (m *model) maybeRecoverKittyProtocol() {
 	if !m.ui.cover.kittyFellBack {
 		return
 	}
-	// Recovery: after a healthy streak of successful loads, give kitty
-	// another chance instead of staying in half-block mode for the whole session.
+	// After a healthy streak, give kitty another chance instead of staying
+	// in half-block mode for the whole session.
 	m.ui.cover.kittyRecoveryStreak++
 	if m.ui.cover.kittyRecoveryStreak >= kittyProtocolRecoveryStreak {
 		m.ui.imgs.setProtocol(imageProtocolKitty)
@@ -309,7 +413,7 @@ func (m *model) applyResolvedContextImageURL(kind, id, imageURL string) bool {
 			if m.browse.playlistList.FilterState() == list.Unfiltered {
 				m.browse.playlistList.SetItems(items)
 				if len(items) > 0 {
-					m.browse.playlistList.Select(clampInt(prevIndex, 0, len(items)-1))
+					m.browse.playlistList.Select(min(max(prevIndex, 0), len(items)-1))
 				}
 			}
 		}
@@ -333,7 +437,7 @@ func (m *model) applyResolvedContextImageURL(kind, id, imageURL string) bool {
 			if m.browse.albumList.FilterState() == list.Unfiltered {
 				m.browse.albumList.SetItems(items)
 				if len(items) > 0 {
-					m.browse.albumList.Select(clampInt(prevIndex, 0, len(items)-1))
+					m.browse.albumList.Select(min(max(prevIndex, 0), len(items)-1))
 				}
 			}
 		}

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 
 	"orpheus/internal/config"
 	"orpheus/internal/spotify"
@@ -71,6 +71,17 @@ func BenchmarkViewPlaylists(b *testing.B) {
 
 func BenchmarkViewAlbums(b *testing.B) {
 	benchView(b, benchModelTab(b, 0, tabAlbums))
+}
+
+// Bounds the live-preview path: the theme editor rebuilds the whole bundle
+// per keypress, so this must stay far below a frame budget.
+func BenchmarkBuildThemeStyles(b *testing.B) {
+	state := themePresetState("default")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = buildThemeStyles(state)
+	}
 }
 
 var _ = tea.Quit

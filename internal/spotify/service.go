@@ -60,6 +60,8 @@ type Service struct {
 	currentUserIDMu  sync.RWMutex
 	currentUserID    string
 	currentUserIDSet bool
+	albumBatchMu     sync.Mutex
+	albumBatch       *albumImageBatcher
 }
 
 type PlaybackStatus struct {
@@ -77,6 +79,7 @@ type PlaybackStatus struct {
 	ShuffleState  bool
 	RepeatContext bool
 	RepeatTrack   bool
+	ContextURI    string
 }
 
 type QueueItem struct {
@@ -85,6 +88,8 @@ type QueueItem struct {
 	Artist     string
 	DurationMS int
 	ImageURL   string
+	// Queued marks manual-queue entries; unset means a context track.
+	Queued bool
 }
 
 type PlaylistSummary struct {
@@ -154,6 +159,13 @@ func DiagnoseError(err error) ErrorDiagnosis {
 		}
 	case errors.Is(err, context.Canceled):
 		return ErrorDiagnosis{Category: "canceled"}
+	}
+
+	if rateLimitErr, ok := errors.AsType[*RateLimitError](err); ok {
+		return ErrorDiagnosis{
+			Category: "rate-limit",
+			NextStep: rateLimitNextStep(rateLimitErr.RetryAfter),
+		}
 	}
 
 	if apiErr, ok := errors.AsType[spotifyapi.Error](err); ok {
@@ -288,6 +300,9 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 		t.mu.Unlock()
 
 		if d := time.Until(waitUntil); d > 0 {
+			if failErr := failFastRateLimit(req.Context(), d); failErr != nil {
+				return nil, failErr
+			}
 			if err := sleepWithContext(req.Context(), d); err != nil {
 				return nil, err
 			}
@@ -321,6 +336,10 @@ func (t *rateLimitTransport) RoundTrip(req *http.Request) (*http.Response, error
 			t.waitUntil = next
 		}
 		t.mu.Unlock()
+
+		if failErr := failFastRateLimit(req.Context(), delay); failErr != nil {
+			return nil, failErr
+		}
 
 		if err := sleepWithContext(req.Context(), delay); err != nil {
 			return nil, err

@@ -1,0 +1,160 @@
+package tui
+
+import (
+	"context"
+	"slices"
+	"testing"
+
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+
+	"orpheus/internal/config"
+	"orpheus/internal/loader"
+)
+
+func testListModel() model {
+	return newModel(context.Background(), nil, config.Config{DeviceName: "orpheus-test"}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), nil)))
+}
+
+func pressRune(r rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: r, Text: string(r)}
+}
+
+// tea.Quit hides inside the batched commands browse handlers return.
+func batchContainsQuit(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	if msg, ok := cmd().(tea.BatchMsg); ok {
+		return slices.ContainsFunc(msg, batchContainsQuit)
+	}
+	return isQuitCmd(cmd)
+}
+
+// Bubbles v2 binds the list quit to `v` (v1 bound q/esc); the app owns quitting.
+func TestBrowseListVKeyDoesNotQuit(t *testing.T) {
+	for _, tab := range []tab{tabPlaylists, tabAlbums} {
+		m := testListModel()
+		m.ui.activeTab = tab
+		_, cmd := sendTop(m, pressRune('v'))
+		if batchContainsQuit(cmd) {
+			t.Errorf("tab %v: pressing v returned tea.Quit", tab)
+		}
+	}
+}
+
+// The popup forwards unmatched keys to its bubbles list, which must not
+// punch tea.Quit through the modal focus trap.
+func TestTrackPopupVKeyDoesNotQuit(t *testing.T) {
+	m := testListModel()
+	m.ui.trackPopupOpen = true
+	m.ui.trackPopupList = newTrackPopupList(m.styles, 100, 40)
+	_, cmd := sendTop(m, pressRune('v'))
+	if batchContainsQuit(cmd) {
+		t.Error("track popup: pressing v returned tea.Quit")
+	}
+}
+
+// Structural assertions missed re-enabled bindings in the v-quit incident:
+// press the generated default vocabulary and require no tea.Quit — a
+// single-rune failure exits the app.
+func TestBrowseListsYieldNoQuitForDefaultVocabulary(t *testing.T) {
+	km := list.DefaultKeyMap()
+	bindings := []key.Binding{
+		km.CursorUp, km.CursorDown, km.NextPage, km.PrevPage,
+		km.GoToStart, km.GoToEnd, km.Filter, km.ClearFilter,
+		km.CancelWhileFiltering, km.AcceptWhileFiltering,
+		km.ShowFullHelp, km.CloseFullHelp, km.Quit, km.ForceQuit,
+	}
+	seen := map[string]bool{}
+	var vocab []string
+	for _, b := range bindings {
+		for _, k := range b.Keys() {
+			if !seen[k] {
+				seen[k] = true
+				vocab = append(vocab, k)
+			}
+		}
+	}
+	if len(vocab) == 0 {
+		t.Fatal("expected a non-empty default key vocabulary")
+	}
+	// The app's own quit keys quit by design.
+	probe := testListModel()
+	skip := map[string]bool{}
+	for _, k := range probe.ui.keys.Quit.Keys() {
+		skip[canonicalKeySpec(k)] = true
+	}
+	skip["ctrl+c"] = true
+	for _, name := range vocab {
+		if skip[canonicalKeySpec(name)] {
+			continue
+		}
+		mod, code, text, ok := parseKeySpec(name)
+		if !ok {
+			t.Fatalf("default vocabulary key %q has no press form", name)
+		}
+		press := pressKey(code, text, mod)
+		for _, tab := range []tab{tabPlaylists, tabAlbums} {
+			m := testListModel()
+			m.ui.activeTab = tab
+			if _, cmd := sendTop(m, press); batchContainsQuit(cmd) {
+				t.Errorf("tab %v: pressing default key %q returned tea.Quit", tab, name)
+			}
+		}
+		pm := testListModel()
+		pm.ui.trackPopupOpen = true
+		pm.ui.trackPopupList = newTrackPopupList(pm.styles, 100, 40)
+		if _, cmd := sendTop(pm, press); batchContainsQuit(cmd) {
+			t.Errorf("popup: pressing default key %q returned tea.Quit", name)
+		}
+	}
+}
+
+// Disabling the list quit must not take the app's own quit binding with it.
+func TestQuitKeyStillQuitsOnBrowse(t *testing.T) {
+	m := testListModel()
+	m.ui.activeTab = tabPlaylists
+	_, cmd := sendTop(m, pressRune('q'))
+	if !batchContainsQuit(cmd) {
+		t.Error("pressing q on a browse tab no longer quits")
+	}
+}
+
+// The reconciliation rebuilds from the library defaults every keypress
+// instead of stripping in place, so rebinding repeat hands `l` back to paging.
+func TestListKeyMapsRestorePageKeysOnRebind(t *testing.T) {
+	m := testListModel()
+	m.ui.keys.Loop = key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "repeat"))
+	next, _ := sendTop(m, teaDown())
+	if got := next.browse.playlistList.KeyMap.NextPage.Keys(); !slices.Equal(got, []string{"l", "pgdown", "f"}) {
+		t.Errorf("NextPage after rebind = %q, want [l pgdown f]", got)
+	}
+}
+
+// `d` belongs to the app (queue-remove), and the list quit binding must be
+// disabled outright. Filter keeps following the live search binding.
+func TestListKeyMapsYieldToRegistry(t *testing.T) {
+	m := testListModel()
+	next, _ := sendTop(m, teaDown()) // any key runs the reconciliation
+	lists := map[string]list.Model{
+		"playlists": next.browse.playlistList,
+		"albums":    next.browse.albumList,
+		"popup":     next.ui.trackPopupList,
+	}
+	for name, l := range lists {
+		if l.KeyMap.Quit.Enabled() {
+			t.Errorf("%s: list quit binding still enabled", name)
+		}
+		if got := l.KeyMap.NextPage.Keys(); !slices.Equal(got, []string{"pgdown", "f"}) {
+			t.Errorf("%s: NextPage = %q, want [pgdown f] (registry l/d stripped)", name, got)
+		}
+		if got := l.KeyMap.PrevPage.Keys(); !slices.Equal(got, []string{"h", "pgup", "b", "u"}) {
+			t.Errorf("%s: PrevPage = %q, want [h pgup b u] (registry left stripped)", name, got)
+		}
+		if got := l.KeyMap.Filter.Keys(); !slices.Equal(got, []string{"/"}) {
+			t.Errorf("%s: Filter = %q, want [/]", name, got)
+		}
+	}
+}

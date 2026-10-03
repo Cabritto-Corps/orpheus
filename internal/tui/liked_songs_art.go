@@ -4,16 +4,15 @@ import (
 	"image"
 	"image/color"
 
-	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/image/draw"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 const likedSongsImageURL = "orpheus://liked-songs"
 
-// generateLikedSongsImage builds the pseudo-playlist cover from explicit
-// gradient corners: the background blends across them, the heart motif
-// stays white. Ascii-profile terminals render no cover mosaic at all
-// (renderHalfBlock returns ""), so the art is invisible there —
-// generation stays profile-independent and total by construction.
+// Ascii-profile terminals render no cover mosaic, so generation stays
+// profile-independent and total by construction.
 func generateLikedSongsImage(size int, corners [4]color.NRGBA) image.Image {
 	if size < 2 {
 		size = 2
@@ -48,7 +47,7 @@ func generateLikedSongsImage(size int, corners [4]color.NRGBA) image.Image {
 		}
 	}
 
-	return downsample(ssImg, ssSize, size)
+	return downsample(ssImg, size)
 }
 
 var (
@@ -56,26 +55,15 @@ var (
 	likedArtColors [4]color.NRGBA
 )
 
-// likedArtPaletteKey identifies the palette a gradient was built from.
 // Only the roles the art reads participate, so unrelated color edits
 // never pay a regen.
-
-// likedArtCorners derives the gradient corners from resolved theme
-// colors, caching the last palette so re-theming only regenerates when
-// the palette actually moved. Call it only from the event loop: Init and
-// theme changes both run there, so the palette state needs no locking —
-// the preload cmd receives the corners by value.
-
 func likedArtPaletteKey(colors themeColors) string {
 	return colors.Blue + "|" + colors.Page
 }
 
-// likedArtPalette maps a resolved theme palette to the cover gradient:
-// the accent carries the hue, the page anchors the depth. Corners run
-// from page-leaning tints toward full accent, so the white heart stays
-// legible on every preset. Non-hex palettes (ANSI names/indices, e.g.
-// the minimal theme) degrade to a neutral grayscale ramp — ANSI values
-// are terminal-remapped and have no portable RGB.
+// Corners run page-leaning toward full accent so the white heart stays
+// legible. Non-hex palettes degrade to a neutral grayscale ramp: ANSI
+// values are terminal-remapped and have no portable RGB.
 func likedArtPalette(colors themeColors) [4]color.NRGBA {
 	accent, okA := hexToNRGBA(colors.Blue)
 	page, okP := hexToNRGBA(colors.Page)
@@ -103,6 +91,9 @@ func hexToNRGBA(hex string) (color.NRGBA, bool) {
 	return color.NRGBA{R: r, G: g, B: b, A: 255}, ok
 }
 
+// Call only from the event loop: Init and theme changes both run there,
+// so the palette state needs no locking.
+
 func likedArtCorners(colors themeColors) [4]color.NRGBA {
 	key := likedArtPaletteKey(colors)
 	if key == likedArtKey {
@@ -118,31 +109,14 @@ func isInHeart(x, y float64) bool {
 	return a*a*a-x*x*y*y*y <= 0
 }
 
-func downsample(src *image.RGBA, srcSize, dstSize int) *image.RGBA {
+func downsample(src *image.RGBA, dstSize int) *image.RGBA {
 	dst := image.NewRGBA(image.Rect(0, 0, dstSize, dstSize))
-	ratio := srcSize / dstSize
-	for dy := range dstSize {
-		for dx := range dstSize {
-			var r, g, b, count uint32
-			for sy := range ratio {
-				for sx := range ratio {
-					sy2 := dy*ratio + sy
-					sx2 := dx*ratio + sx
-					c := src.RGBAAt(sx2, sy2)
-					r += uint32(c.R)
-					g += uint32(c.G)
-					b += uint32(c.B)
-					count++
-				}
-			}
-			dst.SetRGBA(dx, dy, color.RGBA{
-				R: uint8(r / count),
-				G: uint8(g / count),
-				B: uint8(b / count),
-				A: 255,
-			})
-		}
+	if dstSize <= 0 {
+		return dst
 	}
+	// Pixel values shift vs the old box average, but the gradient/heart
+	// properties served are resolution-independent, not exact pixels.
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Src, nil)
 	return dst
 }
 
@@ -170,18 +144,13 @@ func (m *model) preloadLikedSongsArt(corners [4]color.NRGBA) {
 	m.ui.imgs.pinURL(likedSongsImageURL)
 }
 
-// likedArtThemeColors resolves the palette the procedural cover follows:
-// the active preset plus theme.json overrides — the same resolution the
-// theme picker previews. Read it at settle points (save/revert/close)
-// and startup, never on the keypress path: the supersampled render
-// dominates a keypress, and the palette memo keeps repeat calls to a
-// key comparison.
+// Same resolution the picker previews. Read at settle points, never
+// on the keypress path: the supersampled render dominates a keypress.
 func (m model) likedArtThemeColors() themeColors {
 	return resolveThemeColors(m.ui.settings.themePreset, m.cachedThemeOverrides())
 }
 
-// refreshLikedSongsArt regenerates the procedural cover when the theme
-// palette moved; a no-op otherwise (the supersampled render is not cheap).
+// No-op when the palette didn't move (the render is not cheap).
 func (m *model) refreshLikedSongsArt() {
 	if m.ui.imgs == nil {
 		return

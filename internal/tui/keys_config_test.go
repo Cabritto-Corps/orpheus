@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 )
 
 func writeKeysFile(t *testing.T, content string) string {
@@ -63,6 +64,20 @@ func TestLoadKeyOverridesUnknownKeyFallsBack(t *testing.T) {
 	}
 }
 
+// Pins the loader vocabulary: aliases and ultraviolet names load, garbage drops.
+func TestIsPlausibleKeyNameV2Forms(t *testing.T) {
+	for _, name := range []string{"shift+up", "alt+x", "ctrl+shift+enter", "escape", "return", " ", "space", "+", "f1", "f5", "f24", "f63", "mute", "kpenter", "begin", "ctrl+f5"} {
+		if !isPlausibleKeyName(name) {
+			t.Fatalf("%q must load", name)
+		}
+	}
+	for _, name := range []string{"", "mode_broken", "ctrl+", "f0", "f64", "f99", "kpop", "ctrl", "shift"} {
+		if isPlausibleKeyName(name) {
+			t.Fatalf("%q must not load", name)
+		}
+	}
+}
+
 func TestLoadKeyOverridesEmptyListKeepsDefault(t *testing.T) {
 	if overrides := LoadKeys(writeKeysFile(t, `{"next": []}`)); len(overrides) != 0 {
 		t.Fatalf("empty key list must keep the default binding, got %v", overrides)
@@ -71,27 +86,21 @@ func TestLoadKeyOverridesEmptyListKeepsDefault(t *testing.T) {
 
 func TestGoldenNextOverrideToJ(t *testing.T) {
 	m := newKeysFromConfig(map[string][]string{"next": {"j"}})
-	if !keyMatches(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}, m.Next) {
+	if !keyMatches(tea.KeyPressMsg{Code: 'j', Text: "j"}, m.Next) {
 		t.Fatal("j must trigger next after override")
 	}
-	if keyMatches(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")}, m.Next) {
+	if keyMatches(tea.KeyPressMsg{Code: 'n', Text: "n"}, m.Next) {
 		t.Fatal("n must no longer trigger next after override")
-	}
-}
-
-func TestKeysContainList(t *testing.T) {
-	if !keysContainList([]string{"a", "b"}, "b") || keysContainList([]string{"a"}, "b") {
-		t.Fatal("keysContainList broken")
 	}
 }
 
 func TestQuitAlwaysKeepsCtrlC(t *testing.T) {
 	overrides := LoadKeys(writeKeysFile(t, `{"quit": "esc"}`))
 	m := newKeysFromConfig(overrides)
-	if !keysContainList(m.Quit.Keys(), "ctrl+c") {
+	if !slices.Contains(m.Quit.Keys(), "ctrl+c") {
 		t.Fatalf("quit must always contain ctrl+c, got %v", m.Quit.Keys())
 	}
-	if !keysContainList(m.Quit.Keys(), "esc") {
+	if !slices.Contains(m.Quit.Keys(), "esc") {
 		t.Fatalf("user quit key missing, got %v", m.Quit.Keys())
 	}
 }
@@ -100,7 +109,7 @@ func TestQuitOverrideArrayAlsoKeepsCtrlC(t *testing.T) {
 	overrides := LoadKeys(writeKeysFile(t, `{"quit": ["esc", "ctrl+z"]}`))
 	m := newKeysFromConfig(overrides)
 	for _, want := range []string{"esc", "ctrl+z", "ctrl+c"} {
-		if !keysContainList(m.Quit.Keys(), want) {
+		if !slices.Contains(m.Quit.Keys(), want) {
 			t.Fatalf("quit keys = %v, missing %q", m.Quit.Keys(), want)
 		}
 	}
@@ -138,5 +147,29 @@ func TestOverrideBindingHelpLabelFollowsRebind(t *testing.T) {
 	sp := overrideBinding(key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "play/pause")), []string{" "})
 	if sp.Help().Key != "space" {
 		t.Fatalf("space label should render as 'space', got %q", sp.Help().Key)
+	}
+}
+
+// Every registry action must round-trip, so a missing setter fails loudly instead of staying unbindable.
+func TestApplyKeyOverridesCoversRegistry(t *testing.T) {
+	for _, meta := range actionRegistry {
+		custom := []string{"f24"}
+		got := applyKeyOverrides(newKeys(), map[string][]string{meta.action: custom})
+		keys := meta.bind(got).Keys()
+		want := custom
+		if meta.action == "quit" {
+			want = []string{"f24", "ctrl+c"}
+		}
+		if !slices.Equal(keys, want) {
+			t.Fatalf("%s: got keys %v, want %v", meta.action, keys, want)
+		}
+	}
+	before := newKeys()
+	after := applyKeyOverrides(before, map[string][]string{"nope": {"x"}})
+	for _, meta := range actionRegistry {
+		got, want := meta.bind(after).Keys(), meta.bind(before).Keys()
+		if !slices.Equal(got, want) {
+			t.Fatalf("unknown action changed %s: %v -> %v", meta.action, want, got)
+		}
 	}
 }

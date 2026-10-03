@@ -123,7 +123,7 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 						if artist == "" {
 							artist = "-"
 						}
-						byID[id] = PlaybackStateQueueEntry{ID: id, Name: entry.Name, Artist: artist, DurationMS: entry.DurationMS}
+						byID[id] = PlaybackStateQueueEntry{ID: id, Name: entry.Name, Artist: artist, DurationMS: entry.DurationMS, ImageURL: queueMetaImageURL(p, entry.AlbumCoverFileId)}
 					}
 					for i := range result {
 						if meta, ok := byID[result[i].ID]; ok {
@@ -173,7 +173,7 @@ func (p *AppPlayer) handleTUIPlaybackCommand(ctx context.Context, cmd TUICommand
 			return true, nil
 		}
 		target := !p.state.player.Options.ShufflingContext
-		return true, p.setOptions(ctx, nil, nil, &target)
+		return true, p.setOptions(ctx, nil, nil, &target, nil)
 	case TUICommandCycleRepeat:
 		if p.state == nil || p.state.player == nil || p.state.player.Options == nil {
 			if p.runtime != nil {
@@ -187,16 +187,13 @@ func (p *AppPlayer) handleTUIPlaybackCommand(ctx context.Context, cmd TUICommand
 			Shuffle:       p.state.player.Options.ShufflingContext,
 		}
 		next := playbackdomain.NextRepeatTraversalOptions(curr)
-		return true, p.setOptions(ctx, &next.RepeatContext, &next.RepeatTrack, nil)
+		return true, p.setOptions(ctx, &next.RepeatContext, &next.RepeatTrack, nil, nil)
 	case TUICommandQueueRemove:
-		p.queueRemove(cmd.QueueIndex)
-		return true, nil
+		return true, p.queueRemove(cmd.QueueIndex)
 	case TUICommandQueueReorder:
-		p.queueReorder(cmd.QueueIndex, cmd.QueueTargetIndex)
-		return true, nil
+		return true, p.queueReorder(cmd.QueueIndex, cmd.QueueTargetIndex)
 	case TUICommandQueueJump:
-		p.queueJump(ctx, cmd.QueueIndex)
-		return true, nil
+		return true, p.queueJump(ctx, cmd.QueueIndex)
 	default:
 		return false, nil
 	}

@@ -2,18 +2,37 @@ package tui
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 	golibrespot "github.com/elxgy/go-librespot"
 
 	"orpheus/internal/spotify"
 )
+
+type playerBackendMsg struct {
+	ready   bool
+	catalog spotify.PlaylistCatalog
+	err     error
+}
+
+func PlayerBackendReady(catalog spotify.PlaylistCatalog) tea.Msg {
+	return playerBackendMsg{ready: true, catalog: catalog}
+}
+
+// The deadline re-render: releases the idle-backend hold independently of
+// whichever tick interval applies later.
+type revealGraceMsg struct{}
+
+func PlayerBackendFailed(err error) tea.Msg {
+	return playerBackendMsg{err: err}
+}
 
 func (m model) shouldEnsureAlbumImageLoad(prev, next *spotify.PlaybackStatus) bool {
 	if shouldQueueAlbumImageLoad(prev, next) {
@@ -131,6 +150,8 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	if !m.acceptPlaybackStateSeq(msg.seq) {
 		return m, nil
 	}
+	// Any accepted push — even an idle nil-status one — ends the sync bound.
+	m.transport.statePushSeen = true
 	prevStatus := m.transport.status
 	prevQueueHead := queueHeadTrackID(m.transport.queue)
 	inVolSettle := m.transport.volDebouncePending >= 0 ||
@@ -138,10 +159,7 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	if inVolSettle && msg.status != nil && prevStatus != nil {
 		msg.status.Volume = prevStatus.Volume
 	}
-	// The committed-target pin only applies once the burst is off the wire:
-	// while a new target is still pending the display already holds the
-	// optimistic value, and pinning to the previous commit would yank the
-	// bar backwards on every push.
+	// Pin to the sent target only after the burst leaves the wire; while pending, the display is already optimistic.
 	if inVolSettle && m.transport.volDebouncePending < 0 && msg.status != nil && m.transport.volSentTarget >= 0 {
 		msg.status.Volume = m.transport.volSentTarget
 	}
@@ -186,16 +204,23 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 		m.smoothApplyProgress(m.transport.status.ProgressMS)
 	}
 	m.advancePlayerCoverEpochIfNeeded(prevStatus, m.transport.status, prevQueueHead, queueHeadTrackID(m.transport.queue))
-	m.transport.playbackErr = nil
+	if !isFrozenHeartbeat(prevStatus, len(m.transport.queue), msg) {
+		m.transport.playbackErr = nil
+	}
 	m.maybeClearTransportTransition(m.transport.status)
 	m.fireOnSongChange(prevStatus, m.transport.status)
 	cmds := []tea.Cmd{}
 	if m.shouldEnsureAlbumImageLoad(prevStatus, m.transport.status) {
 		cmds = append(cmds, m.loadImageCmd(m.transport.status.AlbumImageURL, true))
 	}
+	m.pinQueueHeadCovers()
+	if cmd := m.sweepQueueCoversCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if cmd := m.pumpInputExecutor(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
+	cmds = append(cmds, m.kittyOverlayCmd())
 	return m, tea.Batch(cmds...)
 }
 
@@ -205,6 +230,9 @@ func (m *model) scheduleNavDebounceCmd() tea.Cmd {
 }
 
 func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
+	if m.ui.cover.sweepPaused() {
+		return nil
+	}
 	m.normalizeLibraryPagination()
 	urls := make([]string, 0, 64)
 	add := func(url string) {
@@ -228,7 +256,7 @@ func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 	}
 	items := m.browse.playlistList.Items()
 	if m.browse.playlistList.FilterState() == list.Unfiltered && len(items) > 0 {
-		center := clampInt(m.browse.playlistList.GlobalIndex(), 0, len(items)-1)
+		center := min(max(m.browse.playlistList.GlobalIndex(), 0), len(items)-1)
 		half := coverPreloadWindow / 2
 		start := max(0, center-half)
 		end := min(len(items), center+half+1)
@@ -242,7 +270,7 @@ func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 	}
 	albumItems := m.browse.albumList.Items()
 	if m.browse.albumList.FilterState() == list.Unfiltered && len(albumItems) > 0 {
-		center := clampInt(m.browse.albumList.GlobalIndex(), 0, len(albumItems)-1)
+		center := min(max(m.browse.albumList.GlobalIndex(), 0), len(albumItems)-1)
 		half := coverPreloadWindow / 2
 		start := max(0, center-half)
 		end := min(len(albumItems), center+half+1)
@@ -255,11 +283,19 @@ func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 		}
 	}
 
-	// Selection changed: drop now-off-screen URLs so the visible window is
-	// not queued behind stale entries.
+	// A prune must not touch the playing queue: a browse refresh would
+	// otherwise drop the sweep the state handler just enqueued.
 	keep := make(map[string]struct{}, len(urls))
 	for _, u := range urls {
 		keep[u] = struct{}{}
+	}
+	if m.transport.status != nil {
+		keep[strings.TrimSpace(m.transport.status.AlbumImageURL)] = struct{}{}
+	}
+	for _, item := range m.transport.queue {
+		if url := strings.TrimSpace(item.ImageURL); url != "" {
+			keep[url] = struct{}{}
+		}
 	}
 	m.ui.cover.pruneExcept(keep)
 	for _, u := range urls {
@@ -273,6 +309,9 @@ func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 }
 
 func (m *model) loadLibraryCoversCmd(limit int) tea.Cmd {
+	if m.ui.cover.sweepPaused() {
+		return nil
+	}
 	seen := make(map[string]struct{})
 	added := 0
 
@@ -315,8 +354,7 @@ func (m *model) loadLibraryCoversCmd(limit int) tea.Cmd {
 		add(al.summary.ImageURL)
 	}
 
-	// Drain at most one batch so the first cover renders while the chained
-	// drain in handleImagesBatchLoadedMsg walks the rest of the queue.
+	// Drain one batch so the first cover renders while the chained drain continues.
 	if added > coverQueueDrainBatch {
 		added = coverQueueDrainBatch
 	}
@@ -378,6 +416,9 @@ func (m model) visibleAlbumItems() []playlistItem {
 }
 
 func (m model) resolveCatalog() spotify.PlaylistCatalog {
+	if m.catalogSource != nil {
+		return m.catalogSource.get()
+	}
 	return m.catalog
 }
 
@@ -404,8 +445,7 @@ func (m *model) fireOnSongChange(prev, next *spotify.PlaybackStatus) {
 		return
 	}
 	m.transport.lastPlayedID = nextID
-	// Single-flight: a slow hook must not stack goroutines when the user
-	// skips through tracks faster than the hook finishes.
+	// Single-flight: a slow hook must not stack goroutines during fast skips.
 	if !m.transport.songChangeInFlight.CompareAndSwap(false, true) {
 		return
 	}
@@ -416,7 +456,35 @@ func (m *model) fireOnSongChange(prev, next *spotify.PlaybackStatus) {
 	}(nextName, nextArtist, nextID)
 }
 
+const songChangeTimeout = 10 * time.Second
+
 func execCmd(template, trackName, artistName, trackID string) {
+	if err := runSongChangeHook(template, trackName, artistName, trackID); err != nil {
+		slog.Warn("on-song-change hook failed", "cmd", template, "error", err)
+	}
+}
+
+func runSongChangeHook(template, trackName, artistName, trackID string) error {
+	return runSongChangeHookWithTimeout(template, trackName, artistName, trackID, songChangeTimeout)
+}
+
+func runSongChangeHookWithTimeout(template, trackName, artistName, trackID string, timeout time.Duration) error {
+	cmd, _, cancel := newSongChangeCmdWithTimeout(template, trackName, artistName, trackID, timeout)
+	if cmd == nil {
+		return nil
+	}
+	defer cancel()
+	return cmd.Run()
+}
+
+// Hook output is discarded: the child inherits the TUI tty and the
+// cell-diffing renderer would persist anything it prints.
+func newSongChangeCmd(template, trackName, artistName, trackID string) (*exec.Cmd, context.CancelFunc) {
+	cmd, _, cancel := newSongChangeCmdWithTimeout(template, trackName, artistName, trackID, songChangeTimeout)
+	return cmd, cancel
+}
+
+func newSongChangeCmdWithTimeout(template, trackName, artistName, trackID string, timeout time.Duration) (*exec.Cmd, context.Context, context.CancelFunc) {
 	r := strings.NewReplacer(
 		"{track}", trackName,
 		"{artist}", artistName,
@@ -425,12 +493,10 @@ func execCmd(template, trackName, artistName, trackID string) {
 	expanded := r.Replace(template)
 	parts := strings.Fields(expanded)
 	if len(parts) == 0 {
-		return
+		return nil, nil, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	// The hook command is the user's own config, not external input; track
-	// metadata only feeds args/env and never a shell, so parts cannot chain.
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	// The cancel must outlive Run: it carries the hook deadline.
 	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 	var cmd *exec.Cmd
 	if len(parts) > 1 {
@@ -443,7 +509,7 @@ func execCmd(template, trackName, artistName, trackID string) {
 		"ORPHEUS_ARTIST="+artistName,
 		"ORPHEUS_TRACK_ID="+trackID,
 	)
-	if err := cmd.Run(); err != nil {
-		slog.Warn("on-song-change hook failed", "cmd", template, "error", err)
-	}
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd, ctx, cancel
 }

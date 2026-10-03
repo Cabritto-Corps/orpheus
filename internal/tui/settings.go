@@ -7,18 +7,15 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/table"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/table"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"orpheus/internal/config"
 )
 
-// newSettingsModel seeds the settings state from the config; the preset
-// name is the one the theme loader actually resolved (the theme.json
-// marker wins over orpheus_theme), so the picker and editor always
-// operate on the theme that is really running.
+// resolvedPreset is the theme actually running, so picker and editor operate on it.
 func newSettingsModel(cfg config.Config, resolvedPreset string) settingsModel {
 	return settingsModel{
 		themePreset:      resolvedPreset,
@@ -34,9 +31,6 @@ func newSettingsModel(cfg config.Config, resolvedPreset string) settingsModel {
 	}
 }
 
-// cachedThemeOverrides returns the parsed theme.json overrides: the cache
-// populated on the update paths (settings open, saves) so per-frame view
-// paths do not re-read the file at the 200ms tick.
 func (m model) cachedThemeOverrides() map[string]any {
 	if o := m.ui.settings.themeOverrides; o != nil {
 		return o
@@ -52,11 +46,11 @@ func (m model) openSettings() (tea.Model, tea.Cmd) {
 	m.ui.settings.captureKey = ""
 	m.ui.settings.pendingKey = ""
 	m.ui.settings.conflicts = keyConflictActions(m.ui.keys)
-	m.ui.settings.keysTableDirty = true
-	return m, nil
+	// Hide the cover at once with a pure delete.
+	return m, m.kittyOverlayCmd()
 }
 
-func (m model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSettingsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
 
 	switch s.mode {
@@ -73,29 +67,34 @@ func (m model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m model) handleSettingsRoot(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSettingsRoot(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
+	s := &m.ui.settings
 	switch {
 	case keyMatches(msg, k.CloseModal):
-		m.ui.settings.open = false
-		return m, nil
+		s.open = false
+		return m, m.kittyOverlayCmd()
 	case keyMatches(msg, k.QueueUp):
-		m.ui.settings.cursor = (m.ui.settings.cursor + 5) % 6
+		s.cursor = (s.cursor + len(settingsRootRows) - 1) % len(settingsRootRows)
 		return m, nil
 	case keyMatches(msg, k.QueueDown):
-		m.ui.settings.cursor = (m.ui.settings.cursor + 1) % 6
+		s.cursor = (s.cursor + 1) % len(settingsRootRows)
 		return m, nil
 	case keyMatches(msg, k.Select):
-		return m.settingsActivate()
+		return settingsRootRows[s.cursor].activate(m)
 	case keyMatches(msg, k.VolUp):
-		return m.settingsAdjust(1)
+		if adjust := settingsRootRows[s.cursor].adjust; adjust != nil {
+			return adjust(m, 1)
+		}
 	case keyMatches(msg, k.VolDown):
-		return m.settingsAdjust(-1)
+		if adjust := settingsRootRows[s.cursor].adjust; adjust != nil {
+			return adjust(m, -1)
+		}
 	}
 	return m, nil
 }
 
-func (m model) handleSettingsThemeOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSettingsThemeOptions(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
 	k := m.ui.keys
 	switch {
@@ -123,52 +122,139 @@ func (m model) handleSettingsThemeOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) settingsActivate() (tea.Model, tea.Cmd) {
-	s := &m.ui.settings
-	switch s.cursor {
-	case 0: // theme: open the live-preview picker
-		m.openThemePicker()
-	case 1: // theme options: open the theming editor
-		m.openThemeOptions()
-	case 2: // keybinds: open the action list
-		s.mode = settingsModeKeys
-		s.keysCursor = 0
-		s.captureKey = ""
-	case 3: // crossfade: toggle; +/- edits seconds
-		s.crossfadeEnabled = !s.crossfadeEnabled
-		s.restartRequiredCrossfade = true
-		m.saveAppSettings()
-	case 4: // audio cache: toggle; +/- edits size
-		s.cacheEnabled = !s.cacheEnabled
-		s.restartRequiredCache = true
-		m.saveAppSettings()
-	case 5: // images: cycle the render style and apply it without a restart
-		s.imageStyle = cycleImageStyle(s.imageStyle, 1)
-		s.imageStyleSet = true
-		m.saveAppSettings()
-		return m.applyImageStyle()
-	}
-	return m, nil
+type settingsRowKind int
+
+const (
+	settingsRowOpen settingsRowKind = iota
+	settingsRowAdjustable
+)
+
+// Adding a row is one entry here.
+type settingsRow struct {
+	label    string
+	kind     settingsRowKind
+	value    func(m model) string
+	activate func(m model) (tea.Model, tea.Cmd)
+	adjust   func(m model, step int) (tea.Model, tea.Cmd)
+	notice   func(s *settingsModel) string
 }
 
-func (m model) settingsAdjust(step int) (tea.Model, tea.Cmd) {
-	s := &m.ui.settings
-	switch s.cursor {
-	case 3:
-		s.crossfadeSeconds = clampCrossfadeSeconds(s.crossfadeSeconds + float64(step))
-		s.restartRequiredCrossfade = true
-		m.saveAppSettings()
-	case 4:
-		s.cacheSizeMB = clampCacheSizeMB(s.cacheSizeMB + int64(step)*256)
-		s.restartRequiredCache = true
-		m.saveAppSettings()
-	case 5:
-		s.imageStyle = cycleImageStyle(s.imageStyle, step)
-		s.imageStyleSet = true
-		m.saveAppSettings()
-		return m.applyImageStyle()
-	}
-	return m, nil
+var settingsRootRows = []settingsRow{
+	{
+		label: "Theme",
+		kind:  settingsRowOpen,
+		value: func(m model) string { return m.themeValue(m.ui.settings.themePreset) },
+		activate: func(m model) (tea.Model, tea.Cmd) {
+			m.openThemePicker()
+			return m, nil
+		},
+	},
+	{
+		label: "Theme options",
+		kind:  settingsRowOpen,
+		value: func(m model) string { return "edit..." },
+		activate: func(m model) (tea.Model, tea.Cmd) {
+			m.openThemeOptions()
+			return m, nil
+		},
+	},
+	{
+		label: "Keybinds",
+		kind:  settingsRowOpen,
+		value: func(m model) string { return "edit..." },
+		activate: func(m model) (tea.Model, tea.Cmd) {
+			m.ui.settings.mode = settingsModeKeys
+			m.ui.settings.keysCursor = 0
+			m.ui.settings.captureKey = ""
+			return m, nil
+		},
+	},
+	{
+		label: "Crossfade",
+		kind:  settingsRowAdjustable,
+		value: func(m model) string {
+			s := m.ui.settings
+			gauge := ""
+			if s.crossfadeEnabled {
+				gauge = " " + m.styles.gradientBar(s.crossfadeSeconds/30, gaugeW)
+			}
+			return settingsCrossfadeLabel(&s) + gauge
+		},
+		activate: func(m model) (tea.Model, tea.Cmd) {
+			s := &m.ui.settings
+			s.crossfadeEnabled = !s.crossfadeEnabled
+			s.restartRequiredCrossfade = true
+			m.saveAppSettings()
+			return m, nil
+		},
+		adjust: func(m model, step int) (tea.Model, tea.Cmd) {
+			s := &m.ui.settings
+			s.crossfadeSeconds = clampCrossfadeSeconds(s.crossfadeSeconds + float64(step))
+			s.restartRequiredCrossfade = true
+			m.saveAppSettings()
+			return m, nil
+		},
+		notice: func(s *settingsModel) string {
+			if s.restartRequiredCrossfade {
+				return "crossfade applies on restart"
+			}
+			return ""
+		},
+	},
+	{
+		label: "Audio cache",
+		kind:  settingsRowAdjustable,
+		value: func(m model) string {
+			s := m.ui.settings
+			gauge := ""
+			if s.cacheEnabled {
+				gauge = " " + m.styles.gradientBar(float64(s.cacheSizeMB-64)/float64(4096-64), gaugeW)
+			}
+			return settingsCacheLabel(&s) + gauge
+		},
+		activate: func(m model) (tea.Model, tea.Cmd) {
+			s := &m.ui.settings
+			s.cacheEnabled = !s.cacheEnabled
+			s.restartRequiredCache = true
+			m.saveAppSettings()
+			return m, nil
+		},
+		adjust: func(m model, step int) (tea.Model, tea.Cmd) {
+			s := &m.ui.settings
+			s.cacheSizeMB = clampCacheSizeMB(s.cacheSizeMB + int64(step)*256)
+			s.restartRequiredCache = true
+			m.saveAppSettings()
+			return m, nil
+		},
+		notice: func(s *settingsModel) string {
+			if s.restartRequiredCache {
+				return "cache applies on restart"
+			}
+			return ""
+		},
+	},
+	{
+		label: "Images",
+		kind:  settingsRowAdjustable,
+		value: func(m model) string {
+			s := m.ui.settings
+			return settingsImageLabel(&s)
+		},
+		activate: func(m model) (tea.Model, tea.Cmd) {
+			s := &m.ui.settings
+			s.imageStyle = cycleImageStyle(s.imageStyle, 1)
+			s.imageStyleSet = true
+			m.saveAppSettings()
+			return m.applyImageStyle()
+		},
+		adjust: func(m model, step int) (tea.Model, tea.Cmd) {
+			s := &m.ui.settings
+			s.imageStyle = cycleImageStyle(s.imageStyle, step)
+			s.imageStyleSet = true
+			m.saveAppSettings()
+			return m.applyImageStyle()
+		},
+	},
 }
 
 var imageStyleChoices = []string{config.ImageStyleRendered, config.ImageStylePixelated}
@@ -191,12 +277,46 @@ func (m model) applyImageStyleWithEnv(getenv func(string) string) (tea.Model, te
 	}
 	style := imageStyleOrDefault(m.ui.settings.imageStyle)
 	m.ui.imgs.setImageStyle(style, true, getenv)
-	// Style-specific supervision belongs to the previous attempt: clear it
-	// so a stored kitty failure cannot override the newly selected style.
+	// Clear so a stored kitty failure cannot override the newly selected style.
 	m.ui.cover.kittyFellBack = false
 	m.ui.cover.kittyRecoveryStreak = 0
 	m.ui.cover.playerCoverFailStreak = 0
-	return m, nil
+	return m, m.reloadCurrentKittyCoverCmd()
+}
+
+// Re-encodes the retained source image so the new style applies without waiting for a reload.
+func (m model) reloadCurrentKittyCoverCmd() tea.Cmd {
+	if m.ui.imgs == nil || m.ui.imgs.protocolForRender() != imageProtocolKitty {
+		return nil
+	}
+	var url string
+	switch m.ui.activeTab {
+	case tabPlaylists:
+		url = selectedImageURLFromList(m.browse.playlistList)
+	case tabAlbums:
+		url = selectedImageURLFromList(m.browse.albumList)
+	case tabPlayer:
+		if m.transport.status != nil {
+			url = m.transport.status.AlbumImageURL
+		}
+	}
+	if strings.TrimSpace(url) == "" {
+		return nil
+	}
+	img, ok := m.ui.imgs.getImage(url)
+	if !ok {
+		return nil
+	}
+	if cmd := m.loadImageCmd(url, true); cmd != nil {
+		return cmd
+	}
+	// No loader here (notably tests): encode inline.
+	if err := m.ui.imgs.ensureKittyEncoding(url, img); err != nil {
+		slog.Warn("kitty re-encode failed", "url", url, "error", err)
+		return nil
+	}
+	m.ui.imgs.forceKittyRedraw()
+	return nil
 }
 
 func clampCrossfadeSeconds(v float64) float64 {
@@ -231,7 +351,7 @@ func (m model) themePreviewApply(name string) (tea.Model, tea.Cmd) {
 	return m.themeOptionsApply(resolveThemeState(name, m.cachedThemeOverrides()))
 }
 
-func (m model) handleSettingsTheme(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSettingsTheme(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
 	k := m.ui.keys
 	switch {
@@ -255,9 +375,7 @@ func (m model) handleSettingsTheme(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshLikedSongsArt()
 		return m, nil
 	case keyMatches(msg, k.CloseModal):
-		// Revert to the theme that was active when the picker opened.
-		// The mode must be set before the preview apply: value receivers
-		// copy the model, so the returned copy must already carry it.
+		// Set the mode first: value receivers copy the model.
 		s.mode = settingsModeRoot
 		s.themePreset = s.themeBackup
 		return m.themeOptionsApplyAndRefresh(resolveThemeState(s.themeBackup, m.cachedThemeOverrides()))
@@ -296,7 +414,7 @@ func (m *model) saveAppSettings() {
 	s.saveErr = ""
 }
 
-func (m model) handleSettingsKeysMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSettingsKeysMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	switch {
 	case keyMatches(msg, k.CloseModal):
@@ -317,9 +435,9 @@ func (m model) handleSettingsKeysMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleSettingsCapture(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) handleSettingsCapture(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	s := &m.ui.settings
-	if msg.String() == "esc" {
+	if isCancelPress(msg) {
 		s.mode = settingsModeKeys
 		s.captureKey = ""
 		s.pendingKey = ""
@@ -328,16 +446,13 @@ func (m model) handleSettingsCapture(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	keyName := captureKeyName(msg)
 	if s.pendingKey != "" {
-		// Two-step capture: a key is armed; enter confirms, any other key
-		// replaces the pending one, esc cancels.
-		if msg.String() == "enter" {
+
+		if isConfirmPress(msg) {
 			err := m.applyCapture(s.captureKey, s.pendingKey)
 			s.mode = settingsModeKeys
 			s.captureKey = ""
 			s.pendingKey = ""
 			if err != nil {
-				// Save failure drops back to the list; the rebind is still
-				// live for the session.
 				slog.Warn("rebind not persisted", "error", err)
 			}
 			return m, nil
@@ -362,11 +477,10 @@ func (m *model) applyCapture(action, keyName string) error {
 		overrides = map[string][]string{}
 	}
 	if action == "quit" {
-		// ctrl+c always quits: keep it in the stored list like the loader does.
-		if !keyContains(overrides[action], "ctrl+c") {
+		if !slices.Contains(overrides[action], "ctrl+c") {
 			overrides[action] = append(append([]string{}, overrides[action]...), "ctrl+c")
 		}
-		if !keyContains(overrides[action], keyName) {
+		if !slices.Contains(overrides[action], keyName) {
 			overrides[action] = []string{keyName, "ctrl+c"}
 		} else {
 			overrides[action] = []string{keyName}
@@ -381,71 +495,67 @@ func (m *model) applyCapture(action, keyName string) error {
 
 	m.ui.keys = newKeysFromConfig(overrides)
 	s.conflicts = keyConflictActions(m.ui.keys)
-	s.keysTableDirty = true
 	return nil
 }
 
-func captureKeyName(msg tea.KeyMsg) string {
-	s := msg.String()
-	if msg.Alt {
-		s = "alt+" + s
-	}
-	switch s {
-	case "", "enter", "esc":
+func captureKeyName(msg tea.KeyPressMsg) string {
+	k := msg.Key()
+	// Esc cancels and Enter confirms, so neither is capturable — by identity, however close/select are rebound.
+	if k.Code == tea.KeyEscape || k.Code == tea.KeyEnter {
 		return ""
 	}
-	return s
-}
-
-func keyContains(keys []string, want string) bool {
-	return slices.Contains(keys, want)
+	if isModifierCode(k.Code) {
+		return ""
+	}
+	if k.Mod == 0 {
+		return msg.String()
+	}
+	return msg.Keystroke()
 }
 
 func (m model) settingsKeysTable(w, h int) *table.Model {
-	s := &m.ui.settings
-	if s.keysTable == nil || s.keysTableDirty {
-		// Key column sized to the longest real label: a width-derived
-		// column left ~80 empty cells inside full-width modals.
-		keyW := 6
-		for _, entry := range settingsKeyActions {
-			if lw := lipgloss.Width(m.primaryKeyLabel(entry.action)); lw+2 > keyW {
-				keyW = lw + 2
-			}
+	// Rows mirror the live keyMap — no cache.
+	keyW := 6
+	for _, entry := range settingsKeyActions {
+		if lw := lipgloss.Width(m.primaryKeyLabel(entry.action)); lw+2 > keyW {
+			keyW = lw + 2
 		}
-		cols := []table.Column{
-			{Title: "Action", Width: max(24, w-keyW)},
-			{Title: "Key", Width: keyW},
-		}
-		rows := make([]table.Row, 0, len(settingsKeyActions))
-		for _, entry := range settingsKeyActions {
-			rows = append(rows, table.Row{entry.label, m.primaryKeyLabel(entry.action)})
-		}
-		t := table.New(
-			table.WithColumns(cols),
-			table.WithRows(rows),
-			table.WithHeight(h),
-		)
-		t.SetStyles(tableStyles())
-		s.keysTable = &t
-		s.keysTableDirty = false
 	}
-	s.keysTable.SetHeight(h)
-	s.keysTable.SetCursor(s.keysCursor)
-	return s.keysTable
+	colsW := max(2, w-4)
+	keyW = min(keyW, colsW-1)
+	cols := []table.Column{
+		{Title: "Action", Width: colsW - keyW},
+		{Title: "Key", Width: keyW},
+	}
+	rows := make([]table.Row, 0, len(settingsKeyActions))
+	for _, entry := range settingsKeyActions {
+		rows = append(rows, table.Row{entry.label, m.primaryKeyLabel(entry.action)})
+	}
+	t := table.New(
+		table.WithColumns(cols),
+		table.WithRows(rows),
+		table.WithHeight(h),
+	)
+	t.SetStyles(m.styles.tableStyles())
+	t.SetHeight(h)
+	// Width is load-bearing: a zero-width viewport drops every row.
+	t.SetWidth(w)
+	t.SetCursor(m.ui.settings.keysCursor)
+	return &t
 }
 
-func tableStyles() table.Styles {
+func (s *themeStyles) tableStyles() table.Styles {
 	st := table.DefaultStyles()
 	st.Header = st.Header.
 		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(colorDivider).
+		BorderForeground(s.colorDivider).
 		BorderBottom(true).
 		Bold(false).
-		Foreground(colorMutedBlue)
+		Foreground(s.colorMutedBlue)
 	st.Selected = st.Selected.
 		Border(lipgloss.NormalBorder(), false, false, false, false).
-		Foreground(colorSelectionFg).
-		Background(colorSelectionBg)
+		Foreground(s.colorSelectionFg).
+		Background(s.colorSelectionBg)
 	return st
 }
 
@@ -454,38 +564,33 @@ func (m model) themePickerView(modalW, innerH int) string {
 	overrides := m.cachedThemeOverrides()
 	listH := max(3, innerH-6)
 
-	// Scrolling window over the registry rows; a blank row between entries
-	// keeps the swatch rows from reading as one joined block.
 	entries := (listH + 1) / 2
-	offset := 0
-	if s.themeCursor >= entries {
-		offset = s.themeCursor - entries + 1
-	}
+	shown, offset := scrollRows(settingsThemeOrder, s.themeCursor, entries)
 	var rows []string
-	for i := offset; i < min(len(settingsThemeOrder), offset+entries); i++ {
-		name := settingsThemeOrder[i]
+	for j, name := range shown {
+		i := offset + j
 		colors := resolveThemeColors(name, overrides)
 		marker := "  "
 		if themePresetName(s.themePreset) == themePresetName(name) {
 			marker = "✓"
 		}
-		bar := swatchBar(themeSwatches(colors))
+		bar := m.styles.swatchBar(themeSwatches(colors))
 		row := " " + marker + " " + padCell(name, 14) + " " + bar
-		rows = append(rows, modalRow(row, "", s.themeCursor == i, modalW))
+		rows = append(rows, m.styles.modalRow(row, "", s.themeCursor == i, modalW))
 		if i < len(settingsThemeOrder)-1 {
-			rows = append(rows, modalRow("", "", false, modalW))
+			rows = append(rows, m.styles.modalRow("", "", false, modalW))
 		}
 	}
 
 	var body strings.Builder
 	body.WriteString("\n" + lipgloss.JoinVertical(lipgloss.Left, rows...) + "\n")
 	k := m.ui.keys
-	hint := hintLine([]key.Binding{
+	hint := m.styles.hintLine([]key.Binding{
 		key.NewBinding(key.WithKeys(k.QueueUp.Keys()...), key.WithHelp(k.QueueUp.Help().Key+"/"+k.QueueDown.Help().Key, "preview")),
 		withDesc(k.Select, "save"),
 		withDesc(k.CloseModal, "revert"),
 	}, modalW-modalContentInset)
-	return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Theme"), hint, body.String(), modalW, innerH)
+	return m.styles.modalFrame(m.ui.width, m.ui.height, m.styles.styleModalTitle.Render("Theme"), hint, body.String(), modalW, innerH)
 }
 
 func (m model) settingsModalView() string {
@@ -501,14 +606,13 @@ func (m model) settingsModalView() string {
 	case settingsModeCapture:
 		var body string
 		if s.pendingKey == "" {
-			body = "\n" + styleTrackPopupLoading.Render("  Press any key to bind \""+settingsActionLabel(s.captureKey)+"\"") + "\n"
+			body = "\n" + m.styles.styleTrackPopupLoading.Render("  Press any key to bind \""+settingsActionLabel(s.captureKey)+"\"") + "\n"
 		} else {
-			pending := styleTrackPopupTitle.Render(shortKeyLabel([]string{s.pendingKey}))
+			pending := m.styles.styleTrackPopupTitle.Render(shortKeyLabel([]string{s.pendingKey}))
 			body = "\n  bind \"" + settingsActionLabel(s.captureKey) + "\" to " + pending + "\n"
 		}
-		// Capture is a 3-line prompt: a full-height box reads as empty.
-		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"),
-			styleModalHint.Render(hintLine([]key.Binding{withDesc(m.ui.keys.Select, "confirm"), withDesc(m.ui.keys.CloseModal, "cancel")}, modalW-modalContentInset)), body, modalW, 7)
+		return m.styles.modalFrame(m.ui.width, m.ui.height, m.styles.styleModalTitle.Render("Settings"),
+			m.styles.styleModalHint.Render(m.styles.hintLine([]key.Binding{withDesc(m.ui.keys.Select, "confirm"), withDesc(m.ui.keys.CloseModal, "cancel")}, modalW-modalContentInset)), body, modalW, 7)
 
 	case settingsModeTheme:
 		return m.themePickerView(modalW, innerH)
@@ -516,67 +620,56 @@ func (m model) settingsModalView() string {
 	case settingsModeKeys:
 		conflictCount := min(len(s.conflicts), maxConflictHintLines)
 		tableH := max(4, innerH-4-conflictCount)
-		// modalW-6: the box content (inset 2) minus the table cells' own
-		// Padding(0,1) on both columns — wider would wrap inside the box.
-		t := m.settingsKeysTable(max(4, modalW-6), tableH)
+		_, _, contentW := modalRect(m.ui.width, m.ui.height, modalW, innerH)
+		t := m.settingsKeysTable(contentW, tableH)
 		var body strings.Builder
 		body.WriteString("\n" + t.View() + "\n")
 		shown := 0
 		for _, action := range sortedConflictActions(s.conflicts) {
 			if shown == maxConflictHintLines {
-				body.WriteString(styleError.Render("  ⚠ more conflicts…") + "\n")
+				body.WriteString(m.styles.styleError.Render("  ⚠ more conflicts…") + "\n")
 				break
 			}
-			body.WriteString(styleError.Render("  ⚠ conflict: "+settingsActionLabel(action)) + "\n")
+			body.WriteString(m.styles.styleError.Render("  ⚠ conflict: "+settingsActionLabel(action)) + "\n")
 			shown++
 		}
-		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Keybinds"),
-			styleModalHint.Render(hintLine([]key.Binding{withDesc(m.ui.keys.Select, "rebind"), withDesc(m.ui.keys.CloseModal, "back")}, modalW-modalContentInset)), body.String(), modalW, innerH)
+		return m.styles.modalFrame(m.ui.width, m.ui.height, m.styles.styleModalTitle.Render("Keybinds"),
+			m.styles.styleModalHint.Render(m.styles.hintLine([]key.Binding{withDesc(m.ui.keys.Select, "rebind"), withDesc(m.ui.keys.CloseModal, "back")}, modalW-modalContentInset)), body.String(), modalW, innerH)
 
 	default:
-		crossfadeGauge := ""
-		cacheGauge := ""
-		if s.crossfadeEnabled {
-			crossfadeGauge = " " + gradientBar(s.crossfadeSeconds/30, gaugeW)
-		}
-		if s.cacheEnabled {
-			cacheGauge = " " + gradientBar(float64(s.cacheSizeMB-64)/float64(4096-64), gaugeW)
-		}
-		rows := []string{
-			modalRow("Theme", m.themeValue(s.themePreset), s.cursor == 0, modalW),
-			modalRow("Theme options", "edit...", s.cursor == 1, modalW),
-			modalRow("Keybinds", "edit...", s.cursor == 2, modalW),
-			modalRow("Crossfade", settingsCrossfadeLabel(&s)+crossfadeGauge, s.cursor == 3, modalW),
-			modalRow("Audio cache", settingsCacheLabel(&s)+cacheGauge, s.cursor == 4, modalW),
-			modalRow("Images", settingsImageLabel(&s), s.cursor == 5, modalW),
+		rows := make([]string, 0, len(settingsRootRows))
+		for i, row := range settingsRootRows {
+			rows = append(rows, m.styles.modalRow(row.label, row.value(m), s.cursor == i, modalW))
 		}
 		var body strings.Builder
 		body.WriteString("\n" + lipgloss.JoinVertical(lipgloss.Left, rows...) + "\n")
-		body.WriteString("\n" + styleModalHint.Render(hintLine([]key.Binding{withDesc(m.ui.keys.Select, "change"), m.ui.keys.VolUp, m.ui.keys.VolDown}, modalW-modalContentInset)) + "\n")
-		if s.restartRequiredCrossfade {
-			body.WriteString(styleError.Render("  crossfade applies on restart") + "\n")
-		}
-		if s.restartRequiredCache {
-			body.WriteString(styleError.Render("  cache applies on restart") + "\n")
+		body.WriteString("\n" + m.styles.styleModalHint.Render(m.styles.hintLine([]key.Binding{withDesc(m.ui.keys.Select, "change"), m.ui.keys.VolUp, m.ui.keys.VolDown}, modalW-modalContentInset)) + "\n")
+		for _, row := range settingsRootRows {
+			if row.notice == nil {
+				continue
+			}
+			if hint := row.notice(&s); hint != "" {
+				body.WriteString(m.styles.styleError.Render("  "+hint) + "\n")
+			}
 		}
 		if s.saveErr != "" {
-			body.WriteString(styleError.Render("  ⚠ "+truncate(s.saveErr, modalW-modalContentInset-2)) + "\n")
+			body.WriteString(m.styles.styleError.Render("  ⚠ "+truncate(s.saveErr, modalW-modalContentInset-2)) + "\n")
 		}
 		for i, w := range config.Warnings() {
 			if i == 2 {
-				body.WriteString(styleError.Render("  ⚠ more config warnings…") + "\n")
+				body.WriteString(m.styles.styleError.Render("  ⚠ more config warnings…") + "\n")
 				break
 			}
-			body.WriteString(styleError.Render("  ⚠ "+truncate(w, modalW-modalContentInset-2)) + "\n")
+			body.WriteString(m.styles.styleError.Render("  ⚠ "+truncate(w, modalW-modalContentInset-2)) + "\n")
 		}
-		return modalFrame(m.ui.width, m.ui.height, styleModalTitle.Render("Settings"),
-			styleModalHint.Render(hintLine([]key.Binding{m.ui.keys.CloseModal}, modalW-modalContentInset)), body.String(), modalW, innerH)
+		return m.styles.modalFrame(m.ui.width, m.ui.height, m.styles.styleModalTitle.Render("Settings"),
+			m.styles.styleModalHint.Render(m.styles.hintLine([]key.Binding{m.ui.keys.CloseModal}, modalW-modalContentInset)), body.String(), modalW, innerH)
 	}
 }
 
 func (m model) themeValue(preset string) string {
 	colors := resolveThemeColors(preset, m.cachedThemeOverrides())
-	return preset + "  " + swatchBar(themeSwatches(colors))
+	return preset + "  " + m.styles.swatchBar(themeSwatches(colors))
 }
 
 func settingsActionLabel(action string) string {
@@ -620,13 +713,10 @@ func (m model) primaryKeyLabel(action string) string {
 
 const maxConflictHintLines = 3
 
-// rethemeBrowseLists re-styles both browser lists for a new palette.
 func (m *model) rethemeBrowseLists() {
-	// Swap the delegates in place: SetDelegate keeps items, cursor and
-	// pagination, so a theme change no longer tears down and rebuilds the
-	// list models (the fresh delegate brings a fresh render cache).
-	m.browse.playlistList.SetDelegate(newCachedPlaylistDelegate())
-	m.browse.albumList.SetDelegate(newCachedPlaylistDelegate())
-	applyListStyles(&m.browse.playlistList)
-	applyListStyles(&m.browse.albumList)
+	// In-place: SetDelegate keeps items, cursor and pagination (no teardown).
+	m.browse.playlistList.SetDelegate(newCachedPlaylistDelegate(m.styles))
+	m.browse.albumList.SetDelegate(newCachedPlaylistDelegate(m.styles))
+	applyListStyles(&m.browse.playlistList, m.styles)
+	applyListStyles(&m.browse.albumList, m.styles)
 }

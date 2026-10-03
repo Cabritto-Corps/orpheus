@@ -6,10 +6,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"orpheus/internal/config"
 	"orpheus/internal/librespot"
@@ -20,21 +20,31 @@ import (
 type tab string
 
 const (
-	tabPlaylists                  tab = "playlists"
-	tabAlbums                     tab = "albums"
-	tabPlayer                     tab = "player"
-	coverPreloadWindow                = 20
-	imageLoadRetryMax                 = 4
-	coverRefreshEvery                 = 15
-	playerCoverRefreshEvery           = 5
-	libraryCoverRefreshEvery          = 150
-	libraryCoverRefreshBatch          = 32
-	libraryMetaRefreshEvery           = 300
-	coverQueueDrainBatch              = 20
-	kittyProtocolFallbackFailures     = 8
-	kittyProtocolRecoveryStreak       = 8
-	uiTickInterval                    = 200 * time.Millisecond
-	// 8s at the 200ms tick interval before a pending popup load gives up.
+	tabPlaylists             tab = "playlists"
+	tabAlbums                tab = "albums"
+	tabPlayer                tab = "player"
+	coverPreloadWindow           = 20
+	imageLoadRetryMax            = 4
+	coverRefreshEvery            = 15
+	playerCoverRefreshEvery      = 5
+	libraryCoverRefreshEvery     = 150
+	libraryCoverRefreshBatch     = 32
+	libraryMetaRefreshEvery      = 300
+	coverQueueDrainBatch         = 20
+	// Caps one push's enqueue: a huge shuffled context cannot flood the
+	// queue; the chained drain finishes the rest.
+	queueCoverSweepBatch = 64
+	// Mirrors the backend head window: current cover plus this many
+	// up-next covers stay pinned against LRU eviction.
+	queueHeadPinWindow = 8
+	// Caps a server-penalty park: a Retry-After of hours parks the sweep
+	// ten minutes, then it re-evaluates.
+	sweepPauseMax                 = 10 * time.Minute
+	kittyProtocolFallbackFailures = 8
+	kittyProtocolRecoveryStreak   = 8
+	uiTickInterval                = 200 * time.Millisecond
+	uiIdleTickInterval            = time.Second
+	// Popup load give-up window: ticks × the 200 ms tick = 8 s.
 	trackPopupLoadTimeoutTicks = 40
 	navDebounceInterval        = 60 * time.Millisecond
 	volSeekDebounceInterval    = 50 * time.Millisecond
@@ -44,18 +54,9 @@ const (
 
 type playlistItem struct {
 	summary spotify.PlaylistSummary
-
-	// nowPlaying is set per render by the delegate wrapper; it makes Title()
-	// carry the now-playing glyph so the delegate cache key changes too.
-	nowPlaying bool
 }
 
 func (p playlistItem) Title() string {
-	if p.nowPlaying {
-		if glyph := themeNowPlayingGlyph(); glyph != "" {
-			return p.summary.Name + " " + glyph
-		}
-	}
 	return p.summary.Name
 }
 func (p playlistItem) FilterValue() string {
@@ -82,38 +83,36 @@ func (t trackItem) Title() string       { return t.item.Name }
 func (t trackItem) FilterValue() string { return t.item.Name }
 func (t trackItem) Description() string { return t.item.Artist }
 
-// newTrackPopupDelegate returns the popup's delegate: the themed default
-// delegate wrapped in the render cache, so the track rows can carry the
-// right-aligned duration while keeping the same styling.
-func newTrackPopupDelegate() cachedDelegate {
+// The themed default delegate wrapped in the render cache: rows carry the
+// right-aligned duration in the same styling.
+func newTrackPopupDelegate(s *themeStyles) cachedDelegate {
 	c := &delegateCache{entries: make(map[delegateKey]string, 64)}
-	registerDelegateCache(c)
 	d := list.NewDefaultDelegate()
 	d.ShowDescription = true
 	d.SetHeight(2)
 	d.SetSpacing(0)
 
 	d.Styles.SelectedTitle = lipgloss.NewStyle().
-		Bold(themeBoldTitles).
-		Foreground(colorBlue).
+		Bold(s.themeBoldTitles).
+		Foreground(s.colorBlue).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(colorBlue).
+		BorderForeground(s.colorBlue).
 		Padding(0, 0, 0, 1)
 
 	d.Styles.SelectedDesc = lipgloss.NewStyle().
-		Italic(themeItalicDescs).
-		Foreground(colorMutedBlue).
+		Italic(s.themeItalicDescs).
+		Foreground(s.colorMutedBlue).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(colorBlue).
+		BorderForeground(s.colorBlue).
 		Padding(0, 0, 0, 1)
 
 	d.Styles.NormalTitle = lipgloss.NewStyle().
-		Foreground(colorOffWhite).
+		Foreground(s.colorOffWhite).
 		Padding(0, 0, 0, 2)
 
 	d.Styles.NormalDesc = lipgloss.NewStyle().
-		Italic(themeItalicDescs).
-		Foreground(colorMutedBlue).
+		Italic(s.themeItalicDescs).
+		Foreground(s.colorMutedBlue).
 		Padding(0, 0, 0, 2)
 
 	return cachedDelegate{DefaultDelegate: d, cache: c}
@@ -121,9 +120,9 @@ func newTrackPopupDelegate() cachedDelegate {
 
 func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.Config, tuiCmdCh chan librespot.TUICommand, contextTracksCh chan<- librespot.ContextTracksResult, ldr *loader.BackgroundLoader) model {
 	state, resolvedPreset := LoadTheme(cfg.Theme, cfg.ThemePath)
-	applyTheme(state)
-	browser := newBrowseList()
-	albums := newBrowseList()
+	styles := buildThemeStyles(state)
+	browser := newBrowseList(styles)
+	albums := newBrowseList(styles)
 	imageStyle, imageStyleSet := cfg.ImageStyle, config.NormalizeImageStyle(cfg.ImageStyle) != ""
 	if !imageStyleSet {
 		imageStyle, imageStyleSet = config.ExplicitImageStyle(cfg.SettingsPath)
@@ -132,10 +131,12 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 	m := model{
 		ctx:             ctx,
 		catalog:         catalog,
+		catalogSource:   newCatalogSource(catalog),
 		deviceName:      cfg.DeviceName,
 		tuiCmdCh:        tuiCmdCh,
 		contextTracksCh: contextTracksCh,
 		ldr:             ldr,
+		styles:          styles,
 		transport: transportModel{
 			volDebouncePending:  -1,
 			seekDebouncePending: -1,
@@ -152,7 +153,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 		ui: uiModel{
 			activeTab:              tabPlaylists,
 			imgs:                   newImgCacheWithSelection(imageStyle, imageStyleSet, os.Getenv),
-			spinner:                themedSpinner(),
+			spinner:                themedSpinner(styles),
 			startupCoverBoostTicks: 40,
 			cover:                  newCoverManager(),
 			nerdFonts:              cfg.NerdFonts,
@@ -161,7 +162,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 		},
 	}
 
-	m.syncListFilterBinding()
+	m.syncListKeyMaps()
 	m.ui.settings.imageStyle = imageStyleOrDefault(imageStyle)
 	m.ui.settings.imageStyleSet = imageStyleSet
 	return m
@@ -188,7 +189,7 @@ func normalizeListPagination(l *list.Model) {
 		perPage = len(visible)
 	}
 	maxPage := (len(visible) - 1) / perPage
-	l.Paginator.Page = clampInt(l.Paginator.Page, 0, maxPage)
+	l.Paginator.Page = min(max(l.Paginator.Page, 0), maxPage)
 	if l.FilterState() == list.Unfiltered {
 		idx := l.GlobalIndex()
 		if idx >= len(visible) {
@@ -203,24 +204,50 @@ func (m *model) normalizeLibraryPagination() {
 	normalizeListPagination(&m.browse.albumList)
 }
 
+type ProgramHandle struct {
+	Program *tea.Program
+	done    chan error
+}
+
+func (h *ProgramHandle) Wait() error {
+	return <-h.done
+}
+
 func Run(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.Config, tuiCmdCh chan librespot.TUICommand, playbackStateCh <-chan *librespot.PlaybackStateUpdate) error {
+	handle, err := startProgram(ctx, catalog, cfg, tuiCmdCh, playbackStateCh, false)
+	if err != nil {
+		return err
+	}
+	return handle.Wait()
+}
+
+func Start(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.Config, tuiCmdCh chan librespot.TUICommand, playbackStateCh <-chan *librespot.PlaybackStateUpdate) (*ProgramHandle, error) {
+	return startProgram(ctx, catalog, cfg, tuiCmdCh, playbackStateCh, true)
+}
+
+func startProgram(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.Config, tuiCmdCh chan librespot.TUICommand, playbackStateCh <-chan *librespot.PlaybackStateUpdate, markConnecting bool) (*ProgramHandle, error) {
 	contextTracksCh := make(chan librespot.ContextTracksResult, 1)
-	ldr := loader.New(ctx, 128, NewTUIExecutor(ctx, catalog))
+	catalogSource := newCatalogSource(catalog)
+	ldr := loader.New(ctx, 128, NewDynamicCatalogExecutor(ctx, catalogSource.get))
 	m := newModel(ctx, catalog, cfg, tuiCmdCh, contextTracksCh, ldr)
-	// Match the terminal's own background (the padding around the grid)
-	// to the theme's page color for the session; restore on exit.
+	m.catalogSource = catalogSource
+	m.transport.playerConnecting = markConnecting
+	// Match the terminal's own background to the theme's page color for the
+	// session; restore on exit (the padding around the grid).
 	CaptureTerminalBG()
-	defer RestoreTerminalBG()
-	ApplyTerminalBG(colorPage)
-	p := tea.NewProgram(m,
-		tea.WithAltScreen(),
-	)
+	ApplyTerminalBG(m.styles.colorPage, m.styles.transparentFrame(), m.styles.colorProfile)
+	p := tea.NewProgram(m)
+	handle := &ProgramHandle{Program: p, done: make(chan error, 1)}
 	if playbackStateCh != nil {
 		StartPlaybackStateListener(playbackStateCh, p.Send, ctx)
 	}
 	StartContextTracksListener(contextTracksCh, p.Send, ctx)
-	_, err := p.Run()
-	return err
+	go func() {
+		_, err := p.Run()
+		RestoreTerminalBG()
+		handle.done <- err
+	}()
+	return handle, nil
 }
 
 func (m model) Init() tea.Cmd {
@@ -231,16 +258,12 @@ func (m model) Init() tea.Cmd {
 	)
 }
 
-func keyMatches(msg tea.KeyMsg, b key.Binding) bool {
-	return key.Matches(msg, b)
-}
-
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
+func keyMatches(msg tea.KeyPressMsg, b key.Binding) bool {
+	k := msg.Key()
+	for _, spec := range b.Keys() {
+		if matchKeySpec(k, spec) {
+			return true
+		}
 	}
-	if v > hi {
-		return hi
-	}
-	return v
+	return false
 }

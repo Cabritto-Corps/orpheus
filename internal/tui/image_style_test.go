@@ -10,11 +10,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"orpheus/internal/config"
 	"orpheus/internal/loader"
+	"orpheus/internal/spotify"
 )
 
 func imageStyleTestEnv(env map[string]string) func(string) string {
@@ -119,8 +120,8 @@ func TestStartupImageStylePrecedence(t *testing.T) {
 }
 
 func TestForcedPixelatedNeverUsesKitty(t *testing.T) {
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "0")
 
 	getenv := imageStyleTestEnv(map[string]string{"KITTY_WINDOW_ID": "1"})
 	cache := newImgCacheWithSelection(config.ImageStylePixelated, true, getenv)
@@ -134,7 +135,7 @@ func TestForcedPixelatedNeverUsesKitty(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	img.SetRGBA(0, 0, color.RGBA{R: 255, A: 255})
 	img.SetRGBA(1, 1, color.RGBA{G: 255, A: 255})
-	rendered := renderCover(cache.protocolForRender(), img, "", 4, 2)
+	rendered := renderCover(img, 4, 2, colorprofile.TrueColor)
 	if !strings.Contains(rendered, "▀") {
 		t.Fatalf("expected half-block output, got %q", rendered)
 	}
@@ -144,8 +145,8 @@ func TestForcedPixelatedNeverUsesKitty(t *testing.T) {
 }
 
 func TestManagedRenderedFallsBackToHalfBlockWithoutKitty(t *testing.T) {
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "0")
 
 	cache := newImgCacheWithSelection(config.ImageStyleRendered, true, imageStyleTestEnv(map[string]string{}))
 	if cache.protocolForRender() != imageProtocolNone {
@@ -156,7 +157,7 @@ func TestManagedRenderedFallsBackToHalfBlockWithoutKitty(t *testing.T) {
 	}
 
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	rendered := renderCover(cache.protocolForRender(), img, "", 4, 2)
+	rendered := renderCover(img, 4, 2, colorprofile.TrueColor)
 	if !strings.Contains(rendered, "▀") {
 		t.Fatalf("expected half-block fallback output, got %q", rendered)
 	}
@@ -208,7 +209,6 @@ func TestSettingsImageStyleCyclePersistsAndApplies(t *testing.T) {
 		t.Fatalf("settings row must show the pixelated choice:\n%s", out)
 	}
 
-	// The row cycles back to rendered with the same key used for the other rows.
 	next = sendEnter(next)
 	if next.ui.settings.imageStyle != config.ImageStyleRendered {
 		t.Fatalf("enter must cycle back to rendered, got %q", next.ui.settings.imageStyle)
@@ -237,10 +237,9 @@ func TestApplyImageStyleClearsKittyStateAndRecovery(t *testing.T) {
 	m.ui.imgs.covers.Set(key, "stale kitty render")
 	m.ui.imgs.coverKeysByURL[key.url] = map[coverKey]struct{}{key: {}}
 	m.ui.imgs.encoded[key.url] = "stale encoding"
-	m.ui.imgs.kittyChunks[key.url] = []string{"stale chunk"}
-	m.ui.imgs.kittyChunkOrder = []string{key.url}
-	m.ui.imgs.kittyVisible = true
-	m.ui.imgs.lastKittyURL = key.url
+	if emit, _, _ := m.ui.imgs.commitOverlayIntent(overlayIntent{url: key.url}); !emit {
+		t.Fatal("expected initial overlay commit to emit")
+	}
 	m.ui.cover.kittyFellBack = true
 	m.ui.cover.kittyRecoveryStreak = 3
 	m.ui.cover.playerCoverFailStreak = 2
@@ -254,11 +253,13 @@ func TestApplyImageStyleClearsKittyStateAndRecovery(t *testing.T) {
 	if _, ok := next.ui.imgs.covers.Get(key); ok {
 		t.Fatal("stale rendered covers must be invalidated on style change")
 	}
-	if len(next.ui.imgs.coverKeysByURL) != 0 || len(next.ui.imgs.encoded) != 0 || len(next.ui.imgs.kittyChunks) != 0 || len(next.ui.imgs.kittyChunkOrder) != 0 {
-		t.Fatal("style-specific encoded and chunk state must be invalidated on style change")
+	if len(next.ui.imgs.coverKeysByURL) != 0 || len(next.ui.imgs.encoded) != 0 {
+		t.Fatal("style-specific encoded state must be invalidated on style change")
 	}
-	if next.ui.imgs.kittyVisible || !next.ui.imgs.kittyForceRedraw {
-		t.Fatal("style change must reset the kitty overlay state")
+	// Emitting also proves the slot was cleared: an uncleared slot would
+	// suppress the identical intent.
+	if emit, _, _ := next.ui.imgs.commitOverlayIntent(overlayIntent{url: key.url}); !emit {
+		t.Fatal("style change must force overlay retransmission")
 	}
 	if next.ui.cover.kittyFellBack || next.ui.cover.kittyRecoveryStreak != 0 || next.ui.cover.playerCoverFailStreak != 0 {
 		t.Fatal("style change must clear stale kitty supervision state")
@@ -288,5 +289,72 @@ func TestStartupImageStyleLoadsExplicitConfig(t *testing.T) {
 	}
 	if m.ui.imgs.protocolForRender() != imageProtocolNone || !m.ui.imgs.protocolExplicit {
 		t.Fatal("startup must force half-block rendering for explicit pixelated")
+	}
+}
+
+func TestRenderedStyleSwitchReencodesVisibleCover(t *testing.T) {
+	getenv := imageStyleTestEnv(map[string]string{"KITTY_WINDOW_ID": "1"})
+	m := NewLoaderModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabPlayer
+	const url = "https://example.com/current-cover"
+	m.transport.status = &spotify.PlaybackStatus{TrackID: "track-1", AlbumImageURL: url}
+	m.ui.imgs = newImgCacheWithSelection(config.ImageStyleRendered, true, getenv)
+
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	m.ui.imgs.setImage(url, img, 8, 8)
+	if m.ui.imgs.encodedFor(url) == "" {
+		t.Fatal("rendered must encode the current cover before the switch")
+	}
+
+	m.ui.settings.imageStyle = config.ImageStylePixelated
+	nextModel, _ := m.applyImageStyleWithEnv(getenv)
+	next := nextModel.(model)
+	if encoded := next.ui.imgs.encodedFor(url); encoded != "" {
+		t.Fatal("pixelated must invalidate the kitty payload")
+	}
+
+	next.ui.settings.imageStyle = config.ImageStyleRendered
+	nextModel, cmd := next.applyImageStyleWithEnv(getenv)
+	next = nextModel.(model)
+	if cmd == nil {
+		t.Fatal("returning to rendered must schedule the visible cover's kitty re-encode")
+	}
+	loadedMsg := cmd()
+	loaded, ok := loadedMsg.(imageLoadedMsg)
+	if !ok {
+		t.Fatalf("expected an image load message, got %T", loadedMsg)
+	}
+	if loaded.err != nil {
+		t.Fatalf("re-encode failed: %v", loaded.err)
+	}
+	// Building the emission IS the emission: assert the shipped bytes
+	// rather than asking the (now unchanged) slot again.
+	nextModel, overlayCmd := next.handleImageLoadedMsg(loaded)
+	next = nextModel.(model)
+	if !next.ui.imgs.hasKittyEncoding(url) {
+		t.Fatal("the retained cover must regain its kitty encoding after the switch")
+	}
+	found := false
+	forEachRaw(overlayCmd, func(msg tea.RawMsg) { found = true })
+	if !found {
+		t.Fatal("expected the re-encoded cover to reach the overlay")
+	}
+}
+
+func forEachRaw(cmd tea.Cmd, visit func(msg tea.RawMsg)) {
+	if cmd == nil {
+		return
+	}
+	switch msg := cmd().(type) {
+	case tea.RawMsg:
+		visit(msg)
+	case tea.BatchMsg:
+		for _, sub := range msg {
+			if sub != nil {
+				forEachRaw(sub, visit)
+			}
+		}
 	}
 }

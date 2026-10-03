@@ -127,10 +127,7 @@ func envBool(key string, fallback bool) bool {
 	return v
 }
 
-// resolveNerdFonts honors explicit true/false and falls back to auto-detection
-// ("auto" or unset): Nerd Font glyphs can only render if a Nerd Font family is
-// installed and selectable by the terminal, so the fontconfig list is the best
-// available signal.
+// fc-list is the proxy: nerd glyphs only render if the terminal selects a Nerd Font.
 func resolveNerdFonts(raw string) bool {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "":
@@ -217,8 +214,6 @@ func loadEnvFile() {
 	}
 }
 
-// resolveEnvFilePath mirrors loadEnvFile precedence: cwd .env wins over the
-// config-dir .env. Empty when neither exists.
 func resolveEnvFilePath() string {
 	if _, err := os.Stat(".env"); err == nil {
 		return ".env"
@@ -234,18 +229,13 @@ func resolveEnvFilePath() string {
 	return ""
 }
 
-// configWarnings collects human-readable load problems (malformed values
-// falling back to defaults) so the UI can surface what the log-only
-// warnings used to hide.
 var configWarnings []string
 
 func warnConfigValue(key, value string) {
 	configWarnings = append(configWarnings, key+" = "+value+" ignored (invalid value)")
 }
 
-// Warnings returns the problems found while parsing configuration values,
-// in load order. Rendered by the settings UI so what is shown can always
-// be traced back to the config files.
+// Warnings preserves load order for the settings UI.
 func Warnings() []string {
 	return append([]string(nil), configWarnings...)
 }

@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"orpheus/internal/config"
 	"orpheus/internal/spotify"
@@ -20,13 +20,15 @@ type frameVariant struct {
 	tab      tab
 	playing  bool
 	hasQueue bool
-	modal    string // "", "help", "settings", "popup"
+	modal    string // "", "help", "settings", "settings-theme", "settings-theme-options", "settings-keys", "settings-capture", "popup"
 	erroring bool
 }
 
 func guardModel(tb testing.TB, v frameVariant) model {
 	tb.Helper()
 	m := newModel(tb.Context(), nil, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
+	// Past the startup sync gate: the guard tests exercise steady-state frames.
+	m.browse.librarySettled = true
 	m.ui.width = v.width
 	m.ui.height = v.height
 	m.ui.nerdFonts = false
@@ -65,10 +67,6 @@ func guardModel(tb testing.TB, v frameVariant) model {
 			TrackCount: 42,
 		}}
 	}
-	if v.playing {
-		// One browse row carries the now-playing glyph.
-		nowPlayingContextURI = "spotify:playlist:pl3"
-	}
 	m.browse.playlistList.SetItems(items)
 	m.browse.albumList.SetItems(items[:20])
 	if v.erroring {
@@ -96,7 +94,6 @@ func guardModel(tb testing.TB, v frameVariant) model {
 		m2, _ := m.openSettings()
 		m = m2.(model)
 		m.ui.settings.mode = settingsModeKeys
-		m.ui.settings.keysTableDirty = true
 	case "settings-capture":
 		m2, _ := m.openSettings()
 		m = m2.(model)
@@ -116,7 +113,7 @@ func guardModel(tb testing.TB, v frameVariant) model {
 		}
 		m.ui.trackPopupItems = items
 		_, listW, listH := popupModalSize(v.width, v.height)
-		popup := list.New(nil, newTrackPopupDelegate(), listW, listH)
+		popup := list.New(nil, newTrackPopupDelegate(m.styles), listW, listH)
 		popup.SetShowTitle(false)
 		popup.SetShowStatusBar(true)
 		popup.SetFilteringEnabled(true)
@@ -156,7 +153,7 @@ func TestViewFrameContract(t *testing.T) {
 					variant.width, variant.height, variant.tab, variant.playing = size[0], size[1], tb, playing
 					name := fmt.Sprintf("%dx%d/%s/%s/%s", size[0], size[1], tabName(variant.tab), variant.name, map[bool]string{true: "playing", false: "idle"}[playing])
 					m := guardModel(t, variant)
-					assertFrameContract(t, name, m.View(), variant.width, variant.height)
+					assertFrameContract(t, name, m.View().Content, variant.width, variant.height)
 				}
 			}
 		}
@@ -164,36 +161,36 @@ func TestViewFrameContract(t *testing.T) {
 }
 
 func TestViewFrameContractAllThemes(t *testing.T) {
-	t.Cleanup(func() { applyTheme(themePresetState("default")) })
 	sizes := [][2]int{{40, 12}, {120, 40}}
 	for _, themeName := range themeRegistryNames() {
-		applyTheme(themePresetState(themeName))
 		for _, size := range sizes {
 			for _, tb := range []tab{tabPlaylists, tabAlbums, tabPlayer} {
 				variant := frameVariant{name: themeName, width: size[0], height: size[1], tab: tb, hasQueue: true}
 				m := guardModel(t, variant)
+				// Retheme the lists too, so delegate rows (not just chrome)
+				// render in the theme under test.
+				m.styles = buildThemeStyles(themePresetState(themeName))
+				m.rethemeBrowseLists()
 				name := fmt.Sprintf("%dx%d/%s/%s", size[0], size[1], themeName, tabName(variant.tab))
-				assertFrameContract(t, name, m.View(), variant.width, variant.height)
+				assertFrameContract(t, name, m.View().Content, variant.width, variant.height)
 			}
 		}
 	}
 }
 
 func TestViewFrameContractBackgroundModes(t *testing.T) {
-	t.Cleanup(func() { applyTheme(themePresetState("default")) })
 	sizes := [][2]int{{60, 20}, {120, 40}}
 	for _, style := range backgroundStyleChoices {
 		for _, size := range sizes {
 			for _, tb := range []tab{tabPlaylists, tabAlbums, tabPlayer} {
 				variant := frameVariant{name: "bg-" + style, width: size[0], height: size[1], tab: tb, hasQueue: true}
 				m := guardModel(t, variant)
-				// The style applies after construction: newModel re-applies
-				// the stored theme, and View reads the package styles live.
 				st := themePresetState("default")
 				st.backgrounds.Style = style
-				applyTheme(st)
+				m.styles = buildThemeStyles(st)
+				m.rethemeBrowseLists()
 				name := fmt.Sprintf("%dx%d/bg-%s/%s", size[0], size[1], style, tabName(variant.tab))
-				assertFrameContract(t, name, m.View(), variant.width, variant.height)
+				assertFrameContract(t, name, m.View().Content, variant.width, variant.height)
 			}
 		}
 	}
@@ -202,35 +199,62 @@ func TestViewFrameContractBackgroundModes(t *testing.T) {
 func TestViewFrameContractModals(t *testing.T) {
 	sizes := [][2]int{{40, 12}, {50, 16}, {80, 24}, {120, 40}}
 	for _, size := range sizes {
-		for _, modal := range []string{"settings", "settings-theme", "settings-keys", "settings-capture", "help", "popup"} {
+		for _, modal := range []string{"settings", "settings-theme", "settings-theme-options", "settings-keys", "settings-capture", "help", "popup"} {
 			variant := frameVariant{name: modal, width: size[0], height: size[1], tab: tabPlayer, playing: true, hasQueue: true, modal: modal}
 			m := guardModel(t, variant)
-			assertFrameContract(t, fmt.Sprintf("modal-%s-%dx%d", modal, size[0], size[1]), m.View(), variant.width, variant.height)
+			assertFrameContract(t, fmt.Sprintf("modal-%s-%dx%d", modal, size[0], size[1]), m.View().Content, variant.width, variant.height)
 		}
 	}
 }
 
 func TestPopupListSizeInvariantUnderResize(t *testing.T) {
-	for _, size := range [][2]int{{60, 20}, {80, 24}, {120, 40}} {
-		v := frameVariant{name: "popup", width: size[0], height: size[1], tab: tabPlayer, playing: true, hasQueue: true, modal: "popup"}
-		m := guardModel(t, v)
-		_, wantW, wantH := popupModalSize(size[0], size[1])
-		gotW, gotH := m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height()
-		if gotW != wantW || gotH != wantH {
-			t.Fatalf("open at %dx%d: list %dx%d, want %dx%d", size[0], size[1], gotW, gotH, wantW, wantH)
-		}
+	// Hop between sizes: same-size round trips miss one-directional drift.
+	v := frameVariant{name: "popup", width: 120, height: 40, tab: tabPlayer, playing: true, hasQueue: true, modal: "popup"}
+	m := guardModel(t, v)
+	_, wantW, wantH := popupModalSize(120, 40)
+	if gotW, gotH := m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height(); gotW != wantW || gotH != wantH {
+		t.Fatalf("open at 120x40: list %dx%d, want %dx%d", gotW, gotH, wantW, wantH)
+	}
+	for _, size := range [][2]int{{60, 20}, {120, 40}} {
 		m2, _ := m.handleWindowSizeMsg(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = m2.(model)
-		gotW, gotH = m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height()
-		if gotW != wantW || gotH != wantH {
-			t.Fatalf("resize at %dx%d: list %dx%d, want open-time %dx%d", size[0], size[1], gotW, gotH, wantW, wantH)
+		_, wantW, wantH := popupModalSize(size[0], size[1])
+		if gotW, gotH := m.ui.trackPopupList.Width(), m.ui.trackPopupList.Height(); gotW != wantW || gotH != wantH {
+			t.Fatalf("resized to %dx%d: list %dx%d, want %dx%d", size[0], size[1], gotW, gotH, wantW, wantH)
 		}
 	}
 }
 
+func TestKittyOverlaySilentBelowFrameThreshold(t *testing.T) {
+	t.Setenv("TMUX", "")
+	v := frameVariant{name: "tiny", width: 30, height: 10, tab: tabPlayer, playing: true}
+	m := guardModel(t, v)
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.transport.status.AlbumImageURL = "u1"
+	m.ui.imgs.encoded["u1"] = "QUFB"
+	if out := m.kittyOverlay(); out != "" {
+		t.Fatalf("expected no overlay bytes below the frame threshold, got %q", out)
+	}
+
+	// After shrinking, delete the live placement but place nothing.
+	m.ui.width, m.ui.height = 120, 40
+	if first := m.kittyOverlay(); first == "" {
+		t.Fatal("expected initial kitty render at full size")
+	}
+	m.ui.width, m.ui.height = 30, 10
+	small := m.kittyOverlay()
+	for _, want := range []string{"a=T", "a=p"} {
+		if strings.Contains(small, want) {
+			t.Fatalf("expected no placement %q below the frame threshold, got %q", want, small)
+		}
+	}
+	if m.ui.imgs.overlay.visible {
+		t.Fatal("expected the overlay slot cleared below the frame threshold")
+	}
+}
+
 func TestModalHeaderNeverOverflows(t *testing.T) {
-	// title+hint spanning exactly the inner width used to overflow via the
-	// max(2,...) gap floor and wrap inside the box.
+	// title+hint at exactly the inner width used to overflow via the max(2,...) gap floor.
 	cases := []struct{ title, hint string }{
 		{strings.Repeat("T", 30), strings.Repeat("H", 30)},
 		{strings.Repeat("T", 60), strings.Repeat("H", 60)},

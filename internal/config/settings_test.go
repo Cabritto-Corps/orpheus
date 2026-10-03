@@ -111,6 +111,40 @@ func TestAppSettingsImageStyleOverlay(t *testing.T) {
 	}
 }
 
+func TestApplyAppSettingsValidatesNumerics(t *testing.T) {
+	configWarnings = nil
+	cfg := Config{AudioCacheSizeMB: 1024, CrossfadeSeconds: 3}
+	zero := int64(0)
+	neg := int64(-512)
+	negSecs := -2.5
+	ApplyAppSettings(&cfg, AppSettings{AudioCache: &AudioCacheSettings{SizeMB: &zero}})
+	ApplyAppSettings(&cfg, AppSettings{AudioCache: &AudioCacheSettings{SizeMB: &neg}})
+	ApplyAppSettings(&cfg, AppSettings{Crossfade: &CrossfadeSettings{Seconds: &negSecs}})
+	if cfg.AudioCacheSizeMB != 1024 {
+		t.Fatalf("AudioCacheSizeMB = %d, want fallback 1024", cfg.AudioCacheSizeMB)
+	}
+	if cfg.CrossfadeSeconds != 3 {
+		t.Fatalf("CrossfadeSeconds = %v, want fallback 3", cfg.CrossfadeSeconds)
+	}
+	if len(Warnings()) != 3 {
+		t.Fatalf("expected 3 config warnings, got %q", Warnings())
+	}
+
+	configWarnings = nil
+	good := int64(512)
+	goodSecs := 5.0
+	ApplyAppSettings(&cfg, AppSettings{
+		AudioCache: &AudioCacheSettings{SizeMB: &good},
+		Crossfade:  &CrossfadeSettings{Seconds: &goodSecs},
+	})
+	if cfg.AudioCacheSizeMB != 512 || cfg.CrossfadeSeconds != 5 {
+		t.Fatalf("valid overlay not applied: %+v", cfg)
+	}
+	if len(Warnings()) != 0 {
+		t.Fatalf("valid overlay must warn nothing, got %q", Warnings())
+	}
+}
+
 func TestExplicitImageStyle(t *testing.T) {
 	path := writeInitialConfig(t, `{"images":{"style":"rendered"}}
 `)

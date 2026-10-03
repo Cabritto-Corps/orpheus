@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	list "github.com/charmbracelet/bubbles/list"
+	list "charm.land/bubbles/v2/list"
 
 	"orpheus/internal/loader"
 	"orpheus/internal/spotify"
@@ -35,7 +35,7 @@ func TestLoadLibraryCoversDrainsBatchSized(t *testing.T) {
 	inflightCount := 0
 	m.ui.imgs.mu.RLock()
 	inflightCount = len(m.ui.imgs.inflight)
-	queued := len(m.ui.cover.queue)
+	queued := m.ui.cover.queue.Len()
 	m.ui.imgs.mu.RUnlock()
 
 	if inflightCount != coverQueueDrainBatch {
@@ -154,8 +154,9 @@ func TestSetProtocolInvalidatesAndRespectsOverride(t *testing.T) {
 	c.setProtocol(imageProtocolKitty)
 	c.encoded["u1"] = "enc"
 	c.covers.Set(coverKey{url: "u1", cols: 10, rows: 10}, "rendered")
-	c.kittyVisible = true
-	c.lastKittyURL = "u1"
+	if emit, _, _ := c.commitOverlayIntent(overlayIntent{url: "u1"}); !emit {
+		t.Fatal("expected initial overlay commit to emit")
+	}
 
 	c.setProtocol(imageProtocolNone)
 	if c.protocol != imageProtocolNone {
@@ -164,11 +165,10 @@ func TestSetProtocolInvalidatesAndRespectsOverride(t *testing.T) {
 	if _, ok := c.covers.Get(coverKey{url: "u1", cols: 10, rows: 10}); ok {
 		t.Fatal("expected rendered covers invalidated on protocol switch")
 	}
-	if c.kittyVisible {
-		t.Fatal("expected overlay state reset on protocol switch")
-	}
-	if !c.kittyForceRedraw {
-		t.Fatal("expected forced redraw on protocol switch")
+	// The reset forces retransmission; emitting also proves the slot was
+	// cleared — an uncleared slot would suppress the identical intent.
+	if emit, _, _ := c.commitOverlayIntent(overlayIntent{url: "u1"}); !emit {
+		t.Fatal("expected forced retransmit after protocol-switch reset")
 	}
 
 	c.protocolExplicit = true
@@ -184,11 +184,11 @@ func TestCoverQueuePruneExcept(t *testing.T) {
 		c.enqueueURL(u)
 	}
 	c.pruneExcept(map[string]struct{}{"b": {}, "d": {}})
-	if len(c.queue) != 2 {
-		t.Fatalf("expected 2 queued after prune, got %d", len(c.queue))
+	if c.queue.Len() != 2 {
+		t.Fatalf("expected 2 queued after prune, got %d", c.queue.Len())
 	}
-	for _, u := range c.queue {
-		if u != "b" && u != "d" {
+	for el := c.queue.Front(); el != nil; el = el.Next() {
+		if u := el.Value.(string); u != "b" && u != "d" {
 			t.Fatalf("unexpected queued url %q", u)
 		}
 	}

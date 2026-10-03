@@ -10,14 +10,23 @@ import (
 )
 
 func NewTUIExecutor(ctx context.Context, catalog spotify.PlaylistCatalog) loader.Executor {
-	if catalog == nil {
-		return nil
-	}
+	return NewDynamicCatalogExecutor(ctx, func() spotify.PlaylistCatalog { return catalog })
+}
+
+// NewDynamicCatalogExecutor reads the catalog per request, so backend swaps need no pool rebuild.
+func NewDynamicCatalogExecutor(ctx context.Context, current func() spotify.PlaylistCatalog) loader.Executor {
 	return func(ctx context.Context, req loader.LoadRequest) []loader.LoadResult {
 		switch req.Type {
 		case loader.LoadTypeImage:
 			return loadImages(ctx, req.Items, req.Timeout, httpImageProvider{}.Fetch)
 		case loader.LoadTypeContextImageURL:
+			if current == nil {
+				return nil
+			}
+			catalog := current()
+			if catalog == nil {
+				return nil
+			}
 			return resolveContextImageURLs(ctx, catalog, req.Items, req.Timeout)
 		}
 		return nil

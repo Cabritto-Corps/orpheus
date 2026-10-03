@@ -63,6 +63,8 @@ Settings > Images selects `rendered` or `pixelated`:
 - `rendered`: use kitty graphics when the terminal supports the kitty protocol. On other terminals, the existing half-block fallback still applies.
 - `pixelated`: always use half-block ANSI art, even on a terminal where kitty graphics would work.
 
+Inside tmux, kitty graphics additionally need `set -g allow-passthrough on` in `~/.tmux.conf` (tmux 3.3+ defaults it off): without it the multiplexer swallows the image sequences and covers stay blank. orpheus wraps its graphics for tmux passthrough automatically when `$TMUX` is set.
+
 An explicit `config.json` choice wins over `ORPHEUS_IMAGE_PROTOCOL`. If `config.json` leaves `images.style` unset, the environment controls startup: `kitty`, `ansi`, or `none`.
 
 ## Every `.env` variable

@@ -80,22 +80,68 @@ func (p *AppPlayer) scheduleConnectState(reason connectpb.PutStateReason) {
 	stopAndResetTimer(p.connectStateTimer, connectStateDebounce)
 }
 
+// connectPutJob is a prebuilt connect-state PUT: snapshot built on Run, sent by the worker; carries no shared references.
+type connectPutJob struct {
+	reason   connectpb.PutStateReason
+	inactive bool
+	connId   string
+	req      *connectpb.PutStateRequest
+}
+
 func (p *AppPlayer) flushConnectState() {
 	if p == nil || !p.pendingConnectPut {
 		return
 	}
 	reason := p.pendingConnectReason
 	p.pendingConnectPut = false
-	ctx, cancel := context.WithTimeout(p.ownerContext(), shuffleContextTimeout)
-	defer cancel()
-	if err := p.putConnectState(ctx, reason); err != nil {
-		p.runtime.Log.WithError(err).Error("failed put state after update")
+	p.enqueueConnectPut(p.buildConnectPut(reason))
+}
+
+// Keep-latest: drain pending, insert the newest; a nil channel (tests) is a no-op.
+func (p *AppPlayer) enqueueConnectPut(job connectPutJob) {
+	if p == nil || p.connectPutJobs == nil {
+		return
+	}
+	select {
+	case <-p.connectPutJobs:
+	default:
+	}
+	select {
+	case p.connectPutJobs <- job:
+	default:
 	}
 }
 
+func (p *AppPlayer) runConnectPutWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-p.connectPutJobs:
+			jobCtx, cancel := context.WithTimeout(p.ownerContext(), shuffleContextTimeout)
+			err := p.sendConnectPut(jobCtx, job)
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				p.runtime.Log.WithError(err).WithField("reason", job.reason.String()).Error("failed put state (background)")
+			}
+		}
+	}
+}
+
+func (p *AppPlayer) sendConnectPut(ctx context.Context, job connectPutJob) error {
+	if job.inactive {
+		return p.sess.Spclient().PutConnectStateInactive(ctx, job.connId, false)
+	}
+	return p.sess.Spclient().PutConnectState(ctx, job.connId, job.req)
+}
+
 func (p *AppPlayer) putConnectState(ctx context.Context, reason connectpb.PutStateReason) error {
+	return p.sendConnectPut(ctx, p.buildConnectPut(reason))
+}
+
+func (p *AppPlayer) buildConnectPut(reason connectpb.PutStateReason) connectPutJob {
 	if reason == connectpb.PutStateReason_BECAME_INACTIVE {
-		return p.sess.Spclient().PutConnectStateInactive(ctx, p.spotConnId, false)
+		return connectPutJob{reason: reason, inactive: true, connId: p.spotConnId}
 	}
 
 	var hasBeenPlayingForMs uint64
@@ -122,5 +168,5 @@ func (p *AppPlayer) putConnectState(ctx context.Context, reason connectpb.PutSta
 		HasBeenPlayingForMs:       hasBeenPlayingForMs,
 	}, reason)
 
-	return p.sess.Spclient().PutConnectState(ctx, p.spotConnId, putStateReq)
+	return connectPutJob{reason: reason, connId: p.spotConnId, req: putStateReq}
 }

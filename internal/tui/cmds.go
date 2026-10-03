@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
@@ -105,7 +105,7 @@ func StartContextTracksListener(ch <-chan librespot.ContextTracksResult, send fu
 			case res := <-ch:
 				items := make([]spotify.QueueItem, 0, len(res.Entries))
 				for _, e := range res.Entries {
-					items = append(items, spotify.QueueItem{ID: e.ID, Name: e.Name, Artist: e.Artist, DurationMS: e.DurationMS, ImageURL: e.ImageURL})
+					items = append(items, spotify.QueueItem{ID: e.ID, Name: e.Name, Artist: e.Artist, DurationMS: e.DurationMS, ImageURL: e.ImageURL, Queued: e.Queued})
 				}
 				send(trackPopupItemsMsg{token: res.ReqToken, items: items})
 			case <-ctx.Done():
@@ -134,13 +134,14 @@ func PlaybackStateFromLibrespot(u *librespot.PlaybackStateUpdate) (*spotify.Play
 		ShuffleState:  u.ShuffleState,
 		RepeatContext: u.RepeatContext,
 		RepeatTrack:   u.RepeatTrack,
+		ContextURI:    u.ContextURI,
 	}
 	if !u.QueueIncluded {
 		return status, nil, false, false
 	}
 	queue := make([]spotify.QueueItem, 0, len(u.Queue))
 	for _, e := range u.Queue {
-		queue = append(queue, spotify.QueueItem{ID: e.ID, Name: e.Name, Artist: e.Artist, DurationMS: e.DurationMS, ImageURL: e.ImageURL})
+		queue = append(queue, spotify.QueueItem{ID: e.ID, Name: e.Name, Artist: e.Artist, DurationMS: e.DurationMS, ImageURL: e.ImageURL, Queued: e.Queued})
 	}
 	return status, queue, u.QueueHasMore, true
 }
@@ -154,7 +155,11 @@ type seekDebounceMsg struct {
 }
 
 func (m model) tickCmd() tea.Cmd {
-	return tea.Tick(uiTickInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
+	return m.tickCmdWithInterval(uiTickInterval)
+}
+
+func (m model) tickCmdWithInterval(interval time.Duration) tea.Cmd {
+	return tea.Tick(interval, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 func (m model) navDebounceCmd(token int) tea.Cmd {
