@@ -18,8 +18,6 @@ func (m model) headerView() string {
 	var statusStr, centerL1, rightL1 string
 
 	if m.startupPending() {
-		// Startup hold: no play/pause indicator, no title, no volume bar yet —
-		// every surface lands in the single reveal instead of trickling.
 		statusStr = m.styles.styleHeaderPaused.Render("Orpheus")
 		centerL1 = m.styles.styleHeaderSub.Render("connecting to Spotify…")
 		device := m.icon(iconDevice, iconDeviceNF) + " " + m.deviceName
@@ -80,9 +78,8 @@ func (m model) headerView() string {
 		}
 		centerL2 = m.styles.styleHeaderSub.Render(truncate(parts, max(1, w-2)))
 	}
-	// One center column: the subtitle drops under the title's center, so the
-	// two lines never drift apart (each centered by a different formula held
-	// them a cell or two off each other).
+	// One center column for title and subtitle: expanding them through
+	// separate formulas drifts the two lines a cell or two apart.
 	var line2 string
 	if centerW2 := lipgloss.Width(centerL2); centerW2 > 0 {
 		centerW1 := lipgloss.Width(centerL1)
@@ -175,8 +172,8 @@ func (m model) playerBarView() string {
 
 	sep := m.styles.sectionDivider(barW)
 
-	// The bar is always in place; nil status renders the empty scaffold and
-	// the normal push flow fills it — no gate, no spinner, no shape change.
+	// Always in place: the empty scaffold fills via the normal push flow
+	// (user-directed — no gate, no shape change).
 	elapsedMS, durationMS, playing := 0, 0, false
 	if m.transport.status != nil {
 		elapsedMS = m.transport.status.ProgressMS
@@ -305,11 +302,10 @@ func (m model) helpModalView() string {
 		m.styles.styleModalHint.Render(hint), body, modalW, innerH)
 }
 
-// View content CANNOT carry overlay bytes (v2 parks non-SGR escapes in
-// zero-width cells the repaint engine never writes, and drops mid-text
-// ones outright). Save/restore keeps the renderer's cursor model exact
-// (CUP moves the cursor, DECRC puts it back); SGR-free bytes keep the
-// delta-tracked pen exact too.
+// View content cannot carry overlay bytes: v2 parks non-SGR escapes in
+// zero-width cells the repaint engine never writes and drops mid-text ones.
+// Save/restore framing keeps the renderer's cursor model exact; the bytes
+// stay SGR-free so its delta-tracked pen stays exact too.
 func frameKittyBytes(out string) string {
 	if out == "" {
 		return ""
@@ -324,10 +320,9 @@ func (m model) kittyOverlay() string {
 	return frameKittyBytes(out)
 }
 
-// Suppression is checked at delivery, not at build: a stale re-place
-// built pre-modal is dropped instead of resurrecting the image over
-// the scrim. Pure deletes bypass the guard (stray deletes self-heal
-// via re-place/restore; stray placements corrupt).
+// Suppression checks at delivery, not build: an emission built before a
+// modal opened would restore the image over the scrim. Pure deletes bypass
+// the guard — a stray delete self-heals, a stray placement corrupts.
 func (m model) kittyOverlayCmd() tea.Cmd {
 	out, content := m.kittyOverlayBytes()
 	if out == "" {
@@ -347,9 +342,8 @@ func (m model) kittyOverlayCmd() tea.Cmd {
 	}
 }
 
-// ORPHEUS_KITTY_DUMP captures the exact overlay bytes for a `cat`
-// bisect (app bytes vs terminal/tmux handling). Best-effort: diagnostics
-// must never break rendering.
+// ORPHEUS_KITTY_DUMP captures raw overlay bytes for a `cat` bisect;
+// diagnostics must never break rendering.
 func dumpKittyOverlay(out string) {
 	path := strings.TrimSpace(os.Getenv("ORPHEUS_KITTY_DUMP"))
 	if path == "" || out == "" {
@@ -363,9 +357,8 @@ func dumpKittyOverlay(out string) {
 	_, _ = f.WriteString(out)
 }
 
-// The bool marks image-data emissions: false (pure deletes) bypasses
-// delivery suppression; true (transmit, re-place) is guarded by
-// kittyOverlayCmd.
+// The bool marks content emissions: false (pure deletes) bypass delivery
+// suppression, true is guarded by kittyOverlayCmd.
 func (m model) kittyOverlayBytes() (string, bool) {
 	if m.ui.imgs == nil {
 		return "", false

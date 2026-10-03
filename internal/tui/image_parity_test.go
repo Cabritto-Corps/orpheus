@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/colorprofile"
 )
 
-// CDN-realistic probe: photographic JPEG at the ~300px variant size the
-// picker selects, so the benches measure the real swap-path workload.
+// Photographic JPEG at the picker's ~300px variant size, so benches
+// measure the real swap-path workload.
 func parityProbeImage(tb testing.TB) image.Image {
 	tb.Helper()
 	src := image.NewNRGBA(image.Rect(0, 0, 320, 320))
@@ -31,9 +31,8 @@ func parityProbeImage(tb testing.TB) image.Image {
 	return fitCachedImage(img)
 }
 
-// Both renderers pre-render at load; the per-skip swap must cost a lookup
-// on either side. These benches pin the parity the user asked for:
-// pixelated and kitty swaps within the same order of magnitude.
+// The warm swap must cost a lookup on either side: the user asked for
+// kitty/pixelated parity within the same order of magnitude.
 func BenchmarkWarmSwapKittyLookup(b *testing.B) {
 	c := newImgCacheWithSelection("rendered", true, func(string) string { return "xterm-kitty" })
 	img := parityProbeImage(b)
@@ -59,9 +58,8 @@ func BenchmarkWarmSwapPixelatedLookup(b *testing.B) {
 	}
 }
 
-// Load-path costs for reference: PNG encode (kitty) vs half-block string
-// build (pixelated) for the same source. Both run once per URL in
-// background workers, never on the swap path.
+// Load-path costs for reference: both run once per URL in background
+// workers, never on the swap path.
 func BenchmarkLoadPathKittyPNGEncode(b *testing.B) {
 	img := parityProbeImage(b)
 	b.ResetTimer()
@@ -82,8 +80,6 @@ func BenchmarkLoadPathHalfblockRender(b *testing.B) {
 	}
 }
 
-// One fetch must serve both renderers: the decoded source is shared, so a
-// protocol switch re-renders from cache instead of refetching bytes.
 func TestOneFetchServesBothProtocols(t *testing.T) {
 	c := newImgCacheWithSelection("rendered", true, func(string) string { return "xterm-kitty" })
 	if !c.beginLoad("art") {

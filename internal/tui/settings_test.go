@@ -128,12 +128,12 @@ func TestSettingsThemePickerEscReverts(t *testing.T) {
 	m, _, _, _ := newSettingsTestModel(t)
 
 	next := openViaKey(m)
-	next = sendEnter(next) // open picker
+	next = sendEnter(next)
 	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	if next.ui.settings.themeBackup != "default" {
 		t.Fatalf("backup preset = %q, want default", next.ui.settings.themeBackup)
 	}
-	next = sendEsc(next) // revert
+	next = sendEsc(next)
 	if next.ui.settings.mode != settingsModeRoot {
 		t.Fatal("esc should return to the settings root")
 	}
@@ -151,7 +151,7 @@ func TestSettingsThemePickerDefersArtRegenToSave(t *testing.T) {
 
 	defaultKey := likedArtPaletteKey(m.likedArtThemeColors())
 	next := openViaKey(m)
-	next = sendEnter(next) // open picker
+	next = sendEnter(next)
 	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	// Live preview must not pay the procedural regen per keypress.
 	if likedArtKey != defaultKey {
@@ -170,9 +170,9 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 	m, keysPath, _, _ := newSettingsTestModel(t)
 
 	next := openViaKey(m)
-	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown}) // to theme options row
-	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown}) // to keybinds row
-	next = sendEnter(next)                                // -> keys list
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = sendEnter(next)
 	if next.ui.settings.mode != settingsModeKeys {
 		t.Fatalf("enter on keybinds row should open the keys list, mode=%v", next.ui.settings.mode)
 	}
@@ -182,7 +182,7 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 		}
 		next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	next = sendEnter(next) // start capture
+	next = sendEnter(next)
 	if next.ui.settings.mode != settingsModeCapture || next.ui.settings.captureKey != "play_pause" {
 		t.Fatalf("capture mode not entered: mode=%v capture=%q", next.ui.settings.mode, next.ui.settings.captureKey)
 	}
@@ -192,12 +192,12 @@ func TestSettingsKeyCaptureRoundTrip(t *testing.T) {
 		t.Fatal("esc should cancel capture back to the keys list")
 	}
 
-	next = sendEnter(next) // capture again
+	next = sendEnter(next)
 	next = sendKey(next, "j")
 	if next.ui.settings.pendingKey != "j" {
 		t.Fatalf("capture should arm pending key after first press, got %q", next.ui.settings.pendingKey)
 	}
-	next = sendEnter(next) // confirm
+	next = sendEnter(next)
 	if next.ui.settings.captureKey != "" || next.ui.settings.pendingKey != "" {
 		t.Fatal("capture should complete after enter confirm")
 	}
@@ -232,7 +232,7 @@ func TestSettingsCrossfadePersistsToConfigFileWithRestartHint(t *testing.T) {
 		t.Fatalf("cursor = %d, want 3", next.ui.settings.cursor)
 	}
 
-	next = sendEnter(next) // toggle on
+	next = sendEnter(next)
 	if !next.ui.settings.crossfadeEnabled {
 		t.Fatal("enter should toggle crossfade on")
 	}
@@ -249,7 +249,7 @@ func TestSettingsCrossfadePersistsToConfigFileWithRestartHint(t *testing.T) {
 		t.Fatalf("crossfade not persisted:\n%s", got)
 	}
 
-	next = sendKey(next, "+") // + steps seconds
+	next = sendKey(next, "+")
 	if next.ui.settings.crossfadeSeconds != 4 {
 		t.Fatalf("crossfadeSeconds = %v, want 4", next.ui.settings.crossfadeSeconds)
 	}
@@ -295,10 +295,10 @@ func TestSettingsCaptureEscAndNavigation(t *testing.T) {
 	m, _, _, _ := newSettingsTestModel(t)
 
 	next := openViaKey(m)
-	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown}) // theme options row
-	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown}) // keybinds row
-	next = sendEnter(next)                                // keys list
-	next = sendEnter(next)                                // capture for "tab"
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = send(next, tea.KeyPressMsg{Code: tea.KeyDown})
+	next = sendEnter(next)
+	next = sendEnter(next)
 	if next.ui.settings.mode != settingsModeCapture {
 		t.Fatal("expected capture mode")
 	}
@@ -362,7 +362,6 @@ func TestKeysTableRendersRows(t *testing.T) {
 	}
 }
 
-// Every rendered line must land exactly at the box budget.
 func TestKeysTableLinesFitBudget(t *testing.T) {
 	m := guardModel(t, frameVariant{width: 100, height: 40, modal: "settings-keys"})
 	for _, w := range []int{12, 24, 40, 80, 120} {

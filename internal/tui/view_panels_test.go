@@ -65,9 +65,9 @@ func TestCoverPlaceholderKeepsOuterCellDimensions(t *testing.T) {
 	assertBlockDimensions(t, m.placeholderArt(cols, rows), cols, rows)
 }
 
-// placeholderArt must render the exact shell the loaded cover gets — the
-// coverOrPlaceholder empty states — or the border pops in and out around
-// decode time (the filter-exit wobble: "the moving of the border").
+// The placeholder must render the exact shell the loaded cover gets, or
+// the border pops in and out around decode (the reported "moving of the
+// border" filter-exit wobble).
 func TestPlaceholderArtMatchesCoverShell(t *testing.T) {
 	for _, frame := range []string{"", "rounded", "thick"} {
 		m := NewLoaderModel()
@@ -89,10 +89,6 @@ func TestPlaceholderArtMatchesCoverShell(t *testing.T) {
 	}
 }
 
-// The album panel surfaces the same typed rate-limit hint as the playlists
-// panel: a 429 must name its retry window on both tabs, not just one. The
-// assertion targets the styled hint text, not the raw error string (which
-// already carries a duration).
 func TestAlbumPanelShowsRateLimitHint(t *testing.T) {
 	m := testListModel()
 	m.browse.playlistsErr = &spotify.RateLimitError{RetryAfter: 4 * time.Hour}

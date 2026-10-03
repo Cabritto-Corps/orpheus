@@ -21,7 +21,6 @@ func framedTestModel() model {
 func TestCoverArtDerivesSingleRect(t *testing.T) {
 	m := NewLoaderModel()
 
-	// Framed cell: art insets one cell inside the ring on every side.
 	rect := framedTestModel().coverArt(30, 15)
 	if !rect.framed {
 		t.Fatal("expected 30x15 cell to take the frame")
@@ -33,7 +32,6 @@ func TestCoverArtDerivesSingleRect(t *testing.T) {
 		t.Fatalf("expected framed anchor one cell inside the cell origin, got (%d,%d)", rect.row, rect.col)
 	}
 
-	// Unframed cell: identity.
 	rect = m.coverArt(4, 2)
 	if rect.framed {
 		t.Fatal("expected 4x2 cell to skip the frame")
@@ -57,9 +55,7 @@ func TestKittyOverlayFramedPlacementMatchesPanelAnchor(t *testing.T) {
 	m.ui.imgs.protocol = imageProtocolKitty
 	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
 
-	// The overlay must place the image at the derived rect — CUP anchor
-	// plus display extents — so the ANSI cell and the kitty placement
-	// agree by construction (both consume coverArt).
+	// The ANSI cell and the kitty placement agree by construction (both consume coverArt).
 	rect := m.coverArt(m.bodyLayout().coverCols, m.bodyLayout().coverRows)
 	if !rect.framed {
 		t.Fatal("expected the 120x40 layout to take the frame")
@@ -98,7 +94,6 @@ func TestOverlayDisplacedImageDeletedByID(t *testing.T) {
 		t.Fatal("expected a fresh transmission ID so renderer diff cannot swallow the emission")
 	}
 
-	// End to end: the old image ID is explicitly deleted, never globally.
 	m := NewLoaderModel()
 	m.ui.width = 120
 	m.ui.height = 40
@@ -119,9 +114,8 @@ func TestOverlayDisplacedImageDeletedByID(t *testing.T) {
 		t.Fatal("expected redraw when player cover URL changes")
 	}
 	// The old image drops only after the new cover lands fully placed:
-	// terminals can present mid-transmission, and a purge-first order
-	// would flash the gap. Data goes with the drop (nothing re-places
-	// a displaced cover).
+	// purge-first would flash the gap (terminals can present mid-transmission);
+	// d=I drops data because nothing re-places a displaced cover.
 	if want := fmt.Sprintf("d=I,i=%s", shownID); !strings.Contains(second, want) {
 		t.Fatalf("expected old image purged by ID (%q), got %q", want, second)
 	}
@@ -139,10 +133,8 @@ func TestOverlayDisplacedImageDeletedByID(t *testing.T) {
 	}
 }
 
-// transmitImageID extracts the stored image ID from a transmit emission's
-// a=T packet (options sit between the packet framing and the first ';').
-// It targets the a=T packet specifically: emissions can carry leading
-// delete packets whose own i= names a different image.
+// Target the a=T packet specifically: emissions can carry leading delete
+// packets whose own i= names a different image.
 func transmitImageID(t *testing.T, emission string) string {
 	t.Helper()
 	for _, pkt := range strings.Split(emission, "\x1b_G")[1:] {
@@ -168,11 +160,9 @@ func transmitImageID(t *testing.T, emission string) string {
 }
 
 func TestKittyUnchangedIntentStaysSilent(t *testing.T) {
-	// An unchanged visible intent emits nothing: image data and placement
-	// already live in the terminal, and re-placing on every frame churned
-	// erase/put loops the steady flow shows as flicker. The one reason an
-	// unchanged frame still emits is a modal-close restore, which reneeds
-	// the placement hidden under the modal.
+	// An unchanged intent emits nothing: re-placing every frame churned
+	// erase/put loops the steady flow shows as flicker. The one unchanged
+	// emission is a modal-close restore, which re-places the hidden placement.
 	t.Setenv("TMUX", "")
 	m := framedTestModel()
 	m.ui.width = 120
@@ -193,8 +183,6 @@ func TestKittyUnchangedIntentStaysSilent(t *testing.T) {
 		t.Fatalf("expected an unchanged intent to stay silent, got %q", second)
 	}
 
-	// Modal hide (image-scoped, data kept), then close: the restore is the
-	// only silent-intent emission, a payload-free re-place at the same rect.
 	m.ui.helpOpen = true
 	if hide := m.kittyOverlay(); hide != "" && !strings.Contains(hide, "d=I") {
 		if !strings.Contains(hide, fmt.Sprintf("d=i,i=%s", shownID)) {
@@ -266,10 +254,6 @@ func assertPurgeAfterPayload(t *testing.T, emission, payload, what string) {
 	}
 }
 
-// A cover change is one direct swap: the new cover transmits in the
-// first emission with the slot committing to it immediately — no blend
-// intermediates, nothing pending. The old cover holds until the new one
-// is loaded, then swaps atomically.
 func TestKittyCoverChangeIsOneDirectSwap(t *testing.T) {
 	t.Setenv("TMUX", "")
 	m := framedTestModel()
@@ -290,28 +274,21 @@ func TestKittyCoverChangeIsOneDirectSwap(t *testing.T) {
 	m.transport.status.AlbumImageURL = "u2"
 	out := m.kittyOverlay()
 	newPayload := m.ui.imgs.encodedFor("u2")
-	// The slot commits to the new cover in the same emission: anything
-	// still naming the old URL means an intermediate (fade) is pending.
 	if got := m.ui.imgs.kittyDisplayedURL(); got != "u2" {
 		t.Fatalf("cover change must commit immediately, slot still shows %q", got)
 	}
 	assertPurgeAfterPayload(t, out, newPayload, "cover change")
-	// z=-1 is bonus layering under text only, not modal protection;
-	// modal frames delete placements separately.
 	if !strings.Contains(out, "z=-1") {
 		t.Fatalf("cover transmit must sit under text (z=-1), got %q", tail(out, 200))
 	}
 	if got := strings.Count(out, "a=T"); got != 1 {
 		t.Fatalf("cover change must be exactly one transmit, got %d in %q", got, tail(out, 200))
 	}
-	// Settled: the next frame re-places from stored data, no retransmit.
 	if again := m.kittyOverlay(); strings.Contains(again, "a=T") {
 		t.Fatalf("settled swap must re-place, not retransmit, got %q", tail(again, 200))
 	}
 }
 
-// While the new cover is still loading the old one holds: no delete,
-// no blank — the load completion drives the swap.
 func TestKittyCoverHoldWhileLoading(t *testing.T) {
 	t.Setenv("TMUX", "")
 	m := framedTestModel()
@@ -335,7 +312,6 @@ func TestKittyCoverHoldWhileLoading(t *testing.T) {
 	}
 }
 
-// Rapid target changes settle on the newest cover with one placement.
 func TestKittyRapidChangesSettleOnNewest(t *testing.T) {
 	t.Setenv("TMUX", "")
 	m := framedTestModel()

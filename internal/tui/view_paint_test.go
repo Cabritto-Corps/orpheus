@@ -13,8 +13,7 @@ import (
 )
 
 // The view paints backgrounds by re-asserting them after every style reset,
-// so any rendered row must never print text with no background set. This
-// replays the SGR state and counts violations (holes), which would show as
+// so no rendered text may print with no background set; violations show as
 // page-colored notches inside themed bands.
 var paintTokenRe = regexp.MustCompile(`(\x1b\[[0-9;]*m)|([^\x1b]+)`)
 
@@ -46,9 +45,7 @@ func withPaintTestModel(t *testing.T, w, h int) model {
 	return withPaintTestModelStyle(t, w, h, "solid")
 }
 
-// withPaintTestModelStyle renders under one background mode: solid is
-// the shipped default, transparent the unpainted one. Styles live on the
-// returned model, so mode switches cannot leak between tests.
+// Styles live on the returned model, so mode switches cannot leak between tests.
 func withPaintTestModelStyle(t *testing.T, w, h int, style string) model {
 	t.Helper()
 	m, _, _, _ := newSettingsTestModel(t)
@@ -94,8 +91,7 @@ func TestModalPaintNeverLosesBackground(t *testing.T) {
 		}},
 	}
 	for _, variant := range variants {
-		// The painted mode only: in transparent mode the backdrop keeps
-		// no page fill by design (see TestTransparentModalKeepsChrome).
+		// Transparent keeps no page fill by design (TestTransparentModalKeepsChrome).
 		for _, style := range []string{"solid"} {
 			for _, size := range [][2]int{{100, 40}, {80, 30}, {60, 24}} {
 				m := withPaintTestModelStyle(t, size[0], size[1], style)
@@ -111,8 +107,7 @@ func TestModalPaintNeverLosesBackground(t *testing.T) {
 }
 
 func TestFramePaintNeverLosesBackground(t *testing.T) {
-	// The painted mode only: transparent frames are unpainted by design
-	// (covered by TestTransparentFramePaintsNoPageBackground instead).
+	// Transparent frames are unpainted by design (TestTransparentFramePaintsNoPageBackground).
 	for _, style := range []string{"solid"} {
 		for _, size := range [][2]int{{100, 40}, {80, 30}, {60, 24}} {
 			m := withPaintTestModelStyle(t, size[0], size[1], style)
@@ -125,9 +120,6 @@ func TestFramePaintNeverLosesBackground(t *testing.T) {
 	}
 }
 
-// TestTransparentFramePaintsNoPageBackground pins the transparent
-// contract: no page surface anywhere in the frame, while overlay chrome
-// (here: the active-tab highlight) keeps working.
 func TestTransparentFramePaintsNoPageBackground(t *testing.T) {
 	m := withPaintTestModelStyle(t, 100, 40, "transparent")
 	out := m.View().Content
@@ -138,18 +130,15 @@ func TestTransparentFramePaintsNoPageBackground(t *testing.T) {
 	if strings.Contains(out, pageSeq) {
 		t.Fatal("transparent frame paints the page background")
 	}
-	// Chrome keeps working: match the bare SGR params, not the standalone
-	// sequence — lipgloss merges the tab highlight's fg+bg into one
-	// combined sequence (the TestSelectedRowKeepsHighlightThroughFragments
-	// pattern).
+	// lipgloss merges the tab highlight's fg+bg into one combined sequence,
+	// so match the bare SGR params, not the standalone sequence.
 	if dimParams := strings.TrimPrefix(m.styles.bgSequence(m.styles.colorDimBlue), "\x1b["); !strings.Contains(out, dimParams) {
 		t.Fatal("transparent frame lost the active-tab highlight")
 	}
 }
 
-// TestTransparentModalKeepsChrome: modals are floating chrome, not frame
-// zones, so the box, the dim pattern and the selection highlight all
-// survive transparent mode — only the page fill goes away.
+// Modals are floating chrome, not frame zones: only the page fill goes
+// away in transparent mode.
 func TestTransparentModalKeepsChrome(t *testing.T) {
 	m := withPaintTestModelStyle(t, 100, 40, "transparent")
 	m.openSettings()
@@ -173,17 +162,16 @@ func TestSelectedRowKeepsHighlightThroughFragments(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "0")
 
-	// a styled fragment inside a selected row, like the real gauge bar
+	// A styled fragment inside a selected row, like the real gauge bar.
 	st := buildThemeStyles(themePresetState("default"))
 	row := "Crossfade|" + lipgloss.NewStyle().Foreground(st.colorBlue).Render("██████") + "|end"
 	out := st.modalRow(row, "", true, 96)
 
 	selBg := st.bgSequence(st.colorSelectionBg)
 	selParams := strings.TrimPrefix(selBg, "\x1b[")
-	// Reset spellings the renderers emit: v1 terminates styles with
-	// \x1b[0m, v2 abbreviates to \x1b[m. Matching one literal passed
-	// vacuously after the migration (the loop below never iterated),
-	// so the guard matches both.
+	// v1 terminates styles with \x1b[0m, v2 abbreviates to \x1b[m; matching
+	// one literal passed vacuously after the migration (the loop below never
+	// iterated), so the guard matches both spellings.
 	nextReset := func(s string) (idx, length int) {
 		idx, length = -1, 0
 		for _, r := range []string{"\x1b[0m", "\x1b[m"} {

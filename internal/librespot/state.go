@@ -80,7 +80,7 @@ func (p *AppPlayer) scheduleConnectState(reason connectpb.PutStateReason) {
 	stopAndResetTimer(p.connectStateTimer, connectStateDebounce)
 }
 
-// connectPutJob is a prebuilt connect-state PUT: built on Run, sent by the worker.
+// connectPutJob is a prebuilt connect-state PUT: snapshot built on Run, sent by the worker; carries no shared references.
 type connectPutJob struct {
 	reason   connectpb.PutStateReason
 	inactive bool
@@ -97,7 +97,7 @@ func (p *AppPlayer) flushConnectState() {
 	p.enqueueConnectPut(p.buildConnectPut(reason))
 }
 
-// enqueueConnectPut keeps the latest snapshot; nil-channel safe for tests.
+// Keep-latest: drain pending, insert the newest; a nil channel (tests) is a no-op.
 func (p *AppPlayer) enqueueConnectPut(job connectPutJob) {
 	if p == nil || p.connectPutJobs == nil {
 		return
@@ -139,7 +139,6 @@ func (p *AppPlayer) putConnectState(ctx context.Context, reason connectpb.PutSta
 	return p.sendConnectPut(ctx, p.buildConnectPut(reason))
 }
 
-// buildConnectPut snapshots the PUT request on Run; the job carries no shared references.
 func (p *AppPlayer) buildConnectPut(reason connectpb.PutStateReason) connectPutJob {
 	if reason == connectpb.PutStateReason_BECAME_INACTIVE {
 		return connectPutJob{reason: reason, inactive: true, connId: p.spotConnId}

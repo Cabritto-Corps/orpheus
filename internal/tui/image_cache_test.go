@@ -20,7 +20,7 @@ import (
 
 func NewLoaderModel() model {
 	m := newModel(context.Background(), nil, config.Config{DeviceName: "orpheus"}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), nil)))
-	// Past the startup gate: most tests exercise the steady-state view paths.
+	// Past the startup gate: most tests exercise steady-state view paths.
 	m.browse.librarySettled = true
 	return m
 }
@@ -65,11 +65,9 @@ func TestHandleAlbumKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
 	}
 }
 
-// A selection change must emit the kitty swap on the keypress itself.
-// A fully prefetched cover produces no load-completion event at all
-// (beginLoad short-circuits the cmd), so emission driven by
-// imageLoadedMsg or the periodic tick lagged the cursor by up to a
-// second when idle — prefetch made the swap slower, not faster.
+// Prefetched covers produce no load-completion event, so emission driven by
+// imageLoadedMsg or the periodic tick lagged the cursor when idle — the
+// swap must ride the keypress itself.
 func TestNavKeyEmitsKittySwapForPrefetchedCover(t *testing.T) {
 	t.Setenv("TMUX", "")
 	flat := func(c color.RGBA) image.Image {
@@ -118,8 +116,7 @@ func TestNavKeyEmitsKittySwapForPrefetchedCover(t *testing.T) {
 				m.browse.playlistList.Select(0)
 			}
 
-			// Show the first cover so the keypress swaps rather than
-			// initialises the overlay slot.
+			// Show the first cover so the keypress swaps rather than initialises the slot.
 			primed := m.kittyOverlayCmd()
 			if primed == nil {
 				t.Fatal("expected an initial cover emission")
@@ -148,8 +145,7 @@ func TestNavKeyEmitsKittySwapForPrefetchedCover(t *testing.T) {
 			if selURL != "u2" {
 				t.Fatalf("expected the cursor on u2, got %q", selURL)
 			}
-			// The swap cannot ride a load completion: prefetch already
-			// holds the cover, so loadImageCmd short-circuits to nil.
+			// Precondition: prefetch already holds the cover, so loadImageCmd short-circuits to nil.
 			if got.loadImageCmd("u2", false) != nil {
 				t.Fatal("precondition broken: cover is not fully prefetched")
 			}
@@ -160,8 +156,6 @@ func TestNavKeyEmitsKittySwapForPrefetchedCover(t *testing.T) {
 	}
 }
 
-// batchEmitsRaw unwraps tea.BatchMsg layers and reports whether any
-// command delivers a tea.RawMsg whose bytes carry every want substring.
 func batchEmitsRaw(cmd tea.Cmd, wants ...string) bool {
 	if cmd == nil {
 		return false
@@ -353,8 +347,7 @@ func TestHandleImageLoadedMsgForCurrentPlayerCoverForcesKittyRedraw(t *testing.T
 
 	nextModel, cmd := m.handleImageLoadedMsg(imageLoadedMsg{url: "u1"})
 	got := nextModel.(model)
-	// The forced redraw rides the overlay command straight to the wire
-	// instead of waiting for a tick.
+	// Redraw must reach the wire immediately, not wait for a tick.
 	if cmd == nil {
 		t.Fatal("expected the forced redraw to ride the overlay command")
 	}
@@ -365,8 +358,7 @@ func TestHandleImageLoadedMsgForCurrentPlayerCoverForcesKittyRedraw(t *testing.T
 	if !strings.Contains(fmt.Sprint(msg.Msg), "d=i") {
 		t.Fatalf("expected the overlay command to carry the redraw, got %q", fmt.Sprint(msg.Msg))
 	}
-	// The load forces retransmission: the same intent must emit again so
-	// the newly available encoding actually reaches the terminal.
+	// The load forces retransmission so the new encoding reaches the terminal.
 	if emit, _, _ := got.ui.imgs.commitOverlayIntent(intent); !emit {
 		t.Fatal("expected successful current player cover load to force kitty redraw")
 	}
@@ -374,9 +366,8 @@ func TestHandleImageLoadedMsgForCurrentPlayerCoverForcesKittyRedraw(t *testing.T
 
 func TestHandleImageLoadedMsgForOtherURLDoesNotForceKittyRedraw(t *testing.T) {
 	m := NewLoaderModel()
-	// A laid-out terminal: at zero width the overlay evaluation inside the
-	// handler would clear the slot via the empty-rect path, which is
-	// correct bookkeeping but not what this test is about.
+	// Zero width would clear the slot via the empty-rect path — correct
+	// bookkeeping, but not what this test targets.
 	m.ui.width = 120
 	m.ui.height = 40
 	m.ui.activeTab = tabPlayer
@@ -720,10 +711,9 @@ func TestLoadImageCmdRepairsMissingKittyEncodingFromCachedImage(t *testing.T) {
 	}
 }
 
-// An unchanged visible intent must emit NOTHING: the image and its
-// placement are already in the terminal, and re-placing would churn an
-// erase/put loop the steady flow shows as flicker. Force slots (repaints,
-// protocol resets) still retransmit deliberately.
+// Unchanged intent must emit nothing: re-placing churns an erase/put loop
+// the steady flow shows as flicker; force slots (repaints, protocol resets)
+// still retransmit deliberately.
 func TestKittyOverlayStaysSilentWhenUnchanged(t *testing.T) {
 	t.Setenv("TMUX", "")
 	m := NewLoaderModel()
@@ -779,9 +769,8 @@ func TestKittyOverlayDeletesOnceWhenImageDisappears(t *testing.T) {
 	}
 }
 
-// placementIDOf extracts the placement ID (p=<n>) from a nil-payload
-// placement packet. Re-place and hide packets carry no base64, so the
-// p= is the placement field (the a=p action never pairs p with =).
+// Re-place and hide packets carry no base64 payload, so a p= here is the
+// placement field.
 func placementIDOf(t *testing.T, packet string) string {
 	t.Helper()
 	idx := strings.LastIndex(packet, "p=")
@@ -800,12 +789,8 @@ func placementIDOf(t *testing.T, packet string) string {
 }
 
 func TestKittyOverlayHidesUnderAnyModal(t *testing.T) {
-	// Every modal frame re-deletes image-scoped (no p=) while the slot
-	// believes an image is live — never once-and-silent, so a missed delete
-	// or resurrected placement self-heals. The delete names the image only:
-	// placement IDs churn every frame and Ghostty has point-delete gaps.
-	// Re-placing during a modal would redraw the cover over the scrim:
-	// z=-1 shows through default-background cells.
+	// Re-delete every frame (self-heals), image-scoped (IDs churn, Ghostty
+	// point-delete gaps); z=-1 shows through background cells, so no re-place.
 	t.Setenv("TMUX", "")
 	cases := []struct {
 		name string
@@ -850,9 +835,7 @@ func TestKittyOverlayHidesUnderAnyModal(t *testing.T) {
 }
 
 func TestKittyOverlayHidesTransmitBeforeFirstReplace(t *testing.T) {
-	// A modal opened between the transmit and the first re-place hides
-	// with the same image-scoped delete (the stored data must survive
-	// for close); the hide repeats while the modal stays open.
+	// Same image-scoped hide, repeating while open: the stored data must survive for close.
 	t.Setenv("TMUX", "")
 	m := NewLoaderModel()
 	m.ui.width = 120
@@ -879,9 +862,7 @@ func TestKittyOverlayHidesTransmitBeforeFirstReplace(t *testing.T) {
 }
 
 func TestKittyOverlayRestoresAfterModalCloses(t *testing.T) {
-	// The modal-close frame re-places from the still-stored data (fresh
-	// placement ID, no retransmit): the hide delete was placement-only
-	// precisely so the data survives the modal.
+	// The hide delete was image-scoped precisely so the stored data survives the modal.
 	t.Setenv("TMUX", "")
 	m := NewLoaderModel()
 	m.ui.width = 120
@@ -927,10 +908,8 @@ func TestKittyOverlayRestoresAfterModalCloses(t *testing.T) {
 	}
 }
 
-// transmitIDOf extracts the image ID (i=<n>) from the transmit (a=T)
-// packet's control section (before its payload ';'): base64 payload
-// bytes — and purge packets riding the same emission — must never be
-// scanned for the ID.
+// Scan the a=T control section only: base64 payload bytes and purge
+// packets riding the same emission must never be scanned for the ID.
 func transmitIDOf(t *testing.T, emission string) string {
 	t.Helper()
 	for seg := range strings.SplitSeq(emission, "\x1b_G") {
@@ -957,11 +936,8 @@ func transmitIDOf(t *testing.T, emission string) string {
 }
 
 func TestKittyStyleSwitchToPixelatedPurgesShownImage(t *testing.T) {
-	// kitty -> pixelated must purge the shown image's data and placements
-	// exactly once: the switch resets the slot without naming the image,
-	// so the pending purge goes out on the next command and the path
-	// stays silent after (the half-block art underneath is healthy — the
-	// bug was the stranded corpse on top of it).
+	// The bug was a stranded image corpse over healthy half-block art; the
+	// switch resets the slot unnamed, so the purge rides the next command.
 	t.Setenv("TMUX", "")
 	m := NewLoaderModel()
 	m.ui.width = 120
@@ -1008,9 +984,7 @@ func TestKittyStyleSwitchToPixelatedPurgesShownImage(t *testing.T) {
 }
 
 func TestKittyAutoFallbackPurgesShownImage(t *testing.T) {
-	// The automatic kitty -> half-block fallback (repeated player cover
-	// failures) strands the same way a manual style switch does: the
-	// pending purge must land on the next overlay command.
+	// The auto fallback strands like a manual style switch: the pending purge rides the next overlay command.
 	t.Setenv("TMUX", "")
 	m := NewLoaderModel()
 	m.ui.width = 120
@@ -1046,10 +1020,8 @@ func TestKittyAutoFallbackPurgesShownImage(t *testing.T) {
 }
 
 func TestKittySwitchRoundTripPurgesEveryTransmittedImage(t *testing.T) {
-	// kitty -> pixelated -> kitty -> pixelated with no emissions between
-	// the first two switches: every transmitted ID must appear in a d=I
-	// purge (no leak per round trip), and the stranded purge rides up
-	// front of the round-trip transmit rather than dropping.
+	// Every transmitted ID must appear in a d=I purge; the stranded purge
+	// rides ahead of the next transmit rather than dropping.
 	t.Setenv("TMUX", "")
 	m := NewLoaderModel()
 	m.ui.width = 120
@@ -1106,8 +1078,6 @@ func TestKittySwitchRoundTripPurgesEveryTransmittedImage(t *testing.T) {
 }
 
 func TestPixelatedStartupEmitsNoGraphicsBytes(t *testing.T) {
-	// Explicit pixelated from the start: the overlay path stays silent
-	// across ticks — no transmit, no purge, no placement.
 	t.Setenv("TMUX", "")
 	m := NewLoaderModel()
 	m.ui.width = 120
@@ -1127,10 +1097,8 @@ func TestPixelatedStartupEmitsNoGraphicsBytes(t *testing.T) {
 }
 
 func TestKittyOverlayPlayerHoldsPreviousImageWhileNextLoads(t *testing.T) {
-	// Same surface, content still loading: the old cover stays up until
-	// the new one is ready, so track changes never flash a blank gap.
-	// (A tab switch is a different surface and still clears: see
-	// TestKittyOverlayClearsStaleImageOnTabSwitchWithoutEncodedCover.)
+	// The old cover holds until the new one is ready — track changes must
+	// never flash a blank gap (a tab switch still clears, see the test below).
 	m := NewLoaderModel()
 	m.ui.width = 120
 	m.ui.height = 40
@@ -1154,8 +1122,6 @@ func TestKittyOverlayPlayerHoldsPreviousImageWhileNextLoads(t *testing.T) {
 }
 
 func TestKittyOverlayPlayerHoldsWhileTransportTransitionPending(t *testing.T) {
-	// A pending transport transition is still the same surface: hold the
-	// old cover instead of blanking it while the next one loads.
 	m := NewLoaderModel()
 	m.ui.width = 120
 	m.ui.height = 40
@@ -1223,9 +1189,7 @@ func TestAlbumCoverPanelKittyLoadingShellMatchesLoaded(t *testing.T) {
 	}
 
 	loading := m.albumCoverPanel(40, 20, 30, 15)
-	// Shell parity: the loading state renders the same shell the decoded
-	// cover gets — the default theme is unframed, so no border may pop
-	// in and out around decode.
+	// The default theme is unframed: no border may pop in and out around decode.
 	if strings.Contains(loading, "╭") {
 		t.Fatalf("loading shell grew a border the default cover never shows: %q", loading)
 	}

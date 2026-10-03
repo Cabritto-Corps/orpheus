@@ -21,8 +21,7 @@ func pressRune(r rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: r, Text: string(r)}
 }
 
-// batchContainsQuit unwraps tea.BatchMsg layers so tests can find a
-// tea.Quit hidden inside the batched commands browse handlers return.
+// tea.Quit hides inside the batched commands browse handlers return.
 func batchContainsQuit(cmd tea.Cmd) bool {
 	if cmd == nil {
 		return false
@@ -33,8 +32,7 @@ func batchContainsQuit(cmd tea.Cmd) bool {
 	return isQuitCmd(cmd)
 }
 
-// Bubbles v2 binds its list quit to `v` (v1 bound q/esc). The app owns
-// quitting, so `v` must never escape a browse tab as tea.Quit.
+// Bubbles v2 binds the list quit to `v` (v1 bound q/esc); the app owns quitting.
 func TestBrowseListVKeyDoesNotQuit(t *testing.T) {
 	for _, tab := range []tab{tabPlaylists, tabAlbums} {
 		m := testListModel()
@@ -47,7 +45,7 @@ func TestBrowseListVKeyDoesNotQuit(t *testing.T) {
 }
 
 // The popup forwards unmatched keys to its bubbles list, which must not
-// punch tea.Quit through the modal focus trap either.
+// punch tea.Quit through the modal focus trap.
 func TestTrackPopupVKeyDoesNotQuit(t *testing.T) {
 	m := testListModel()
 	m.ui.trackPopupOpen = true
@@ -58,9 +56,9 @@ func TestTrackPopupVKeyDoesNotQuit(t *testing.T) {
 	}
 }
 
-// The v-quit incident proved structural assertions miss re-enabled bindings:
-// press the generated default vocabulary and require no tea.Quit.
-// Single-rune failures exit the app.
+// Structural assertions missed re-enabled bindings in the v-quit incident:
+// press the generated default vocabulary and require no tea.Quit — a
+// single-rune failure exits the app.
 func TestBrowseListsYieldNoQuitForDefaultVocabulary(t *testing.T) {
 	km := list.DefaultKeyMap()
 	bindings := []key.Binding{
@@ -114,8 +112,7 @@ func TestBrowseListsYieldNoQuitForDefaultVocabulary(t *testing.T) {
 	}
 }
 
-// Guard the other direction: disabling the list's quit must not take the
-// app's own quit binding with it.
+// Disabling the list quit must not take the app's own quit binding with it.
 func TestQuitKeyStillQuitsOnBrowse(t *testing.T) {
 	m := testListModel()
 	m.ui.activeTab = tabPlaylists
@@ -125,9 +122,8 @@ func TestQuitKeyStillQuitsOnBrowse(t *testing.T) {
 	}
 }
 
-// Rebinding away must restore the page key: the reconciliation rebuilds
-// from the library defaults every keypress instead of stripping in place,
-// so giving repeat another key hands `l` back to paging.
+// The reconciliation rebuilds from the library defaults every keypress
+// instead of stripping in place, so rebinding repeat hands `l` back to paging.
 func TestListKeyMapsRestorePageKeysOnRebind(t *testing.T) {
 	m := testListModel()
 	m.ui.keys.Loop = key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "repeat"))
@@ -137,7 +133,7 @@ func TestListKeyMapsRestorePageKeysOnRebind(t *testing.T) {
 	}
 }
 
-// queue-remove's `d` belong to the app, and the list quit binding must be
+// `d` belongs to the app (queue-remove), and the list quit binding must be
 // disabled outright. Filter keeps following the live search binding.
 func TestListKeyMapsYieldToRegistry(t *testing.T) {
 	m := testListModel()

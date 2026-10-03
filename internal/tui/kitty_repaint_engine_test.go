@@ -10,11 +10,9 @@ import (
 	"orpheus/internal/spotify"
 )
 
-// View content cannot carry kitty bytes: the v2 pipeline parks non-SGR
-// escapes in zero-width cells the repaint engine never writes (and drops
-// mid-text ones outright), so anything graphics-flavored in Content dies
-// silently no matter how correct the bytes are. The overlay travels via
-// tea.Raw instead; this pins the separation on both sides.
+// v2 silently drops graphics bytes from View() content (zero-width cells,
+// mid-text escapes), however correct the bytes are; the overlay travels via
+// tea.Raw.
 func TestViewContentCarriesNoGraphicsBytes(t *testing.T) {
 	t.Setenv("TMUX", "")
 	m := framedTestModel()
@@ -29,9 +27,8 @@ func TestViewContentCarriesNoGraphicsBytes(t *testing.T) {
 	}
 }
 
-// The Raw emission brackets the placement with save/restore so the
-// renderer's cursor model stays exact (CUP moves the physical cursor;
-// DECRC puts it back), and stays SGR-free so its delta-tracked pen does.
+// Save/restore keeps the renderer's cursor model exact (DECRC puts the CUP
+// move back); the emission stays SGR-free so its delta-tracked pen does.
 func TestKittyOverlayRawFramesWithSaveRestore(t *testing.T) {
 	t.Setenv("TMUX", "")
 	m := framedTestModel()
@@ -50,9 +47,7 @@ func TestKittyOverlayRawFramesWithSaveRestore(t *testing.T) {
 	}
 }
 
-// The overlay Cmd hands the exact frame bytes to tea.Raw (which the
-// program serializes with frame flushes), and stays nil when the frame
-// carries nothing — the byte builders already suppress no-op frames.
+// Nil when the frame is empty: the byte builders already suppress no-op frames.
 func TestKittyOverlayCmdEmitsRaw(t *testing.T) {
 	t.Setenv("TMUX", "")
 	m := framedTestModel()
@@ -74,32 +69,21 @@ func TestKittyOverlayCmdEmitsRaw(t *testing.T) {
 	if !strings.Contains(first, "a=T") {
 		t.Fatalf("expected the first command to transmit, got %q", tail(first, 120))
 	}
-	// An unchanged intent emits nothing: the placement already lives in
-	// the terminal and re-placing churns erase/put loops the user sees
-	// as flicker.
+	// Unchanged intent: re-placing churns erase/put loops the user sees as flicker.
 	if cmd := m.kittyOverlayCmd(); cmd != nil {
 		t.Fatal("expected no overlay command for the unchanged intent")
 	}
 	m.ui.imgs.protocol = imageProtocolNone
-	// No pending purge here (the slot was never reset for a switch), so
-	// the off-protocol path stays silent. A real style switch carries a
-	// pending purge instead: TestKittyStyleSwitchToPixelatedPurgesShownImage.
+	// No pending purge here (the slot was never reset for a switch); a real
+	// style switch carries one: TestKittyStyleSwitchToPixelatedPurgesShownImage.
 	if cmd := m.kittyOverlayCmd(); cmd != nil {
 		t.Fatal("expected no overlay command when the protocol is off")
 	}
 }
 
-// A re-place built before a modal opens must not deliver after it:
-// tea.Raw cmds execute post-frame, so an emission built pre-modal would
-// resurrect the image over the scrim — and the modal branch would stay
-// silent, stranding it permanently. The emission-time guard drops stale
-// content at delivery instead.
+// tea.Raw executes post-frame: a pre-modal emission would resurrect the
+// image over the scrim and strand silently; the guard drops it at delivery.
 func TestKittyOverlayStaleReplaceDroppedAfterModalOpens(t *testing.T) {
-	// Emissions change the terminal at build time and deliver post-frame:
-	// an emission built before a modal opens (image load fast-path) must
-	// not land after it, or it resurrects the image over the scrim. The
-	// emission-time guard drops stale content at delivery; commit already
-	// updated the slot, so the next real emission re-places cleanly.
 	t.Setenv("TMUX", "")
 	m := framedTestModel()
 	m.ui.width = 100
@@ -118,14 +102,12 @@ func TestKittyOverlayStaleReplaceDroppedAfterModalOpens(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected the changed-subject command to build")
 	}
-	// …is dropped at delivery when the modal opened in between. The Update
-	// wrapper mirrors modal state onto the slot; simulate the modal-open
-	// Update running before the queued cmd executes.
+	// The Update wrapper mirrors modal state onto the slot; simulate the
+	// modal-open Update before the queued cmd executes.
 	m.ui.imgs.setOverlaySuppressed(true)
 	if msg := cmd(); msg != nil {
 		t.Fatalf("stale pre-modal emission delivered after modal open: %v", msg)
 	}
-	// While un-suppressed the same shape of emission still delivers.
 	m.ui.imgs.setOverlaySuppressed(false)
 	m.ui.helpOpen = true
 	if hide := m.kittyOverlay(); hide != "" && !strings.Contains(hide, "a=d,d=i") {
@@ -135,8 +117,7 @@ func TestKittyOverlayStaleReplaceDroppedAfterModalOpens(t *testing.T) {
 	if cmd := m.kittyOverlayCmd(); cmd == nil {
 		t.Fatal("expected the modal-close re-place command for the new subject")
 	}
-	// Pure-delete emissions bypass suppression entirely: the modal
-	// hide itself must always deliver.
+	// Pure-delete emissions bypass suppression: the modal hide must always deliver.
 	m.ui.helpOpen = true
 	m.ui.imgs.setOverlaySuppressed(true)
 	hideCmd := m.kittyOverlayCmd()
@@ -149,9 +130,8 @@ func TestKittyOverlayStaleReplaceDroppedAfterModalOpens(t *testing.T) {
 	}
 }
 
-// The Update wrapper keeps the delivery guard in sync with the live
-// modal state after every message: without it the guard would lag the
-// model by a full Update and stale emissions would slip through.
+// Without this sync the delivery guard would lag the model by a full Update
+// and stale emissions would slip through.
 func TestUpdateMirrorsModalStateOntoOverlaySlot(t *testing.T) {
 	t.Setenv("TMUX", "")
 	m := framedTestModel()

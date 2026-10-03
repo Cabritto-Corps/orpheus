@@ -8,9 +8,8 @@ import (
 	"time"
 )
 
-// The on-song-change hook child shares the TUI's tty: anything it prints
-// persists on screen forever under the cell-diffing renderer. The seam must
-// hand back a command whose output is discarded.
+// The hook child shares the TUI's tty: anything it prints persists on
+// screen forever under cell-diffing rendering, so the seam must discard output.
 func TestSongChangeHookDiscardsChildOutput(t *testing.T) {
 	cmd, cancel := newSongChangeCmd("notify-send {track} {artist} {id}", "Song", "Artist", "id123")
 	defer cancel()
@@ -35,7 +34,6 @@ func TestSongChangeHookDiscardsChildOutput(t *testing.T) {
 }
 
 func TestSongChangeHookExecutesWithLiveContext(t *testing.T) {
-	// An immediately-canceled builder must fail before Start.
 	if err := runSongChangeHook("/bin/true", "Song", "Artist", "id123"); err != nil {
 		t.Fatalf("hook runner failed: %v", err)
 	}

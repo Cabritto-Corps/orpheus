@@ -40,9 +40,8 @@ func TestTrackPopupFooterVisible(t *testing.T) {
 }
 
 func TestTrackPopupDotsOnFirstOpen(t *testing.T) {
-	// Regression: the first SetItems derived PerPage while TotalPages was
-	// still 0, overflowing the modal budget by exactly the pagination row —
-	// the dots only appeared after a resize event.
+	// First SetItems derived PerPage while TotalPages was still 0, overflowing
+	// the modal budget by the pagination row — dots only appeared after resize.
 	m := guardModel(t, frameVariant{name: "popup", width: 100, height: 40, tab: tabPlaylists})
 	m.ui.trackPopupOpen = true
 	m.ui.trackPopupList = newTrackPopupList(m.styles, m.ui.width, m.ui.height)

@@ -11,10 +11,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// Render is the most expensive per-frame list-tab call (word-wrap + width
-// passes per row) but pure in its key — memoized per delegate. Delegates are
-// rebuilt on every theme change, so a fresh empty cache can never serve
-// stale rows: no epoch, no registry, no reset step.
+// The memo for the most expensive per-frame list-tab render (word-wrap +
+// width passes per row). Delegates are rebuilt on every theme change, so a
+// fresh empty cache can never serve stale rows — no epoch, no reset step.
 
 type delegateKey struct {
 	width    int
@@ -145,9 +144,8 @@ func (d cachedDelegate) trackRow(m list.Model, index int, item trackItem) (strin
 }
 
 // renderFilteringSelected marks the cursor row while the filter input is
-// active. Bubbles' DefaultDelegate renders no selection while typing
-// (selected requires FilterState() != Filtering), so without this the
-// cursor row sits unmarked through the whole search session. Mirrors the
+// active: bubbles' default delegate renders no selection while typing, so
+// the row would sit unmarked through the whole search session. Mirrors the
 // delegate's own selected branch, including match highlighting.
 func (d cachedDelegate) renderFilteringSelected(m list.Model, index int, title, desc string) (string, bool) {
 	if m.FilterState() != list.Filtering || m.FilterValue() == "" || index != m.Index() {

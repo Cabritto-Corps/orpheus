@@ -31,21 +31,20 @@ const (
 	libraryCoverRefreshBatch     = 32
 	libraryMetaRefreshEvery      = 300
 	coverQueueDrainBatch         = 20
-	// queueCoverSweepBatch caps one push's enqueue so a huge shuffled
-	// context cannot flood the cover queue; the chained drain plus the
-	// next push finish the rest.
+	// Caps one push's enqueue: a huge shuffled context cannot flood the
+	// queue; the chained drain finishes the rest.
 	queueCoverSweepBatch = 64
-	// queueHeadPinWindow mirrors the backend head window: current cover
-	// plus this many up-next covers stay pinned against LRU eviction.
+	// Mirrors the backend head window: current cover plus this many
+	// up-next covers stay pinned against LRU eviction.
 	queueHeadPinWindow = 8
-	// sweepPauseMax caps a server-penalty park: a Retry-After of hours
-	// parks the sweep for ten minutes, then it re-evaluates.
+	// Caps a server-penalty park: a Retry-After of hours parks the sweep
+	// ten minutes, then it re-evaluates.
 	sweepPauseMax                 = 10 * time.Minute
 	kittyProtocolFallbackFailures = 8
 	kittyProtocolRecoveryStreak   = 8
 	uiTickInterval                = 200 * time.Millisecond
 	uiIdleTickInterval            = time.Second
-	// 8s at the 200ms tick interval before a pending popup load gives up.
+	// Popup load give-up window: ticks × the 200 ms tick = 8 s.
 	trackPopupLoadTimeoutTicks = 40
 	navDebounceInterval        = 60 * time.Millisecond
 	volSeekDebounceInterval    = 50 * time.Millisecond
@@ -84,9 +83,8 @@ func (t trackItem) Title() string       { return t.item.Name }
 func (t trackItem) FilterValue() string { return t.item.Name }
 func (t trackItem) Description() string { return t.item.Artist }
 
-// newTrackPopupDelegate returns the popup's delegate: the themed default
-// delegate wrapped in the render cache, so the track rows can carry the
-// right-aligned duration while keeping the same styling.
+// The themed default delegate wrapped in the render cache: rows carry the
+// right-aligned duration in the same styling.
 func newTrackPopupDelegate(s *themeStyles) cachedDelegate {
 	c := &delegateCache{entries: make(map[delegateKey]string, 64)}
 	d := list.NewDefaultDelegate()
@@ -234,8 +232,8 @@ func startProgram(ctx context.Context, catalog spotify.PlaylistCatalog, cfg conf
 	m := newModel(ctx, catalog, cfg, tuiCmdCh, contextTracksCh, ldr)
 	m.catalogSource = catalogSource
 	m.transport.playerConnecting = markConnecting
-	// Match the terminal's own background (the padding around the grid)
-	// to the theme's page color for the session; restore on exit.
+	// Match the terminal's own background to the theme's page color for the
+	// session; restore on exit (the padding around the grid).
 	CaptureTerminalBG()
 	ApplyTerminalBG(m.styles.colorPage, m.styles.transparentFrame(), m.styles.colorProfile)
 	p := tea.NewProgram(m)

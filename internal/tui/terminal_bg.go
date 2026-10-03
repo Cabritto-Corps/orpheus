@@ -35,13 +35,11 @@ func CaptureTerminalBG() {
 	terminalBGLast = ""
 }
 
-// terminalBGTarget is the pure decision behind ApplyTerminalBG: the spec
-// to emit via OSC 11, or "" for silence. Transparent mode hands the
-// background back to the terminal instead of claiming it, so entering it
-// mid-session restores the captured original exactly once (Last clears,
-// making the release idempotent); leaving it re-applies the page because
-// Last no longer matches. Kept pure so the transitions are unit-testable
-// without emitting escape sequences.
+// terminalBGTarget is the pure decision behind ApplyTerminalBG: the spec to
+// emit via OSC 11, or "" for silence. Transparent mode hands the background
+// back to the terminal: entering it restores the captured original exactly
+// once, leaving it re-applies the page. Pure so transitions unit-test
+// without emitting escapes.
 func terminalBGTarget(page color.Color, transparent bool, profile colorprofile.Profile) string {
 	if terminalBGOriginal == "" {
 		return ""

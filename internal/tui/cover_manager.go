@@ -274,11 +274,10 @@ func (c *coverManager) promoteURL(url string) {
 }
 
 // sweepQueueCoversCmd warms the whole pushed queue head-first so any skip
-// swaps from cache, not just the next track. The cover queue dedupes
-// (queued map), shouldQueueLoad gates dead URLs behind the fail cooldown,
-// and the chained drain in handleImagesBatchLoadedMsg runs the sweep to
-// completion across ticks. Head starvation is impossible: the player cover
-// loads direct (never via this queue) and head URLs promote to front.
+// swaps from cache. The queue dedupes, shouldQueueLoad gates dead URLs
+// behind the fail cooldown, and the chained drain runs the sweep across
+// ticks. Head starvation is impossible: the player cover loads direct and
+// head URLs promote to front.
 func (m *model) sweepQueueCoversCmd() tea.Cmd {
 	if m.ui.imgs == nil || m.ui.cover.sweepPaused() {
 		return nil

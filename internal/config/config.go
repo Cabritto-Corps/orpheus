@@ -127,7 +127,7 @@ func envBool(key string, fallback bool) bool {
 	return v
 }
 
-// Auto-detection reads the fontconfig list: glyphs render only if the terminal selects a Nerd Font.
+// fc-list is the proxy: nerd glyphs only render if the terminal selects a Nerd Font.
 func resolveNerdFonts(raw string) bool {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "":

@@ -9,7 +9,7 @@ import (
 )
 
 func TestQueueRowCursorMarkerAtAllWidths(t *testing.T) {
-	// Selected rows need a non-color marker; unselected rows keep the lead space.
+	// Selected rows need a non-color marker; unselected keep the lead space.
 	st := buildThemeStyles(themePresetState("default"))
 	for _, w := range []int{28, 39, 40, 80} {
 		grid := queueGridFor(w)
@@ -41,9 +41,8 @@ func TestQueueRowNeverExceedsPaneWidth(t *testing.T) {
 	}
 }
 
-// Hour-plus durations ("1:02:01") overflow the shrunk duration column: the
-// row wrapped and the panel clipped the queue bottom. The duration cell is
-// truncated to its column like every other cell.
+// Hour-plus durations overflowed the shrunk duration column and the panel
+// clipped the queue bottom; the cell truncates like every other.
 func TestQueueRowLongDurationsFitPaneWidth(t *testing.T) {
 	st := buildThemeStyles(themePresetState("default"))
 	long := strings.Repeat("abcdefghij", 8)
@@ -64,8 +63,8 @@ func TestQueueRowLongDurationsFitPaneWidth(t *testing.T) {
 }
 
 func TestQueueRowCursorGlyphOptions(t *testing.T) {
-	// Every cursor option renders its single-cell mark; plain is the
-	// color-only trade (no lead mark), and no option may shift row width.
+	// plain is the accepted color-only trade (no lead mark); no option may
+	// shift row width.
 	want := map[string]string{
 		"arrow": ">",
 		"note":  "♪",

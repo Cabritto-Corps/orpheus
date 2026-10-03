@@ -10,10 +10,8 @@ import (
 	"orpheus/internal/spotify"
 )
 
-// The play bar must never render negative times or crash, at any transport
-// state — stale transfers and past-end starts can push negative or
-// beyond-duration positions, and the pre-resize startup frame can hand it a
-// zero width.
+// Stale transfers and past-end starts can push negative or beyond-duration
+// positions; the pre-resize startup frame can hand the bar zero width.
 func TestPlayBarNeverNegativeOrPanics(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "0")
@@ -59,8 +57,7 @@ func TestPlayBarNeverNegativeOrPanics(t *testing.T) {
 			continue
 		}
 		stripped := ansi.Strip(out)
-		// The only legitimate hyphen runs are the "--:--" unknown-duration
-		// marker; anything else is a rendered negative.
+		// Only the "--:--" marker legitimately carries hyphens.
 		if withMarker := strings.ReplaceAll(stripped, "--:--", ""); strings.Contains(withMarker, "-") {
 			t.Errorf("%s: rendered a negative time: %q", tc.name, stripped)
 		}

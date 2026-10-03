@@ -99,8 +99,8 @@ func TestUnknownPresetFallsBackToDefault(t *testing.T) {
 
 func TestMinimalPresetUsesANSIAndNoColor(t *testing.T) {
 	colors := loadThemeColors("minimal", "")
-	// D5: minimal must keep roles distinguishable — accent (bold 7), bright
-	// (15), dim (8) and selection inverted (black on 7) — not one flat "".
+	// Minimal must keep roles distinguishable — accent (bold 7), dim (8),
+	// selection inverted (black on 7) — not one flat "".
 	if colors.Blue == colors.OffWhite && colors.Blue == colors.Gray {
 		t.Fatal("minimal preset must keep at least three distinguishable roles")
 	}
@@ -210,9 +210,8 @@ func TestSaveThemeOptionsTransparentRoundTrip(t *testing.T) {
 }
 
 func TestThemeJSONInvalidBackgroundStyleIgnored(t *testing.T) {
-	// Unknown values — including the retired "divided" mode, which still
-	// sits in theme.json files written before its removal — degrade
-	// silently to the default instead of breaking the theme load.
+	// The retired "divided" mode still sits in theme.json files written
+	// before its removal: unknown values degrade silently, not break loads.
 	for _, style := range []string{"neon", "divided"} {
 		path := filepath.Join(t.TempDir(), "theme.json")
 		if err := os.WriteFile(path, []byte(`{"backgrounds": {"style": "`+style+`"}}`), 0o600); err != nil {
@@ -225,9 +224,6 @@ func TestThemeJSONInvalidBackgroundStyleIgnored(t *testing.T) {
 	}
 }
 
-// TestThemeOptionsBackgroundCycleReachesAllStyles walks the Backgrounds
-// editor row through every choice: each step must live-preview (the model
-// bundle follows the pending draft) and a full cycle returns to the start.
 func TestThemeOptionsBackgroundCycleReachesAllStyles(t *testing.T) {
 	m, _, _, _ := newSettingsTestModel(t)
 	m.openThemeOptions()
@@ -268,9 +264,6 @@ func TestValidColorValue(t *testing.T) {
 	}
 }
 
-// TestThemeOptionsRowsDriveEditor pins the theming-editor descriptor
-// table: order, per-row behavior class, and that the row count the
-// cursor wraps over is the table itself.
 func TestThemeOptionsRowsDriveEditor(t *testing.T) {
 	wantLabels := []string{"Base palette", "Page tone", "Accent", "Backgrounds", "Border", "Queue cursor", "Play/pause", "Spinner", "Progress bar", "Titles bold", "Descriptions italic", "Cover frame", "Save to theme.json", "Reset to preset"}
 	if len(themeOptionsRowsList) != len(wantLabels) {
@@ -293,8 +286,8 @@ func TestThemeOptionsRowsDriveEditor(t *testing.T) {
 }
 
 func TestThemeQueueCursorLegacyAlias(t *testing.T) {
-	// Old theme.json files name the cursor glyph now_playing; it must keep
-	// meaning, while queue_cursor wins when both keys are present.
+	// Old theme.json files name the cursor glyph now_playing; queue_cursor
+	// wins when both keys are present.
 	write := func(content string) themeState {
 		path := filepath.Join(t.TempDir(), "theme.json")
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {

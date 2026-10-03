@@ -46,9 +46,7 @@ func testProvidedTrack(uri, title, artist string) *connectpb.ProvidedTrack {
 	}
 }
 
-// The prefetch only fires on queue entries carrying ImageURL, but context
-// metadata carries names and no art: the head window must be selected for
-// image resolution even when every entry already has a name.
+// Prefetch fires only on ImageURL entries: heads must resolve images even when every entry has a name.
 func TestHeadImageURIsSelectsMissingOnly(t *testing.T) {
 	uriA, uriB, uriC := testQueueHeadURIs()
 	p := newTestAppPlayer()
@@ -65,8 +63,7 @@ func TestHeadImageURIsSelectsMissingOnly(t *testing.T) {
 	if len(got) != 2 || got[0] != uriB || got[1] != uriC {
 		t.Fatalf("expected [B C] imageless head URIs, got %v", got)
 	}
-	// The window bounds resolved entries, not examined ones: A is skipped
-	// (already warm), so one slot still yields B.
+	// Window bounds resolved entries, not examined: A is already warm, so one slot still yields B.
 	got = headImageURIs(upcoming, p.queueHeadImageMissing, 1)
 	if len(got) != 1 || got[0] != uriB {
 		t.Fatalf("expected [B] within window 1, got %v", got)
@@ -76,9 +73,7 @@ func TestHeadImageURIsSelectsMissingOnly(t *testing.T) {
 	}
 }
 
-// Named entries must still enter the metadata batch when their images are
-// missing — otherwise the head never gains ImageURL and the prefetch
-// never fires for the whole context.
+// Named entries must enter the batch anyway or heads never gain ImageURL and the prefetch never fires.
 func TestResolveContextQueueMetadataIncludesHeadURIs(t *testing.T) {
 	uriA, uriB, _ := testQueueHeadURIs()
 	p := newTestAppPlayer()
@@ -119,7 +114,6 @@ func TestResolveContextQueueMetadataIncludesHeadURIs(t *testing.T) {
 	}
 }
 
-// Entries already carrying images must not trigger network work.
 func TestResolveQueueMetadataBatchSkipsWarm(t *testing.T) {
 	p := newTestAppPlayer()
 	p.metaBatchFetch = func(ctx context.Context, uris []string) (map[string]spclient.ResolvedEntry, error) {
@@ -129,7 +123,6 @@ func TestResolveQueueMetadataBatchSkipsWarm(t *testing.T) {
 	p.resolveQueueMetadataBatch(context.Background(), nil)
 }
 
-// Without a fetch seam and without a session, resolution is a safe no-op.
 func TestResolveQueueMetadataBatchNoSessionNoOp(t *testing.T) {
 	p := &AppPlayer{}
 	p.resolveQueueMetadataBatch(context.Background(), []string{"spotify:track:7GhIk7Il098yCjg4BQjzvb"})
@@ -154,9 +147,7 @@ func TestMaybeWarmQueueHeadImagesNoops(t *testing.T) {
 	p.queueHeadWarmInFlight.Store(false)
 }
 
-// The delivery signal must fire only when the cache learned something:
-// re-resolving identical data is the steady state and must stay silent,
-// or every background batch would re-arm a re-resolve loop through Run.
+// Identical re-resolves are the steady state: staying silent is what prevents a re-resolve loop.
 func TestMergeQueueBatchResultReportsChange(t *testing.T) {
 	p := newTestAppPlayer()
 	p.resetQueueMetaForContext()
@@ -215,10 +206,7 @@ func TestSignalQueueMetaUpdatedCoalesces(t *testing.T) {
 	}
 }
 
-// Delivery proof: after the batch fills the cache, the Run-side handler
-// must push a queue that carries the new cover URLs — the TUI prefetch
-// only fires on entries carrying ImageURL, so without this push the warm
-// batch never reaches the screen.
+// The warm batch reaches the screen only via a queue re-push; the TUI prefetch fires on ImageURL entries.
 func TestHandleQueueMetaUpdatedDeliversQueueImages(t *testing.T) {
 	uriA, uriB, uriC := testQueueHeadURIs()
 	p, updates := newQueueHeadSignalPlayer(t, []string{uriA, uriB, uriC})
@@ -255,9 +243,7 @@ func TestHandleQueueMetaUpdatedDeliversQueueImages(t *testing.T) {
 	}
 }
 
-// The handler must also re-warm heads a batch didn't cover: skips taken
-// while a batch is in flight leave new heads nothing else would warm.
-// A failed batch warms nothing and signals nothing.
+// Mid-flight skips leave new heads nothing else would warm; a failed batch warms and signals nothing.
 func TestHandleQueueMetaUpdatedRewarmsMissing(t *testing.T) {
 	uriA, uriB, uriC := testQueueHeadURIs()
 	p, _ := newQueueHeadSignalPlayer(t, []string{uriA, uriB, uriC})
@@ -309,10 +295,7 @@ func newQueueHeadSignalPlayer(t *testing.T, uris []string) (*AppPlayer, <-chan *
 	return p, updates
 }
 
-// The success re-warm pin: heads missing after the handler's emit must be
-// warmed by a follow-up batch (the rapid-skip case: the first batch covered
-// stale heads), and once everything is imaged the loop must go quiet —
-// no second batch, no second signal.
+// Rapid-skip pin: the first batch can cover stale heads, so a follow-up re-warm must run, then go quiet.
 func TestHandleQueueMetaUpdatedRewarmsThenQuiets(t *testing.T) {
 	uriA, uriB, uriC := testQueueHeadURIs()
 	p, updates := newQueueHeadSignalPlayer(t, []string{uriA, uriB, uriC})
@@ -348,7 +331,6 @@ func TestHandleQueueMetaUpdatedRewarmsThenQuiets(t *testing.T) {
 		t.Fatal("completed re-warm batch signaled nothing")
 	}
 
-	// Second delivery with everything imaged: quiet — no batch, no signal.
 	p.handleQueueMetaUpdated()
 	select {
 	case <-updates:
@@ -366,8 +348,7 @@ func TestHandleQueueMetaUpdatedRewarmsThenQuiets(t *testing.T) {
 	}
 }
 
-// A whole-context sweep must go out as bounded chunks, not one megarequest:
-// every URI resolves, no chunk exceeds the cap, and the merge reports change.
+// A whole-context sweep must chunk, not megarequest: every URI resolves and no chunk exceeds the cap.
 func TestResolveQueueMetadataBatchChunksLargeSweep(t *testing.T) {
 	p := newTestAppPlayer()
 	p.resetQueueMetaForContext()
@@ -416,11 +397,9 @@ func TestResolveQueueMetadataBatchChunksLargeSweep(t *testing.T) {
 	}
 }
 
-// The beyond-head sweep must cover what the head window never touches, skip
-// what is already imaged, and go quiet once the context is fully imaged.
+// The sweep warms beyond the head window only, skips already-imaged entries, and goes quiet when fully imaged.
 func TestMaybeSweepQueueImagesWarmsBeyondHead(t *testing.T) {
-	// Vary only the low-order chars of a known-good ID: a 22-char base62
-	// string can exceed 128 bits and FillBytes panics on those.
+	// Vary only low-order chars: a 22-char base62 ID can exceed 128 bits and panic FillBytes.
 	const sweepIDPrefix = "spotify:track:7GhIk7Il098yCjg4BQjz"
 	suffixes := []string{"va", "vb", "vc", "vd", "ve", "vf", "vg", "vh", "vi", "vj", "vk", "vl", "vm", "vn", "vo", "vp"}
 	uris := make([]string, 0, len(suffixes))
@@ -431,8 +410,7 @@ func TestMaybeSweepQueueImagesWarmsBeyondHead(t *testing.T) {
 	p.resetQueueMetaForContext()
 	prod := testQueueProdInfo(t)
 	p.prodInfo = &prod
-	// The head window is already warm (the head warm owns it): the sweep
-	// must cover only the beyond-head region.
+	// Head window already warm: the sweep must cover only the beyond-head region.
 	for _, u := range uris[1 : headImageWindow+1] {
 		id := golibrespot.NormalizeSpotifyId(u)
 		p.setCachedQueueMeta(id, PlaybackStateQueueEntry{ID: id, Name: "N", Artist: "A", ImageURL: "https://i.scdn.co/image/09"})
@@ -464,10 +442,8 @@ func TestMaybeSweepQueueImagesWarmsBeyondHead(t *testing.T) {
 	mu.Lock()
 	got := append([]string(nil), requested...)
 	mu.Unlock()
-	// Upcoming excludes the playing head and the sweep skips the head
-	// window outright (the head warm owns it): only the beyond-head
-	// region may be requested. The now-playing cover arrives via the
-	// current-track path, never the sweep.
+	// Upcoming excludes the playing head and the sweep skips the head window; only beyond-head
+	// URIs may be requested. The now-playing cover rides the current-track path, never the sweep.
 	want := uris[headImageWindow+1:]
 	if len(got) != len(want) {
 		t.Fatalf("sweep requested %d URIs, want %d beyond-head: %v", len(got), len(want), got)

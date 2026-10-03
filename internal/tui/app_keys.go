@@ -83,10 +83,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // updateBrowseList forwards a key to a browse list and restores the
-// pre-filter selection when search is cancelled: bubbles moves the cursor
-// to the top when filtering opens (GoToStart) and leaves it there on esc,
-// so the cover preview would snap to whatever the filter happened to land
-// on. Enter keeps the filtered selection — only cancel restores.
+// pre-filter selection when search is cancelled: bubbles resets the cursor
+// to the top on filter open and never puts it back, so the preview art
+// would snap to whatever the filter landed on. Enter keeps the filtered
+// selection — only cancel restores.
 func (m *model) updateBrowseList(l *list.Model, msg tea.KeyPressMsg) tea.Cmd {
 	pre := l.FilterState()
 	preIdx := l.GlobalIndex()
@@ -95,19 +95,17 @@ func (m *model) updateBrowseList(l *list.Model, msg tea.KeyPressMsg) tea.Cmd {
 	post := l.FilterState()
 	switch {
 	case pre != list.Filtering && post == list.Filtering:
-		// Filter opened: remember where the user was.
 		m.browse.filterSavedIdx = preIdx
 		m.browse.filterRestorable = true
 	case pre == list.Filtering && post == list.Filtering:
-		// Typing: keep the armed state.
+		// typing: keep armed
 	case pre == list.Filtering && post == list.Unfiltered:
-		// Cancel (esc) or empty-accept: reseat the pre-filter selection.
 		if m.browse.filterRestorable && m.browse.filterSavedIdx < len(l.Items()) {
 			l.Select(m.browse.filterSavedIdx)
 		}
 		m.browse.filterRestorable = false
 	default:
-		// Accept (FilterApplied) and plain navigation disarm: only cancel restores.
+		// accept (FilterApplied) and navigation disarm
 		m.browse.filterRestorable = false
 	}
 	return cmd
@@ -260,7 +258,6 @@ func (m *model) handleQueueKey(msg tea.KeyPressMsg) tea.Cmd {
 		if q[cursor].Queued {
 			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueJump, QueueIndex: cursor})
 		}
-		// Context rows play from the current context.
 		if uri := m.currentContextURI(); uri != "" {
 			if m.transport.status != nil {
 				m.transport.pendingContextFrom = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
@@ -316,16 +313,16 @@ func (m model) filterableLists() []*list.Model {
 	return nil
 }
 
-// Snapshot bubbles' browse bindings once; per-keypress reconciliation strips
-// app-owned keys from this stable base so runtime rebinds work both ways.
+// Snapshot of bubbles' shipping page-key defaults; reconciliation subtracts
+// claimed keys from them.
 var (
 	defaultListNextPage = list.DefaultKeyMap().NextPage
 	defaultListPrevPage = list.DefaultKeyMap().PrevPage
 )
 
-// syncListKeyMaps reconciles list KeyMaps with the live keyMap so bubbles dispatches nothing the app owns.
-// Capture flow replaces m.ui.keys wholesale, so this runs on every keypress; bubbles v2's quit binding stays
-// disabled and app-owned page keys stay unbound by lists.
+// Runs on every keypress — the capture flow replaces m.ui.keys wholesale —
+// so bubbles dispatches nothing the app owns: its quit binding stays
+// disabled and app-owned page keys unbound.
 func (m *model) syncListKeyMaps() {
 	claimed := make(map[string]struct{}, 64)
 	for _, meta := range actionRegistry {

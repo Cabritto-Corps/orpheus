@@ -23,8 +23,7 @@ func TestLayoutThreeZoneCentersTitleOnTerminal(t *testing.T) {
 		if idx < 0 {
 			t.Fatalf("title not found in %q", line)
 		}
-		// strings.Index is a byte offset; glyphs before it are multi-byte,
-		// so measure the prefix in display cells.
+		// strings.Index is a byte offset; measure the prefix in display cells.
 		return lipgloss.Width(line[:idx])
 	}
 
@@ -48,15 +47,13 @@ func TestLayoutThreeZoneCollisionFallsBackInsideWidth(t *testing.T) {
 	if got := lipgloss.Width(line); got > w {
 		t.Fatalf("line exceeds the width: %d > %d", got, w)
 	}
-	// The title is truncated to the zone budget when the sides collide.
 	if got := lipgloss.Width(strings.TrimSpace(line)); got > w {
 		t.Fatalf("content exceeds the width: %d", got)
 	}
 }
 
-// The centered title is positioned absolutely on the terminal, so a wide
-// right zone can overlap it: the row must still never exceed the terminal
-// width (a wider row wraps the header line and eats the chrome height).
+// A wide right zone can overlap the absolutely positioned centered title;
+// a wider row would wrap the header line and eat the chrome height.
 func TestLayoutThreeZoneNeverExceedsWidth(t *testing.T) {
 	rep := strings.Repeat
 	cases := []struct {
@@ -77,10 +74,9 @@ func TestLayoutThreeZoneNeverExceedsWidth(t *testing.T) {
 	}
 }
 
-// The title and the artist+album subtitle share one center column: centered
-// by separate formulas they sat a couple of cells apart (measured on the
-// rendered header). Both spans must center within one cell of each other at
-// any width and status shape.
+// Centered by separate formulas, the two center-column rows measured a
+// couple of cells apart on the rendered header; both spans must center
+// within one cell of each other.
 func TestHeaderTextSharesCenterColumn(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -107,8 +103,6 @@ func TestHeaderTextSharesCenterColumn(t *testing.T) {
 	}
 }
 
-// spanMid measures the cell midpoint of the visible span of needle inside a
-// stripped header line.
 func spanMid(line, needle string) int {
 	stripped := ansi.Strip(line)
 	before, _, ok := strings.Cut(stripped, needle)
@@ -119,8 +113,6 @@ func spanMid(line, needle string) int {
 	return first + (ansi.StringWidth(needle)+1)/2
 }
 
-// trimmedSpanMid is the cell midpoint of a stripped line whose content is a
-// single span with only spaces around it.
 func trimmedSpanMid(line string) int {
 	stripped := ansi.Strip(line)
 	first := ansi.StringWidth(stripped[:len(stripped)-len(strings.TrimLeft(stripped, " "))])
@@ -128,8 +120,7 @@ func trimmedSpanMid(line string) int {
 	return first + ansi.StringWidth(content)/2
 }
 
-// The fix must not move anything when all zones fit: the normal row is
-// byte-identical to the hand-computed expectation.
+// The fix must leave an all-zones-fit row byte-identical.
 func TestLayoutThreeZoneFittingRowUnchanged(t *testing.T) {
 	out := layoutThreeZone(80, strings.Repeat("L", 10), strings.Repeat("C", 20), strings.Repeat("R", 10))
 	want := strings.Repeat("L", 10) + strings.Repeat(" ", 20) + strings.Repeat("C", 20) + strings.Repeat(" ", 20) + strings.Repeat("R", 10)

@@ -9,12 +9,11 @@ import (
 	"github.com/charmbracelet/x/ansi/kitty"
 )
 
-// artRect is the exact cell rectangle an image occupies, plus whether it
-// sits inside a frame ring: the single source both the ANSI cover renderer
-// and the kitty overlay derive from, so the two can never disagree about
-// where the art sits. The anchor is layout-invariant (panel label +
-// divider above the cell, panel flush left), so the rectangle derives from
-// the cell dims alone; the layout struct carries no art fields.
+// artRect is the exact cell rect the art occupies and whether a frame ring
+// insets it: the single source the ANSI renderer and the kitty overlay both
+// derive from, so the two never disagree. The anchor is layout-invariant
+// (panel label + divider above, panel flush left), so the rect derives from
+// cell dims alone.
 type artRect struct {
 	row, col int
 	cols     int
@@ -41,9 +40,8 @@ func (m model) coverArt(cellCols, cellRows int) artRect {
 	return artRect{row: row, col: col, cols: cols, rows: rows, framed: framed}
 }
 
-// overlayIntent is what the frame wants displayed: a typed replacement for
-// the old colon-joined key string (which extracted placement by scanning
-// for the 4th colon and broke if any earlier field ever gained one).
+// overlayIntent is what the frame wants displayed: typed fields instead of
+// the old colon-joined key, which broke when an earlier field gained a colon.
 type overlayIntent struct {
 	art      artRect
 	tab      tab
@@ -61,44 +59,31 @@ type overlayState struct {
 	visible bool
 	force   bool
 	nextID  uint64
-	// Per-frame placement IDs: the renderer diffs whole frames and
-	// swallows byte-identical emissions, so every re-place mints a fresh
-	// p=. placementSeq never resets (like nextID). Targeting is always
-	// image-scoped (d=i,i=) — placements churn every frame and Ghostty
-	// has point-delete (d=i,p=) conformance gaps, so naming a placement
-	// is both stale-prone and terminal-fragile; nothing tracks the
-	// previous frame's p=.
+	// Placement IDs mint per emission: the renderer diffs frames and
+	// swallows byte-identical emissions, so a restore would be dropped
+	// unless it differs. Targeting is always image-scoped (d=i,i=) —
+	// placement naming is stale-prone and Ghostty has point-delete
+	// conformance gaps; nothing tracks the previous frame's p=.
 	placementSeq uint64
-	// purgeID names a stored image the terminal still holds after the
-	// slot reset for a non-kitty protocol (style switch, auto-fallback).
-	// The next overlay emission purges it (data and placements) instead
-	// of stranding it: the gate pops it exactly once.
+	// purgeID names a stored image the terminal still holds after a slot
+	// reset for a non-kitty protocol; the next emission purges it (data
+	// and placements) exactly once instead of stranding it.
 	purgeID uint64
-	// pendingRestore marks that the live placement was erased by the
-	// per-frame modal hide: the next content emission must re-place even
-	// though the intent is unchanged, or a modal close leaves the art
-	// deleted forever. This is the ONLY reason an unchanged frame emits.
+	// pendingRestore: the modal hide erased the live placement, so the
+	// next content emission must re-place even though the intent is
+	// unchanged — the only reason an unchanged frame emits.
 	pendingRestore bool
-	// suppressOverlay drops content emissions at delivery time: a modal
-	// opened after an emission was built. Set at the end of every Update
-	// from the live modal state; overlay cmd closures check it when they
-	// execute. Pure-delete emissions bypass it (stray deletes self-heal
-	// via re-place/restore; stray placements corrupt).
+	// suppressOverlay drops content emissions at delivery: a modal opened
+	// after the emission was built. Checked by the cmd closure when it
+	// executes (build-time checks are stale); pure deletes bypass it.
 	suppressOverlay bool
 }
 
-// commitOverlayIntent records the frame's overlay intent and reports what
-// to emit. An unchanged visible intent needs no transmit: the image data
-// is already stored ID-keyed in the terminal, so the caller re-places from
-// it instead (renderer repaints erase placements, and a re-place is tens of
-// bytes versus retransmitting the whole payload).
-//
-// Every transmit mints a fresh image ID — not because the terminal dedupes
-// (it doesn't), but because bubbletea's renderer diffs whole frames: an
-// emission byte-identical to the previous frame would be swallowed and a
-// needed retransmit lost. IDs mint only on intent transitions, never per
-// tick. A displaced previous image is always deleted by ID first, so
-// terminal image memory stays bounded by the one image on screen.
+// commitOverlayIntent records the frame's intent and reports what to emit.
+// Every transmit mints a fresh image ID — not for dedupe, but because the
+// renderer swallows byte-identical emissions and a needed retransmit would
+// be lost. IDs mint only on intent transitions. A displaced image is
+// deleted by ID first, so image memory stays bounded by the one on screen.
 func (c *imgCache) commitOverlayIntent(intent overlayIntent) (emit bool, transmitID, displacedID uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -132,13 +117,11 @@ func (c *imgCache) clearOverlayIntent() (deletedID uint64) {
 	return deletedID
 }
 
-// hideOverlayWhileModal drops the shown cover under an open modal with
-// an image-scoped delete (every placement of the one shown image, data
-// preserved for the restore on close). It fires on every modal frame
-// while the slot believes an image is live — never once-and-silent: a
-// missed delete or a resurrected placement self-heals on the next
-// frame instead of stranding the image over the modal permanently.
-// The delete is idempotent and tiny, so the repeat costs nothing.
+// hideOverlayWhileModal drops the shown cover under an open modal with an
+// image-scoped delete (placements only, data preserved for the close
+// restore). It repeats every modal frame — never once-and-silent — so a
+// missed delete or resurrected placement self-heals instead of stranding
+// the image over the modal. Idempotent and tiny, so the repeat is free.
 func (c *imgCache) hideOverlayWhileModal() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -240,11 +223,9 @@ func (c *imgCache) resetKittyOverlayState() {
 }
 
 func (c *imgCache) resetKittyOverlayStateLocked() {
-	// The terminal may still hold the shown image, so its ID carries
-	// over as a pending purge: the next emission deletes it (data and
-	// placements) instead of stranding it. nextID and placementSeq are
-	// deliberately preserved across resets: reusing an ID could
-	// resurrect a deleted image the terminal still holds.
+	// The shown image may still live in the terminal: carry its ID as a
+	// pending purge. nextID and placementSeq never reset — a reused ID
+	// could resurrect a deleted image.
 	purgeID := c.overlay.purgeID
 	if c.overlay.visible && c.overlay.shownID != 0 {
 		purgeID = c.overlay.shownID
@@ -320,12 +301,10 @@ func chunkBase64(encoded string, size int) []string {
 	return parts
 }
 
-// encodeKittyChunks frames base64 PNG bytes for transmit-and-display using
-// the kitty wire encoding from x/ansi: chunking at the protocol's
-// MaxChunkSize, canonical first-chunk options, quiet mode on the first
-// chunk. A single chunk carries no m= flag (the library's canonical form);
-// continuations carry only m: extra keys there trip Ghostty's chunked
-// transfer path (observed: images silently missing).
+// encodeKittyChunks frames base64 PNG bytes for transmit-and-display:
+// chunked at the protocol's MaxChunkSize, canonical first-chunk options.
+// A single chunk carries no m=; continuations only m= — extra keys trip
+// Ghostty's chunked-transfer path (observed: images silently missing).
 func encodeKittyChunks(chunks []string, cols, rows int, imageID uint64) string {
 	var sb strings.Builder
 	for i, part := range chunks {
@@ -342,8 +321,8 @@ func encodeKittyChunks(chunks []string, cols, rows int, imageID uint64) string {
 				DoNotMoveCursor: true,
 			}
 			opts := o.Options()
-			// Negative z renders under text (kitty spec); x/ansi only
-			// emits z for positive values, so it rides as a literal.
+			// Negative z renders under text (kitty spec); x/ansi skips it, so it
+			// rides as a literal.
 			opts = append(opts, "z=-1")
 			if !last {
 				opts = append(opts, "m=1")

@@ -60,7 +60,7 @@ func TestPlayerBackendReadySwapsCatalogAndReloads(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected the upgraded catalog to trigger a library load")
 	}
-	// The load rides in a batch with the sync deadline tick; unwrap it.
+	// The load rides in a batch with the sync deadline tick.
 	msgs := []tea.Msg{cmd()}
 	for len(msgs) > 0 {
 		switch got := msgs[0].(type) {
@@ -93,8 +93,6 @@ func TestConnectingPlayerFrameContract(t *testing.T) {
 	}
 }
 
-// While the startup gate holds, the player bar is already in place with its
-// empty scaffold — it never appears late, data fills in via the normal push.
 func TestPlayerBarAlwaysRenders(t *testing.T) {
 	m := NewLoaderModel()
 	m.ui.width = 100
@@ -111,8 +109,6 @@ func TestPlayerBarAlwaysRenders(t *testing.T) {
 	}
 }
 
-// The only spinner during startup is the shared connecting one; image
-// panels hold label-only, the player bar is never gated.
 func TestStartupGateShowsSingleMessage(t *testing.T) {
 	m := NewLoaderModel()
 	m.ui.width = 100
@@ -135,8 +131,8 @@ func TestStartupGateShowsSingleMessage(t *testing.T) {
 // The startup sync releases on pushed state, on a mid-load state (settling
 // the reveal), or on the grace deadline with nothing pushed.
 func TestStartupSyncReleases(t *testing.T) {
-	// A mid-load state does not split the reveal: hold until the settle,
-	// then everything lands in one frame.
+	// A mid-load push must not split the reveal; hold until the settle and
+	// land everything in one frame.
 	m := NewLoaderModel()
 	m.transport.playerConnecting = true
 	m.transport.statePushSeen = true
@@ -153,7 +149,6 @@ func TestStartupSyncReleases(t *testing.T) {
 		t.Fatal("settled + state seen must release the hold")
 	}
 
-	// Attached and loaded, nothing pushed yet, grace running: held.
 	m2 := NewLoaderModel()
 	m2.transport.revealArmed = true
 	m2.transport.revealGraceEnd = time.Now().Add(time.Second)
@@ -161,14 +156,12 @@ func TestStartupSyncReleases(t *testing.T) {
 		t.Fatal("state-await tail must hold until the deadline passes")
 	}
 
-	// Same, deadline passed: released (idle backend).
 	m2.transport.revealGraceEnd = time.Now().Add(-time.Millisecond)
 	if m2.startupPending() {
 		t.Fatal("expired grace must release the hold")
 	}
 
-	// Arming on attach: the reveal deadline tick fires independently of the
-	// library load.
+	// The reveal deadline tick arms on attach, independent of the library load.
 	m4 := NewLoaderModel()
 	m4.transport.playerConnecting = true
 	catalog := fakeCatalog{
@@ -186,8 +179,6 @@ func TestStartupSyncReleases(t *testing.T) {
 	}
 }
 
-// During the hold the header plays no playback pieces: no play/pause icon,
-// no title, no volume bar — all of them join the single reveal.
 func TestHeaderHoldsDuringStartup(t *testing.T) {
 	m := NewLoaderModel()
 	m.ui.width = 100

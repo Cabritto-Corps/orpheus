@@ -13,9 +13,8 @@ import (
 	"orpheus/internal/spotify"
 )
 
-// pumpListKeys feeds keypresses to a bubbles list the way the app does,
-// executing returned commands (notably the async filterItems matcher) and
-// feeding resulting messages back until quiescent.
+// Feeds keypresses the way the app does, executing cmds so the async
+// filter matcher settles to quiescence.
 func pumpListKeys(t *testing.T, l list.Model, keys ...tea.KeyPressMsg) list.Model {
 	t.Helper()
 	for _, k := range keys {
@@ -26,10 +25,8 @@ func pumpListKeys(t *testing.T, l list.Model, keys ...tea.KeyPressMsg) list.Mode
 	return l
 }
 
-// drainListCmd feeds a list Update's resulting filter match back into the
-// list. Only FilterMatchesMsg is followed: tick/debounce/spinner commands
-// would block for their durations and belong to the app layer, not the
-// list's filter mechanics under test.
+// Only FilterMatchesMsg is followed: tick/debounce/spinner cmds would block
+// and belong to the app layer, not the filter mechanics under test.
 func drainListCmd(t *testing.T, l list.Model, cmd tea.Cmd) list.Model {
 	t.Helper()
 	if cmd == nil {
@@ -64,8 +61,6 @@ func filterTestItems() []list.Item {
 	}
 }
 
-// markedSelectedRow scans a rendered list view for the selected-row marker
-// (the left border gutter) and returns the title lines that carry it.
 func markedTitleLines(t *testing.T, view string) []string {
 	t.Helper()
 	var out []string
@@ -77,10 +72,7 @@ func markedTitleLines(t *testing.T, view string) []string {
 	return out
 }
 
-// After filter-accept, moving down into the results must mark exactly the
-// cursor row — the first result must not render unmarked while selected.
-//
-// OBSERVATION (Bug B harness below): geometry snapshots across filter exit.
+// Bug B harness: geometry snapshots across filter exit live below.
 func TestFilterAcceptDownMarksCursorRow(t *testing.T) {
 	m := NewLoaderModel()
 	m.browse.playlistList.SetItems(filterTestItems())
@@ -151,10 +143,7 @@ func previewGeometry(m model) (panel string, overlay string) {
 	return panel, overlay
 }
 
-// Filter exit must not move the art: same cover URL throughout, so the
-// preview panel must be byte-identical and the overlay placement must
-// stay at the same cell (re-place churn across calls is by design; drift
-// is not).
+// Re-place churn across calls is by design; placement drift is not.
 func TestFilterExitArtGeometryStable(t *testing.T) {
 	for _, protocol := range []imageProtocol{imageProtocolNone, imageProtocolKitty} {
 		m := filterGeomModel(t, protocol)
@@ -170,16 +159,13 @@ func TestFilterExitArtGeometryStable(t *testing.T) {
 			bo, ao := strings.Split(before, "\n"), strings.Split(after, "\n")
 			t.Fatalf("protocol=%v: preview panel changed across filter exit (%d -> %d lines)", protocol, len(bo), len(ao))
 		}
-		// Unchanged intent emits nothing (staying silent keeps the placed
-		// image live); any emission that still lands must anchor identically.
+		// Silence keeps the placed image live; any emission that lands must anchor identically.
 		if afterOverlay != "" && overlayCursor(beforeOverlay) != overlayCursor(afterOverlay) {
 			t.Fatalf("protocol=%v: overlay placement moved across filter exit: %q -> %q", protocol, beforeOverlay, afterOverlay)
 		}
 	}
 }
 
-// overlayCursor extracts the leading cursor-positioning of an overlay
-// emission (the cell the terminal places the image at).
 func overlayCursor(emit string) string {
 	if i := strings.Index(emit, "H"); i > 0 && strings.HasPrefix(emit, "\x1b[") {
 		return emit[:i+1]

@@ -28,12 +28,10 @@ func IsRateLimitError(err error) bool {
 	return isRateLimitError(err)
 }
 
-// rateLimitMaxWait caps per-RoundTrip backoff sleep: longer waits are server
-// penalties, and sleeping them out masks the 429 as a downstream timeout.
+// Longer waits are server penalties; sleeping them out masks the 429 as a downstream timeout.
 const rateLimitMaxWait = 30 * time.Second
 
-// RateLimitError surfaces a 429 wait too long to absorb; short waits keep
-// the coalescing behavior.
+// Surfaces a 429 wait too long to absorb; short waits keep the coalescing retry.
 type RateLimitError struct {
 	RetryAfter time.Duration
 }
@@ -42,8 +40,6 @@ func (e *RateLimitError) Error() string {
 	return fmt.Sprintf("spotify rate limited, retry after %s", formatRetryAfter(e.RetryAfter))
 }
 
-// failFastRateLimit reports whether sleeping out wait would outlive the
-// request deadline or the rateLimitMaxWait ceiling; nil means sleep as before.
 func failFastRateLimit(ctx context.Context, wait time.Duration) error {
 	if wait <= 0 {
 		return nil

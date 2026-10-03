@@ -73,9 +73,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) handlePlayerBackendMsg(msg playerBackendMsg) (tea.Model, tea.Cmd) {
 	m.transport.playerConnecting = false
 	if msg.err != nil {
-		// No global reset here: this failure must survive as the UI's startup error.
-		// The startup reveal gate must also resolve, or the failure stays hidden
-		// behind a connecting placeholder.
+		// The failure must survive as the startup error, and the gate must
+		// resolve now or it hides behind a connecting placeholder forever.
 		m.browse.librarySettled = true
 		m.transport.playbackErr = msg.err
 		return m, nil
@@ -85,14 +84,11 @@ func (m model) handlePlayerBackendMsg(msg playerBackendMsg) (tea.Model, tea.Cmd)
 			m.catalogSource.set(msg.catalog)
 		}
 		m.catalog = msg.catalog
-		// Arm the sync bound: the player backend pushes no state at attach,
-		// so an idle startup reveals on the grace timer instead of waiting.
+		// The backend pushes no state at attach: bound the idle reveal.
 		m.transport.revealArmed = true
 		m.transport.revealGraceEnd = time.Now().Add(firstStateGrace)
 		return m, tea.Batch(
 			m.loadPlaylistsCmd(),
-			// The deadline re-render: the hold must release on its own,
-			// decoupled from whichever tick interval applies then.
 			tea.Tick(firstStateGrace, func(time.Time) tea.Msg { return revealGraceMsg{} }),
 		)
 	}

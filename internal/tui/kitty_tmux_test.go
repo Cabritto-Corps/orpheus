@@ -43,15 +43,12 @@ func TestKittyTmuxWrapsEveryGraphicsPacket(t *testing.T) {
 		t.Fatal("the cursor move drives tmux's own cursor: it must stay outside the passthrough wrapper")
 	}
 
-	// One DCS wrapper per graphics packet (first emission has no delete,
-	// so packets == transmit chunks).
+	// One DCS wrapper per packet (this emission carries no delete).
 	wantWrappers := (len(m.ui.imgs.encoded["u1"]) + kitty.MaxChunkSize - 1) / kitty.MaxChunkSize
 	if got := strings.Count(out, "\x1bPtmux;"); got != wantWrappers {
 		t.Fatalf("expected %d DCS wrappers (one per packet), got %d in %q", wantWrappers, got, out)
 	}
 
-	// No unwrapped packet may remain: every APC opener must be the doubled
-	// inner copy of a wrapped packet (preceded by ESC), never a bare one.
 	for i := 0; ; {
 		j := strings.Index(out[i:], "\x1b_G")
 		if j < 0 {

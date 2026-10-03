@@ -22,13 +22,12 @@ type playerBackendMsg struct {
 	err     error
 }
 
-// PlayerBackendReady delivers the player session's browsing catalog.
 func PlayerBackendReady(catalog spotify.PlaylistCatalog) tea.Msg {
 	return playerBackendMsg{ready: true, catalog: catalog}
 }
 
-// revealGraceMsg re-renders the frame when the startup sync deadline
-// passes without a pushed state, releasing the hold on an idle backend.
+// The deadline re-render: releases the idle-backend hold independently of
+// whichever tick interval applies later.
 type revealGraceMsg struct{}
 
 func PlayerBackendFailed(err error) tea.Msg {
@@ -151,8 +150,7 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	if !m.acceptPlaybackStateSeq(msg.seq) {
 		return m, nil
 	}
-	// Any accepted push proves the state channel is live — even an idle
-	// (nil-status) one — and ends the sync bound.
+	// Any accepted push — even an idle nil-status one — ends the sync bound.
 	m.transport.statePushSeen = true
 	prevStatus := m.transport.status
 	prevQueueHead := queueHeadTrackID(m.transport.queue)
@@ -285,9 +283,8 @@ func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 		}
 	}
 
-	// Drop off-screen URLs so the visible window is not queued behind stale entries.
-	// The playing queue is always interesting: without it a browse refresh
-	// would prune the sweep the state handler just enqueued.
+	// A prune must not touch the playing queue: a browse refresh would
+	// otherwise drop the sweep the state handler just enqueued.
 	keep := make(map[string]struct{}, len(urls))
 	for _, u := range urls {
 		keep[u] = struct{}{}
@@ -480,8 +477,8 @@ func runSongChangeHookWithTimeout(template, trackName, artistName, trackID strin
 	return cmd.Run()
 }
 
-// newSongChangeCmd discards hook output: the child inherits the TUI tty, and a cell-diffing renderer
-// would persist anything it prints. Metadata travels via args/env; terminal access needs tea.ExecProcess.
+// Hook output is discarded: the child inherits the TUI tty and the
+// cell-diffing renderer would persist anything it prints.
 func newSongChangeCmd(template, trackName, artistName, trackID string) (*exec.Cmd, context.CancelFunc) {
 	cmd, _, cancel := newSongChangeCmdWithTimeout(template, trackName, artistName, trackID, songChangeTimeout)
 	return cmd, cancel

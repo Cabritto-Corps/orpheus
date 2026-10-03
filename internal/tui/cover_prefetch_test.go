@@ -60,8 +60,8 @@ func prefetchProbeModel(tb testing.TB, exec loader.Executor) model {
 	return m
 }
 
-// A fake executor that answers every requested item, so batch drains
-// complete the whole sweep instead of stranding unanswered indexes.
+// Answers every requested item, so a batch drain completes the whole sweep
+// instead of stranding unanswered indexes.
 func sweepAnsweringExec(tb testing.TB, fetched *atomic.Int32) loader.Executor {
 	tb.Helper()
 	return func(_ context.Context, req loader.LoadRequest) []loader.LoadResult {
@@ -113,7 +113,6 @@ func TestSweepWarmsFullQueueHeadFirst(t *testing.T) {
 			t.Fatalf("swept cover %q has no kitty encoding", url)
 		}
 	}
-	// Steady state: a second push re-enqueues nothing cached.
 	if cmd := m.sweepQueueCoversCmd(); cmd != nil {
 		runSweepCmd(t, cmd)
 	}
@@ -132,19 +131,16 @@ func TestSweepSkipsCurrentEmptyFailedAndPaused(t *testing.T) {
 	m.transport.queue[0].ImageURL = prefetchCurrentURL
 	m.transport.queue[1].ImageURL = ""
 	m.ui.imgs.markFailed(prefetchAfterURL)
-	// Everything skippable: current, empty, cooldown-gated.
 	if cmd := m.sweepQueueCoversCmd(); cmd != nil {
 		runSweepCmd(t, cmd)
 	}
 	if n := m.ui.cover.queue.Len(); n != 0 {
 		t.Fatalf("sweep queued %d URLs, want 0", n)
 	}
-	// No queue at all.
 	m.transport.queue = nil
 	if cmd := m.sweepQueueCoversCmd(); cmd != nil {
 		t.Fatal("swept with no queue")
 	}
-	// A parked sweep enqueues nothing.
 	m = prefetchProbeModel(t, exec)
 	m.ui.cover.pauseSweep(time.Hour)
 	if cmd := m.sweepQueueCoversCmd(); cmd != nil {
@@ -159,8 +155,8 @@ func TestSweepSkipsCurrentEmptyFailedAndPaused(t *testing.T) {
 
 func TestSweepPromotesNewHeadOnRapidSkip(t *testing.T) {
 	m := prefetchProbeModel(t, nil)
-	// Stale sweep entries sit ahead; a rapid skip must re-prioritize the
-	// new head to the drain front (the sweep calls promoteURL per push).
+	// Stale sweep entries sit ahead: a rapid skip must re-prioritize the
+	// new head to the drain front.
 	for _, u := range []string{"https://cdn/stale1.png", "https://cdn/stale2.png", "https://cdn/new.png"} {
 		m.enqueueCoverURL(u)
 	}
@@ -180,8 +176,6 @@ func TestSweptSkipSwapsWithoutFetch(t *testing.T) {
 	if n := fetched.Load(); n != 1 {
 		t.Fatalf("fetched %d times, want 1", n)
 	}
-	// The skip: the next track becomes current. Its cover must already be
-	// fully cached+encoded so the swap needs no fetch round trip.
 	m.transport.status.AlbumImageURL = prefetchNextURL
 	if m.ui.imgs.shouldQueueLoad(prefetchNextURL) {
 		t.Fatal("swept cover not load-complete")
@@ -198,8 +192,7 @@ func TestSweptSkipSwapsWithoutFetch(t *testing.T) {
 }
 
 func TestEmissionImmediateOnImageLoaded(t *testing.T) {
-	// The swap must ride this message cycle's overlay cmd, never the next
-	// tick: execute the returned cmd and demand a Raw emission now.
+	// The swap must ride this cycle's overlay cmd, never the next tick.
 	m := prefetchProbeModel(t, nil)
 	img, _, err := image.Decode(bytes.NewReader(prefetchProbePNG(t)))
 	if err != nil {
@@ -221,8 +214,7 @@ func TestEmissionImmediateOnImageLoaded(t *testing.T) {
 
 func TestRateLimitFailureParksSweepWithoutRetries(t *testing.T) {
 	m := prefetchProbeModel(t, nil)
-	// Drive the real batch path: the pause lives on the propagated model
-	// (coverManager travels by value), so assert on the returned model.
+	// The pause lives on the propagated model (coverManager travels by value).
 	next, cmd := m.handleImagesBatchLoadedMsg(imagesBatchLoadedMsg{
 		results: []imageLoadedMsg{{url: prefetchNextURL, err: &spotify.RateLimitError{RetryAfter: 5 * time.Minute}}},
 	})
@@ -242,7 +234,6 @@ func TestRateLimitFailureParksSweepWithoutRetries(t *testing.T) {
 	if !got.ui.cover.sweepPaused() {
 		t.Fatal("penalty failure must park the background sweep")
 	}
-	// Transient errors still climb the ladder.
 	if _, cmd := m.handleImageLoadFailure(prefetchAfterURL, errors.New("transient")); cmd == nil {
 		t.Fatal("transient failure must still schedule a retry")
 	}
@@ -251,10 +242,6 @@ func TestRateLimitFailureParksSweepWithoutRetries(t *testing.T) {
 	}
 }
 
-// End-to-end delivery through the real state handler: an imageless push
-// kicks no sweep; the re-push carrying resolved URLs (the backend's
-// post-batch delivery) must sweep the whole queue; the subsequent skip
-// must be a warm hit with no refetch of the now-current cover.
 func TestRepushDeliversHeadCoverForWarmSkip(t *testing.T) {
 	var fetched atomic.Int32
 	exec := func(context.Context, loader.LoadRequest) []loader.LoadResult {
@@ -282,8 +269,6 @@ func TestRepushDeliversHeadCoverForWarmSkip(t *testing.T) {
 		}
 	}
 
-	// Push 1: cold start, head imageless (pre-batch state). Only the
-	// current cover may fetch; no sweep without URLs.
 	_, cmd := m.handlePlaybackStateMsg(playbackStateMsg{
 		status:        pushStatus("spotify:track:current", prefetchCurrentURL),
 		queue:         []spotify.QueueItem{{ID: "spotify:track:next", Name: "Next"}},
@@ -294,8 +279,6 @@ func TestRepushDeliversHeadCoverForWarmSkip(t *testing.T) {
 		t.Fatalf("cold push fetched %d times, want 1 (current cover only)", n)
 	}
 
-	// Push 2: the post-batch re-push carries resolved URLs for the whole
-	// queue; one sweep batch must warm both covers.
 	_, cmd = m.handlePlaybackStateMsg(playbackStateMsg{
 		status: pushStatus("spotify:track:current", prefetchCurrentURL),
 		queue: []spotify.QueueItem{
@@ -309,8 +292,6 @@ func TestRepushDeliversHeadCoverForWarmSkip(t *testing.T) {
 		t.Fatalf("re-push fetched %d times, want 2 (one sweep batch for the queue)", n)
 	}
 
-	// The skip: the swept cover is fully cached, so becoming current
-	// must not refetch it.
 	_, cmd = m.handlePlaybackStateMsg(playbackStateMsg{
 		status: pushStatus("spotify:track:next", prefetchNextURL),
 		queue: []spotify.QueueItem{

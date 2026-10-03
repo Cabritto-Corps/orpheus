@@ -128,9 +128,8 @@ func reassertBgLines(text, seq string) string {
 	return strings.Join(lines, "\n")
 }
 
-// Terminals have no layers: an inner reset clears the background for
-// the rest of the line, so a painted band would show holes wherever
-// styled fragments, icons or glyphs sit.
+// Terminals have no layers: an inner reset clears the background for the
+// rest of the line, so a painted band over styled fragments shows holes.
 func reassertBg(text, seq string) string {
 	if seq == "" {
 		return text

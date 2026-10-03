@@ -12,9 +12,8 @@ import (
 	"orpheus/internal/spotify"
 )
 
-// Distinct cover URLs per item: the earlier geometry battery used one URL
-// for every row, so no cursor movement could ever swap the art and the
-// whole class passed green. These pins fail on the live-selection code.
+// Distinct cover URLs per row: a shared URL passed green because no
+// cursor move could ever swap the art. These pins fail on live-selection code.
 func filterChurnModel(t *testing.T, protocol imageProtocol) model {
 	t.Helper()
 	m := NewLoaderModel()
@@ -46,9 +45,8 @@ func filterChurnModel(t *testing.T, protocol imageProtocol) model {
 	return m
 }
 
-// Opening search resets the list cursor to the top while the user's item
-// was "beta one": the preview must keep showing the pre-filter selection
-// instead of chasing the cursor through the intermediate.
+// Opening the filter resets the cursor to the top: the preview must not
+// chase the cursor through the intermediate.
 func TestFilterToggleKeepsPreviewSelection(t *testing.T) {
 	for _, protocol := range []imageProtocol{imageProtocolKitty, imageProtocolNone} {
 		m := filterChurnModel(t, protocol)
@@ -70,8 +68,7 @@ func TestFilterToggleKeepsPreviewSelection(t *testing.T) {
 	}
 }
 
-// Typing re-seats the match under the cursor on every keystroke: the
-// preview must not move until the filter is accepted or cleared.
+// Typing re-seats the cursor every keystroke; the preview must not chase it.
 func TestFilterTypingKeepsPreviewFrozen(t *testing.T) {
 	for _, protocol := range []imageProtocol{imageProtocolKitty, imageProtocolNone} {
 		m := filterChurnModel(t, protocol)
@@ -99,8 +96,6 @@ func TestFilterTypingKeepsPreviewFrozen(t *testing.T) {
 	}
 }
 
-// Esc must snap the preview to the final cursor position in a single step:
-// the intermediate filter selection must never display.
 func TestFilterExitSnapsPreviewToFinal(t *testing.T) {
 	m := filterChurnModel(t, imageProtocolKitty)
 	l := pumpListKeys(t, m.browse.playlistList, pressRune('/'))
@@ -119,10 +114,8 @@ func TestFilterExitSnapsPreviewToFinal(t *testing.T) {
 	}
 }
 
-// The overlay slot must not commit a filter-intermediate subject: a commit
-// here is a full image retransmit plus a displaced-image delete, i.e. the
-// kitty flicker. Pin at delivery level: the shown URL never changes while
-// filtering and no data-delete for the old image is emitted.
+// A commit here is a full image retransmit plus a displaced delete — the
+// reported kitty flicker. Pin at delivery level.
 func TestFilterTypingCommitsNoOverlayTransmit(t *testing.T) {
 	m := filterChurnModel(t, imageProtocolKitty)
 	out, content := m.kittyOverlayBytes()
@@ -172,10 +165,8 @@ func TestStablePreviewUnit(t *testing.T) {
 	}
 }
 
-// Esc on search is a cancel: the cursor and the preview must return to the
-// pre-filter selection — the exact reported bug (cover art + border moving
-// on search quit). Drives the app-level key path: the restore lives in
-// updateBrowseList, not inside bubbles.
+// Esc is a cancel: cursor and preview must return pre-filter — the reported
+// bug (art + border moved on search quit); the restore lives in updateBrowseList.
 func TestFilterCancelRestoresSelectionAndArt(t *testing.T) {
 	m := filterChurnModel(t, imageProtocolKitty)
 	before, _ := previewGeometry(m)
@@ -232,7 +223,6 @@ func TestFilterCancelRestoresSelectionAndArt(t *testing.T) {
 	}
 }
 
-// Enter keeps the filtered selection — accept is not a cancel.
 func TestFilterAcceptKeepsFilteredSelection(t *testing.T) {
 	m := filterChurnModel(t, imageProtocolKitty)
 	next, _ := m.Update(pressRune('/'))
@@ -240,8 +230,8 @@ func TestFilterAcceptKeepsFilteredSelection(t *testing.T) {
 	if m.browse.playlistList.FilterState() != list.Filtering {
 		t.Fatal("expected Filtering state after /")
 	}
-	// Typing drains its FilterMatchesMsg at list level: the app-level batch
-	// carries tick/debounce cmds that would block for their durations.
+	// Typing drains its FilterMatchesMsg at list level; the app-level batch
+	// carries blocking tick/debounce cmds.
 	l := pumpListKeys(t, m.browse.playlistList, pressRune('b'), pressRune('e'), pressRune('t'), pressRune('a'))
 	m.browse.playlistList = l
 	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})

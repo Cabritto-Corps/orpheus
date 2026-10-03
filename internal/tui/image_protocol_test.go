@@ -61,8 +61,6 @@ func TestEncodeKittyChunksCanonicalFraming(t *testing.T) {
 	payload := strings.Repeat("A", 9000)
 	out := encodeKittyChunks(chunkBase64(payload, kitty.MaxChunkSize), 10, 6, 7)
 
-	// First chunk carries the full transmit-and-display options in the
-	// library's canonical order, with cursor motion suppressed.
 	for _, want := range []string{"f=100", "q=2", "i=7", "c=10", "r=6", "C=1", "a=T", "m=1"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("first chunk missing %q in %q", want, out[:120])
@@ -71,8 +69,6 @@ func TestEncodeKittyChunksCanonicalFraming(t *testing.T) {
 	if strings.Count(out, "\x1b_G") != 3 {
 		t.Fatal("expected three chunk packets")
 	}
-	// Continuations carry only the more flag; the last one terminates
-	// the transmission. Quiet mode lives on the first chunk alone.
 	if !strings.Contains(out, "\x1b_Gm=1;") {
 		t.Fatal("expected middle chunks as bare m=1 continuations")
 	}

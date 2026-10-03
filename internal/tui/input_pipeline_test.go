@@ -182,7 +182,7 @@ func TestVolumeChannelFullFallsBackToDebounce(t *testing.T) {
 }
 
 func TestSeekStillTrailingDebounce(t *testing.T) {
-	// Trailing-edge: a scrub burst coalesces into one player seek while the display moves optimistically.
+	// A scrub burst coalesces into one trailing seek while the display moves optimistically.
 	ch := make(chan librespot.TUICommand, 8)
 	m := volTestModel(ch, 50)
 	m.transport.status.DurationMS = 200000

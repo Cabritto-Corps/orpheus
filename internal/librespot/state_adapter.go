@@ -37,8 +37,7 @@ func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUp
 	if includeQueue {
 		out.QueueIncluded = true
 		if p.state.tracks != nil {
-			// Loaded-only read: a page fetch would stall the Run select loop;
-			// the top-up timer extends loaded pages off the emit path.
+			// Loaded-only read: a page fetch would stall the Run loop; the top-up timer extends pages off the emit path.
 			upcoming := p.state.tracks.UpcomingTracksLoaded(queueOverrideMaxTracks)
 			out.Queue = providedTracksToQueueEntries(p, upcoming)
 			out.QueueHasMore = len(upcoming) >= queueOverrideMaxTracks

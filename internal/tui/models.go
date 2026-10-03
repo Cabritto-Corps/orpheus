@@ -45,9 +45,9 @@ func (s *catalogSource) set(catalog spotify.PlaylistCatalog) {
 type transportModel struct {
 	status           *spotify.PlaybackStatus
 	playerConnecting bool
-	// Startup sync: the single reveal waits for the session attach, the
-	// first library load, and the first pushed playback state — with a
-	// short grace bound, because an idle backend never pushes a state.
+	// Startup sync: the reveal waits for attach, the first library load,
+	// and the first pushed state — bounded by a grace because an idle
+	// backend never pushes.
 	revealArmed             bool
 	statePushSeen           bool
 	revealGraceEnd          time.Time
@@ -82,13 +82,13 @@ type browseModel struct {
 	albumsForbidden     bool
 	playlistsErr        error
 	playlistsRetryCount int
-	// filterRestorable remembers the pre-filter cursor: bubbles resets it
-	// to the top when filtering opens and never puts it back on cancel,
-	// so / then esc would leave the cover preview snapped to another item.
+	// filterRestorable: bubbles resets the cursor to the top on filter open
+	// and never puts it back on cancel — / then esc would snap the preview
+	// art to another item otherwise.
 	filterRestorable bool
 	filterSavedIdx   int
-	// librarySettled ends the startup reveal gate: first library load resolved
-	// (success OR failure). Later refreshes must not re-blank the panels.
+	// librarySettled: first library load resolved, success or failure.
+	// Refreshes must never re-blank the panels.
 	librarySettled bool
 	playlistList   list.Model
 	albumList      list.Model

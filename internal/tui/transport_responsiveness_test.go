@@ -71,8 +71,7 @@ func rawOverlayPayload(t *testing.T, cmd tea.Cmd) string {
 func TestHelpCloseRestoresArtImmediately(t *testing.T) {
 	m := kittyRestoreModel(t, tabPlayer)
 	m.ui.helpOpen = true
-	// The modal frame's own hide emission (an open keypress and every tick
-	// while open build it) is what arms the close-frame restore.
+	// The hide frames while open arm the close-frame restore.
 	if hide := m.kittyOverlay(); !strings.Contains(hide, "a=d,d=i") {
 		t.Fatalf("expected the modal hide while help is open, got %q", hide)
 	}

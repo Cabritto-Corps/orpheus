@@ -39,7 +39,6 @@ func TestQueueCursorMoves(t *testing.T) {
 	if m.transport.queueCursor != 0 {
 		t.Fatalf("cursor = %d, want 0", m.transport.queueCursor)
 	}
-	// up at top stays clamped
 	next, _ = m.handlePlaybackKey(tea.KeyPressMsg{Code: tea.KeyUp})
 	m = next.(model)
 	if m.transport.queueCursor != 0 {

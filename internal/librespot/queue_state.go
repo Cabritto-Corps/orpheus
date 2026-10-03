@@ -50,26 +50,16 @@ func (p *AppPlayer) resetQueueMetaForContext() {
 	p.queueMetaCache = cache.NewLRU[string, PlaybackStateQueueEntry](8192)
 }
 
-// headImageWindow bounds how many upcoming tracks get cover images resolved
-// ahead of playback. Context metadata carries names but no art, and the TUI
-// prefetch only fires on entries carrying ImageURL — without this window
-// every skip pays a cold cover fetch while the old art holds.
+// Context metadata carries names but no art, and the TUI prefetch fires only on ImageURL entries.
 const headImageWindow = 8
 
-// queueImageSweepWindow bounds the background sweep past the head: the full
-// playing context eventually carries cover URLs so any skip lands warm, not
-// just the next eight. Meta entries are small strings in an 8192-cap cache;
-// the bound paces network, not memory.
+// The bound paces network, not memory: entries are small strings in an 8192-cap cache.
 const queueImageSweepWindow = 128
 
-// queueMetaBatchChunk caps one extended-metadata request: a whole context in
-// a single BatchedEntityRequest risks a megarequest timeout, so large
-// sweeps go out as sequential chunks under the caller's deadline.
+// A whole context in one batch risks a megarequest timeout; large sweeps go out chunked.
 const queueMetaBatchChunk = 50
 
-// headImageURIs selects the upcoming tracks whose covers still need
-// resolution, in order, capped at n. Pure: callers pass an already-read
-// slice so no tracks.List access happens off the Run goroutine.
+// Callers pass an already-read slice: tracks.List must never be touched off the Run goroutine.
 func headImageURIs(upcoming []*connectpb.ProvidedTrack, missing func(id string) bool, n int) []string {
 	if n <= 0 {
 		return nil
@@ -91,8 +81,6 @@ func headImageURIs(upcoming []*connectpb.ProvidedTrack, missing func(id string) 
 	return out
 }
 
-// queueHeadImageMissing reports whether a queue entry still needs its cover
-// resolved before the prefetch can fire on it.
 func (p *AppPlayer) queueHeadImageMissing(id string) bool {
 	e := p.getCachedQueueMeta(id)
 	return e == nil || strings.TrimSpace(e.ImageURL) == ""
@@ -138,10 +126,8 @@ func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*conn
 		toResolve = append(toResolve, t.Uri)
 	}
 
-	// Head images: named entries never enter the batch above, so the prefetch
-	// would never see their covers. Union them explicitly. (Checked against
-	// queued membership, not seen: seen holds every distinct id including
-	// cached ones that were never queued.)
+	// Named head entries never enter the batch above, so the prefetch would never see their
+	// covers; union them. Membership traces toResolve, not seen (seen holds cached never-queued ids).
 	queued := make(map[string]struct{}, len(toResolve)+len(headURIs))
 	for _, uri := range toResolve {
 		queued[golibrespot.NormalizeSpotifyId(uri)] = struct{}{}
@@ -165,14 +151,7 @@ func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*conn
 	return changed
 }
 
-// resolveQueueMetadataBatch resolves one metadata batch and merges names and
-// cover images into the queue cache. Large sweeps go out chunked so one
-// giant context cannot build a megarequest; chunks run sequentially under
-// the caller's deadline and the first context error stops the rest.
-// Network runs on the caller's goroutine — call from background workers,
-// never Run. It reports whether the merge taught the cache anything new;
-// callers signal Run to re-push only then, so a persistently unresolvable
-// head cannot arm a re-resolve loop.
+// Network runs on the caller's goroutine — call from background workers, never Run.
 func (p *AppPlayer) resolveQueueMetadataBatch(ctx context.Context, uris []string) bool {
 	if len(uris) == 0 {
 		return false
@@ -216,10 +195,8 @@ func (p *AppPlayer) resolveQueueMetadataChunk(ctx context.Context, uris []string
 	return p.mergeQueueBatchResult(batch)
 }
 
-// mergeQueueBatchResult merges one metadata batch into the queue cache,
-// filling names and cover images. Idempotent: re-resolving refreshes.
-// It reports whether any entry is new or gained a name or cover image;
-// unchanged re-resolves must not re-arm the delivery signal.
+// Reports changed only when an entry is new or gained a name or cover image, so unchanged
+// re-resolves cannot re-arm the delivery signal (a persistently unresolvable head would loop).
 func (p *AppPlayer) mergeQueueBatchResult(batch map[string]spclient.ResolvedEntry) (changed bool) {
 	for uri, entry := range batch {
 		id := golibrespot.NormalizeSpotifyId(uri)
@@ -240,11 +217,7 @@ func (p *AppPlayer) mergeQueueBatchResult(batch map[string]spclient.ResolvedEntr
 	return changed
 }
 
-// maybeSweepQueueImages resolves cover URLs for the playing context past
-// the head window, so a far skip lands as warm as the next one. It skips
-// the head outright (the head warm owns it — refetching it here would
-// double every batch), with its own collapse flag alongside. The missing()
-// check keeps it quiet once the context is imaged.
+// Skips the head window outright — the head warm owns it; refetching it here would double every batch.
 func (p *AppPlayer) maybeSweepQueueImages() {
 	if p == nil || p.state == nil || p.state.tracks == nil {
 		return
@@ -273,10 +246,7 @@ func (p *AppPlayer) maybeSweepQueueImages() {
 	}()
 }
 
-// maybeWarmQueueHeadImages keeps the coming covers ahead of the next skip.
-// Run-side: cheap cache check, then one collapsing background batch. Called
-// after a track loads, the single funnel for initial loads, skips,
-// auto-advances, and recovery reloads.
+// Run-side cheap cache check, then one collapsing background batch; the single funnel for track loads.
 func (p *AppPlayer) maybeWarmQueueHeadImages() {
 	if p == nil || p.state == nil || p.state.tracks == nil {
 		return
@@ -299,9 +269,7 @@ func (p *AppPlayer) maybeWarmQueueHeadImages() {
 	}()
 }
 
-// signalQueueMetaUpdated tells Run a background metadata batch taught the
-// queue cache something new. Cap-1 and non-blocking: overlapping batches
-// coalesce into one delivery, and a bare test player (nil channel) skips.
+// Cap-1 non-blocking signal: overlapping batches coalesce into one delivery; nil channel (tests) skips.
 func (p *AppPlayer) signalQueueMetaUpdated() {
 	if p == nil {
 		return
@@ -312,11 +280,8 @@ func (p *AppPlayer) signalQueueMetaUpdated() {
 	}
 }
 
-// handleQueueMetaUpdated delivers a completed background metadata batch:
-// re-emit with queue so the TUI learns the new cover URLs (its prefetch
-// only fires on entries carrying ImageURL), then re-warm any heads the
-// batch didn't cover — skips taken while the batch was in flight leave new
-// heads no other trigger would warm before the next track load.
+// Delivers a completed batch: re-emit so the TUI prefetch sees new covers, then re-warm heads it
+// didn't cover — mid-flight skips leave new heads no other trigger would warm.
 func (p *AppPlayer) handleQueueMetaUpdated() {
 	if p == nil || p.state == nil || p.state.tracks == nil {
 		return

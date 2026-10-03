@@ -17,14 +17,11 @@ import (
 // the user, and three messages only made the hold look random.
 const startupText = "connecting to Spotify..."
 
-// stablePreview remembers the last unfiltered browse selection per list so
-// the cover preview never chases the filter cursor: opening search resets
-// the list cursor to the top and every keystroke re-seats the match under
-// it, so a live preview would swap art (and in kitty mode retransmit the
-// whole image plus delete the displaced one) per keystroke. Readers call
-// through the model helpers below on every frame: unfiltered frames refresh
-// the memory, filtering frames serve it. Pointer-shared like the render
-// caches, so every model copy agrees; a nil receiver serves live.
+// stablePreview freezes the preview subject on the pre-filter selection
+// while search is open: the filter cursor resets to the top and re-seats
+// per keystroke, so a live preview would swap art (and in kitty retransmit)
+// per keystroke. Unfiltered frames refresh the memory, filtering frames
+// serve it; pointer-shared so every model copy agrees.
 type stablePreview struct {
 	mu          sync.Mutex
 	playlist    playlistItem
@@ -84,18 +81,14 @@ func (m model) stableAlbumSelection() (playlistItem, bool) {
 	return m.styles.previewStable.forAlbums(m.browse.albumList.FilterState() == list.Filtering, live, ok)
 }
 
-// startupPending: the single startup sync gate. Content panels hold the
-// connecting spinner until the session is attached AND the first library
-// load resolves AND (a playback state has been pushed OR the grace deadline
-// passes — an idle backend never pushes). Everything then eyes up together
-// in one frame instead of trickling in.
+// The single startup sync gate: everything lands together at the library
+// settle, subject to the first pushed playback state (an idle backend
+// releases on the grace deadline instead).
 func (m model) startupPending() bool {
 	switch {
 	case m.transport.playerConnecting:
 		return true
 	case !m.browse.librarySettled:
-		// The library settle is THE reveal: a status push mid-load does not
-		// split the frame; everything lands together once it settles.
 		return true
 	case m.transport.status != nil || m.transport.statePushSeen:
 		return false
@@ -128,8 +121,7 @@ func (m model) playlistBrowserPanel(w, h int) string {
 		}
 		inner = m.styles.styleError.Render(truncate(errStr, w-2)) + rateHint + "\n" + m.styles.styleDimmed.Render("r to retry")
 	} else if m.startupPending() || (m.browse.playlistsLoading && len(m.browse.playlistList.Items()) == 0) {
-		// A stale-looking "No playlists yet" reads as data loss; hold the
-		// shared connecting spinner instead.
+		// "No playlists yet" during load reads as data loss; keep spinning.
 		inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " " + startupText)
 	} else if len(m.browse.playlistList.Items()) == 0 {
 		inner = m.styles.styleDimmed.Render("No playlists yet — press r to refresh")
@@ -162,8 +154,6 @@ func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
 	innerW := w - 2
 
 	if m.startupPending() {
-		// Startup hold: no shell, no meta — the art and its frame land in
-		// the single reveal together with everything else.
 		content := labelLine
 		return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 	}
@@ -226,8 +216,6 @@ func (m model) albumBrowserPanel(w, h int) string {
 		}
 		inner = m.styles.styleError.Render(truncate(errStr, w-2)) + rateHint + "\n" + m.styles.styleDimmed.Render("r to retry")
 	} else if m.startupPending() || (m.browse.playlistsLoading && len(m.browse.albumList.Items()) == 0) {
-		// Same gate as the playlists panel: never show "No saved albums yet"
-		// while the session itself is still attaching.
 		inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " " + startupText)
 	} else if m.browse.albumsForbidden && len(m.browse.albumList.Items()) == 0 {
 		inner = m.styles.styleDimmed.Render("saved albums unavailable — re-run 'orpheus auth login' (needs user-library-read)")
@@ -278,8 +266,6 @@ func (m model) albumCoverPanel(w, h, coverCols, coverRows int) string {
 	innerW := w - 2
 
 	if m.startupPending() {
-		// Startup hold: no placeholder art, no "nothing playing" — same
-		// label-only hold as the preview panels; everything lands together.
 		content := labelLine
 		return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 	}
@@ -324,7 +310,7 @@ func (m model) queuePanel(w, h int) string {
 	colHeader := grid.header(m.styles)
 	colDivider := m.styles.sectionDivider(w)
 
-	headerLines := 4 // label, divider, column header, divider
+	headerLines := 4
 	errLines := 0
 	if m.transport.playbackErr != nil {
 		errLines = 2
@@ -387,9 +373,8 @@ func (m model) queuePanel(w, h int) string {
 	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 }
 
-// Both renderers derive from the single coverArt, so ANSI and kitty can
-// never disagree; the protocol reads under the cache lock so render sites
-// don't race on the field.
+// Single artRect source: ANSI and kitty can never disagree; the protocol
+// read rides the cache lock so render sites do not race on it.
 func (m model) coverOrPlaceholder(url string, cols, rows int) string {
 	rect := m.coverArt(cols, rows)
 	if m.ui.imgs == nil {
@@ -445,9 +430,8 @@ func (m model) blankArt(cols, rows int) string {
 	return sb.String()
 }
 
-// placeholderArt must match the loaded cover's shell exactly — same frame
-// border, same budget — or the border pops in and out around decode time:
-// the cover appears to move at the top of the panel.
+// Must match the loaded cover's shell exactly or the border pops in and
+// out around decode — the cover reads as moving.
 func (m model) placeholderArt(cols, rows int) string {
 	if cols <= 2 || rows <= 2 {
 		return ""
@@ -470,7 +454,7 @@ type queueGrid struct {
 func queueGridFor(w int) queueGrid {
 	g := queueGrid{lead: 1, idxW: 4, durW: 8}
 	g.durW = min(g.durW, max(4, (w-9)/6))
-	budget := w - g.lead - g.idxW - 1 - 2 - 1 - g.durW // title+artist
+	budget := w - g.lead - g.idxW - 1 - 2 - 1 - g.durW
 	g.artistW = min(min(20, max(6, budget*2/5)), max(0, budget-4))
 	g.titleW = max(4, budget-g.artistW)
 	if budget < 8 {
@@ -493,7 +477,8 @@ func (g queueGrid) header(s *themeStyles) string {
 	return b.String()
 }
 
-// One style owns the whole padded row (single-owner selection).
+// One style owns the whole padded row: nested styled fragments break
+// background painting.
 func (g queueGrid) row(s *themeStyles, w, num int, title, artist string, durMS int, selected bool) string {
 	name := truncate(title, g.titleW)
 	artist = truncate(artist, g.artistW)

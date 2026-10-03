@@ -167,9 +167,8 @@ func TestViewFrameContractAllThemes(t *testing.T) {
 			for _, tb := range []tab{tabPlaylists, tabAlbums, tabPlayer} {
 				variant := frameVariant{name: themeName, width: size[0], height: size[1], tab: tb, hasQueue: true}
 				m := guardModel(t, variant)
-				// Swap the bundle after construction and retheme the
-				// lists, so every row (including delegates) renders in
-				// the theme under test — not just the chrome.
+				// Retheme the lists too, so delegate rows (not just chrome)
+				// render in the theme under test.
 				m.styles = buildThemeStyles(themePresetState(themeName))
 				m.rethemeBrowseLists()
 				name := fmt.Sprintf("%dx%d/%s/%s", size[0], size[1], themeName, tabName(variant.tab))
@@ -186,8 +185,6 @@ func TestViewFrameContractBackgroundModes(t *testing.T) {
 			for _, tb := range []tab{tabPlaylists, tabAlbums, tabPlayer} {
 				variant := frameVariant{name: "bg-" + style, width: size[0], height: size[1], tab: tb, hasQueue: true}
 				m := guardModel(t, variant)
-				// Styles live on the model: swap the bundle and
-				// retheme the lists before rendering.
 				st := themePresetState("default")
 				st.backgrounds.Style = style
 				m.styles = buildThemeStyles(st)
@@ -230,7 +227,6 @@ func TestPopupListSizeInvariantUnderResize(t *testing.T) {
 
 func TestKittyOverlaySilentBelowFrameThreshold(t *testing.T) {
 	t.Setenv("TMUX", "")
-	// A fresh sub-threshold slot must emit nothing.
 	v := frameVariant{name: "tiny", width: 30, height: 10, tab: tabPlayer, playing: true}
 	m := guardModel(t, v)
 	m.ui.imgs.protocol = imageProtocolKitty
@@ -258,8 +254,7 @@ func TestKittyOverlaySilentBelowFrameThreshold(t *testing.T) {
 }
 
 func TestModalHeaderNeverOverflows(t *testing.T) {
-	// title+hint spanning exactly the inner width used to overflow via the
-	// max(2,...) gap floor and wrap inside the box.
+	// title+hint at exactly the inner width used to overflow via the max(2,...) gap floor.
 	cases := []struct{ title, hint string }{
 		{strings.Repeat("T", 30), strings.Repeat("H", 30)},
 		{strings.Repeat("T", 60), strings.Repeat("H", 60)},

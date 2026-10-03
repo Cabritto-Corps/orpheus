@@ -209,7 +209,6 @@ func TestSettingsImageStyleCyclePersistsAndApplies(t *testing.T) {
 		t.Fatalf("settings row must show the pixelated choice:\n%s", out)
 	}
 
-	// The row cycles back to rendered with the same key used for the other rows.
 	next = sendEnter(next)
 	if next.ui.settings.imageStyle != config.ImageStyleRendered {
 		t.Fatalf("enter must cycle back to rendered, got %q", next.ui.settings.imageStyle)
@@ -238,8 +237,6 @@ func TestApplyImageStyleClearsKittyStateAndRecovery(t *testing.T) {
 	m.ui.imgs.covers.Set(key, "stale kitty render")
 	m.ui.imgs.coverKeysByURL[key.url] = map[coverKey]struct{}{key: {}}
 	m.ui.imgs.encoded[key.url] = "stale encoding"
-	// Display the stale cover through the overlay slot, then verify the
-	// style switch tears the whole slot down.
 	if emit, _, _ := m.ui.imgs.commitOverlayIntent(overlayIntent{url: key.url}); !emit {
 		t.Fatal("expected initial overlay commit to emit")
 	}
@@ -259,10 +256,8 @@ func TestApplyImageStyleClearsKittyStateAndRecovery(t *testing.T) {
 	if len(next.ui.imgs.coverKeysByURL) != 0 || len(next.ui.imgs.encoded) != 0 {
 		t.Fatal("style-specific encoded state must be invalidated on style change")
 	}
-	// The reset forces retransmission: the same intent must emit again so a
-	// terminal holding the stale image gets the new-protocol content.
-	// (Emitting here also proves the slot was cleared: an uncleared slot
-	// would suppress the identical intent.)
+	// Emitting also proves the slot was cleared: an uncleared slot would
+	// suppress the identical intent.
 	if emit, _, _ := next.ui.imgs.commitOverlayIntent(overlayIntent{url: key.url}); !emit {
 		t.Fatal("style change must force overlay retransmission")
 	}
@@ -334,9 +329,8 @@ func TestRenderedStyleSwitchReencodesVisibleCover(t *testing.T) {
 	if loaded.err != nil {
 		t.Fatalf("re-encode failed: %v", loaded.err)
 	}
-	// The loaded message carries the force-minted overlay emission on its
-	// own cmd: building it is the emission, so assert the shipped bytes
-	// instead of asking the (now unchanged) slot again.
+	// Building the emission IS the emission: assert the shipped bytes
+	// rather than asking the (now unchanged) slot again.
 	nextModel, overlayCmd := next.handleImageLoadedMsg(loaded)
 	next = nextModel.(model)
 	if !next.ui.imgs.hasKittyEncoding(url) {
