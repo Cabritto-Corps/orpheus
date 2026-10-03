@@ -51,6 +51,8 @@ type transportModel struct {
 	revealArmed             bool
 	statePushSeen           bool
 	revealGraceEnd          time.Time
+	queueMetaPending        bool
+	queueMetaRevealEnd      time.Time
 	queue                   []spotify.QueueItem
 	queueCursor             int
 	queueHasMore            bool

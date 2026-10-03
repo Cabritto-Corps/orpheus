@@ -30,6 +30,8 @@ func PlayerBackendReady(catalog spotify.PlaylistCatalog) tea.Msg {
 // whichever tick interval applies later.
 type revealGraceMsg struct{}
 
+type queueMetaRevealMsg struct{}
+
 func PlayerBackendFailed(err error) tea.Msg {
 	return playerBackendMsg{err: err}
 }
@@ -152,6 +154,12 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	}
 	// Any accepted push — even an idle nil-status one — ends the sync bound.
 	m.transport.statePushSeen = true
+	queueMetaArmedNow := false
+	if msg.queueMetaPending && !m.transport.queueMetaPending {
+		m.transport.queueMetaRevealEnd = time.Now().Add(queueMetaRevealGrace)
+		queueMetaArmedNow = true
+	}
+	m.transport.queueMetaPending = msg.queueMetaPending
 	prevStatus := m.transport.status
 	prevQueueHead := queueHeadTrackID(m.transport.queue)
 	inVolSettle := m.transport.volDebouncePending >= 0 ||
@@ -219,6 +227,9 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	}
 	if cmd := m.pumpInputExecutor(); cmd != nil {
 		cmds = append(cmds, cmd)
+	}
+	if queueMetaArmedNow {
+		cmds = append(cmds, tea.Tick(queueMetaRevealGrace, func(time.Time) tea.Msg { return queueMetaRevealMsg{} }))
 	}
 	cmds = append(cmds, m.kittyOverlayCmd())
 	return m, tea.Batch(cmds...)

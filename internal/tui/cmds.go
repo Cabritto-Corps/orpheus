@@ -59,11 +59,12 @@ type navDebounceMsg struct {
 }
 
 type playbackStateMsg struct {
-	seq           uint64
-	status        *spotify.PlaybackStatus
-	queue         []spotify.QueueItem
-	queueHasMore  bool
-	queueIncluded bool
+	seq              uint64
+	status           *spotify.PlaybackStatus
+	queue            []spotify.QueueItem
+	queueHasMore     bool
+	queueIncluded    bool
+	queueMetaPending bool
 }
 
 type connectionLostMsg struct {
@@ -90,7 +91,7 @@ func StartPlaybackStateListener(playbackStateCh <-chan *librespot.PlaybackStateU
 				}
 				seq++
 				status, queue, queueHasMore, queueIncluded := PlaybackStateFromLibrespot(u)
-				send(playbackStateMsg{seq: seq, status: status, queue: queue, queueHasMore: queueHasMore, queueIncluded: queueIncluded})
+				send(playbackStateMsg{seq: seq, status: status, queue: queue, queueHasMore: queueHasMore, queueIncluded: queueIncluded, queueMetaPending: u.QueueMetaPending})
 			case <-ctx.Done():
 				return
 			}

@@ -754,12 +754,11 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 	p.scheduleQueueTopUp()
 	p.queueHeadWarmInFlight.Store(true)
 	go func() {
+		defer p.queueMetaPending.Store(false)
 		defer p.queueHeadWarmInFlight.Store(false)
 		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
 		defer metaCancel()
-		if p.resolveContextQueueMetadata(metaCtx, allTracks, headURIs) {
-			p.signalQueueMetaUpdated()
-		}
+		p.resolveContextQueueMetadata(metaCtx, allTracks, headURIs)
 	}()
 	if err := p.loadCurrentTrack(ctx, paused, drop); err != nil {
 		if isUnplayableMediaError(err) {
