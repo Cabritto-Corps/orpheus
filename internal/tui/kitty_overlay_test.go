@@ -167,12 +167,12 @@ func transmitImageID(t *testing.T, emission string) string {
 	return ""
 }
 
-func TestKittyUnchangedIntentReplacesFromStoredData(t *testing.T) {
-	// Renderer repaints erase placements (the art rect is blank in the
-	// text layer and blank runs win the erase optimization), so an
-	// unchanged visible intent must re-place the stored image every
-	// frame instead of emitting nothing: the data stays stored ID-keyed
-	// in the terminal, and a=p restores the placement in ~70 bytes.
+func TestKittyUnchangedIntentStaysSilent(t *testing.T) {
+	// An unchanged visible intent emits nothing: image data and placement
+	// already live in the terminal, and re-placing on every frame churned
+	// erase/put loops the steady flow shows as flicker. The one reason an
+	// unchanged frame still emits is a modal-close restore, which reneeds
+	// the placement hidden under the modal.
 	t.Setenv("TMUX", "")
 	m := framedTestModel()
 	m.ui.width = 120
@@ -189,39 +189,46 @@ func TestKittyUnchangedIntentReplacesFromStoredData(t *testing.T) {
 	shownID := transmitImageID(t, first)
 	rect := m.coverArt(m.bodyLayout().coverCols, m.bodyLayout().coverRows)
 
-	// Every re-place pre-deletes image-scoped (d=i: placements only, data
-	// survives — unlike uppercase d=I): this drops all placements of the
-	// one shown image, including orphans from dropped emissions, and is
-	// unconditional so no placement-ID bookkeeping can drift stale.
-	second := m.kittyOverlay()
-	if second == "" {
-		t.Fatal("expected an unchanged intent to re-place, not emit nothing")
+	if second := m.kittyOverlay(); second != "" {
+		t.Fatalf("expected an unchanged intent to stay silent, got %q", second)
 	}
-	if strings.Contains(second, "a=T") || !strings.Contains(second, "a=p") {
-		t.Fatalf("expected a payload-free re-place, got %q", second)
+
+	// Modal hide (image-scoped, data kept), then close: the restore is the
+	// only silent-intent emission, a payload-free re-place at the same rect.
+	m.ui.helpOpen = true
+	if hide := m.kittyOverlay(); hide != "" && !strings.Contains(hide, "d=I") {
+		if !strings.Contains(hide, fmt.Sprintf("d=i,i=%s", shownID)) {
+			t.Fatalf("expected the modal hide, got %q", hide)
+		}
+		if strings.Contains(hide, "a=T") || strings.Contains(hide, "a=p") {
+			t.Fatalf("expected the hide to be delete-only, got %q", hide)
+		}
+	}
+	m.ui.helpOpen = false
+	restored, _ := m.kittyOverlayBytes()
+	if restored == "" {
+		t.Fatal("expected a re-place on the close frame")
+	}
+	if strings.Contains(restored, "a=T") {
+		t.Fatalf("expected close to re-place without retransmitting, got %q", restored)
 	}
 	for _, want := range []string{
 		fmt.Sprintf("i=%s", shownID),
 		fmt.Sprintf("c=%d,r=%d", rect.cols, rect.rows),
 		fmt.Sprintf("\x1b[%d;%dH", rect.row, rect.col),
-		"z=-1",
-		fmt.Sprintf("d=i,i=%s", shownID),
 	} {
-		if !strings.Contains(second, want) {
-			t.Fatalf("expected re-place to name %q, got %q", want, second)
+		if !strings.Contains(restored, want) {
+			t.Fatalf("expected re-place to name %q, got %q", want, restored)
 		}
 	}
-	if strings.Contains(second, "d=I") {
-		t.Fatalf("expected the pre-delete to preserve stored data, got %q", second)
+	if strings.Contains(restored, "d=I") {
+		t.Fatalf("expected the restore to keep stored data, got %q", restored)
 	}
-	// Second re-place: same shape, and a fresh p= takes its place, so
-	// placements stay bounded by one on screen.
-	third := m.kittyOverlay()
-	if !strings.Contains(third, "d=i") || strings.Contains(third, "d=I") {
-		t.Fatalf("expected a placement-only delete on re-place, got %q", third)
+	if !strings.Contains(restored, "p=") {
+		t.Fatalf("expected a fresh placement ID on restore, got %q", restored)
 	}
-	if strings.Contains(second, "p=2") || !strings.Contains(third, "p=2") {
-		t.Fatalf("expected the placement ID to advance across frames, got %q then %q", second, third)
+	if again := m.kittyOverlay(); again != "" {
+		t.Fatalf("expected the restored overlay to settle silent, got %q", again)
 	}
 }
 

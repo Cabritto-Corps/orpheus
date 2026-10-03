@@ -74,6 +74,11 @@ type overlayState struct {
 	// The next overlay emission purges it (data and placements) instead
 	// of stranding it: the gate pops it exactly once.
 	purgeID uint64
+	// pendingRestore marks that the live placement was erased by the
+	// per-frame modal hide: the next content emission must re-place even
+	// though the intent is unchanged, or a modal close leaves the art
+	// deleted forever. This is the ONLY reason an unchanged frame emits.
+	pendingRestore bool
 	// suppressOverlay drops content emissions at delivery time: a modal
 	// opened after an emission was built. Set at the end of every Update
 	// from the live modal state; overlay cmd closures check it when they
@@ -140,7 +145,17 @@ func (c *imgCache) hideOverlayWhileModal() string {
 	if !c.overlay.visible || c.overlay.shownID == 0 {
 		return ""
 	}
+	c.overlay.pendingRestore = true
 	return deleteKittyImage(c.overlay.shownID)
+}
+
+// takePendingOverlayRestore pops the modal-hide restore flag.
+func (c *imgCache) takePendingOverlayRestore() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ok := c.overlay.pendingRestore
+	c.overlay.pendingRestore = false
+	return ok
 }
 
 // overlaySuppressed reports whether content emissions must be dropped at
@@ -172,16 +187,12 @@ func (c *imgCache) takePendingKittyPurge() uint64 {
 	return id
 }
 
-// frameOverlayPlacement rebuilds the current placement every frame with a
-// fresh placement ID and reports the emission. Renderer repaints erase
-// placements, so the placement must be re-emitted — but the renderer also
-// diffs whole frames and swallows byte-identical emissions, so each
-// re-place carries a new p=. The pre-delete is image-scoped (d=i,i=): it
-// drops every placement of the one shown image — including orphans from
-// emissions dropped after they were built — so a dropped frame loses
-// nothing; the next re-place cleans up. The stored image data is
-// untouched (lowercase d=i deletes placements only); only placements
-// churn, tens of bytes a frame.
+// frameOverlayPlacement re-places the shown image with a fresh placement ID.
+// The id churns only because the renderer diffs whole frames and swallows
+// byte-identical emissions: a restored placement after a modal hide must
+// not be swallowed. The pre-delete is image-scoped (d=i,i=): it drops every
+// placement of the shown image — including orphans from emissions dropped
+// after they were built — so a dropped frame loses nothing.
 func (c *imgCache) frameOverlayPlacement(r artRect) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()

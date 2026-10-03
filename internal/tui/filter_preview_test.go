@@ -171,3 +171,85 @@ func TestStablePreviewUnit(t *testing.T) {
 		t.Fatalf("playlist slot must track its own refreshes, got %s", got.summary.ID)
 	}
 }
+
+// Esc on search is a cancel: the cursor and the preview must return to the
+// pre-filter selection — the exact reported bug (cover art + border moving
+// on search quit). Drives the app-level key path: the restore lives in
+// updateBrowseList, not inside bubbles.
+func TestFilterCancelRestoresSelectionAndArt(t *testing.T) {
+	m := filterChurnModel(t, imageProtocolKitty)
+	before, _ := previewGeometry(m)
+	beforeURL := m.ui.imgs.kittyDisplayedURL()
+
+	next, _ := m.Update(pressRune('/'))
+	m = next.(model)
+	if m.browse.playlistList.FilterState() != list.Filtering {
+		t.Fatal("expected Filtering state after /")
+	}
+	for _, r := range "alpha" {
+		next, _ = m.Update(pressRune(r))
+		m = next.(model)
+	}
+	if live, ok := m.selectedPlaylist(); !ok || live.summary.ID == "4" {
+		t.Fatalf("test setup broken, live selection never moved (got %v)", live)
+	}
+
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = next.(model)
+
+	if got := m.browse.playlistList.GlobalIndex(); got != 3 {
+		t.Fatalf("esc must restore the pre-filter cursor, got %d", got)
+	}
+	sel, ok := m.stablePlaylistSelection()
+	if !ok || sel.summary.ID != "4" {
+		got := "none"
+		if ok {
+			got = sel.summary.ID
+		}
+		t.Fatalf("preview left the pre-filter item after cancel, got %s", got)
+	}
+	after, afterOverlay := previewGeometry(m)
+	if before != after {
+		bo, ao := strings.Split(before, "\n"), strings.Split(after, "\n")
+		for i := range max(len(bo), len(ao)) {
+			a, b := "", ""
+			if i < len(bo) {
+				a = bo[i]
+			}
+			if i < len(ao) {
+				b = ao[i]
+			}
+			if a != b {
+				t.Fatalf("preview panel changed across filter cancel at line %d:\n- %q\n+ %q", i+1, a, b)
+			}
+		}
+	}
+	if got := m.ui.imgs.kittyDisplayedURL(); got != beforeURL {
+		t.Fatalf("overlay subject changed across cancel: %q -> %q", beforeURL, got)
+	}
+	if strings.Contains(afterOverlay, "d=I") {
+		t.Fatalf("cancel retransmitted the image (displaced delete): %q", afterOverlay)
+	}
+}
+
+// Enter keeps the filtered selection — accept is not a cancel.
+func TestFilterAcceptKeepsFilteredSelection(t *testing.T) {
+	m := filterChurnModel(t, imageProtocolKitty)
+	next, _ := m.Update(pressRune('/'))
+	m = next.(model)
+	if m.browse.playlistList.FilterState() != list.Filtering {
+		t.Fatal("expected Filtering state after /")
+	}
+	// Typing drains its FilterMatchesMsg at list level: the app-level batch
+	// carries tick/debounce cmds that would block for their durations.
+	l := pumpListKeys(t, m.browse.playlistList, pressRune('b'), pressRune('e'), pressRune('t'), pressRune('a'))
+	m.browse.playlistList = l
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(model)
+	if m.browse.playlistList.FilterState() != list.FilterApplied {
+		t.Fatal("expected FilterApplied after accept")
+	}
+	if got := m.browse.playlistList.GlobalIndex(); got != 3 {
+		t.Fatalf("accept must keep the filtered selection (beta one), got index %d", got)
+	}
+}

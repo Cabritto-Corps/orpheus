@@ -19,7 +19,10 @@ import (
 )
 
 func NewLoaderModel() model {
-	return newModel(context.Background(), nil, config.Config{DeviceName: "orpheus"}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), nil)))
+	m := newModel(context.Background(), nil, config.Config{DeviceName: "orpheus"}, nil, nil, loader.New(context.Background(), 64, NewTUIExecutor(context.Background(), nil)))
+	// Past the startup gate: most tests exercise the steady-state view paths.
+	m.browse.librarySettled = true
+	return m
 }
 
 func TestHandlePlaylistKeyLoadsNewSelectedCoverImmediately(t *testing.T) {
@@ -717,10 +720,11 @@ func TestLoadImageCmdRepairsMissingKittyEncodingFromCachedImage(t *testing.T) {
 	}
 }
 
-func TestKittyOverlayReplacesInsteadOfRetransmittingWhenUnchanged(t *testing.T) {
-	// Renderer repaints erase placements, so an unchanged overlay must
-	// re-place the stored image every frame (a=p, tens of bytes) rather
-	// than retransmitting it (a=T, the whole payload) or going silent.
+// An unchanged visible intent must emit NOTHING: the image and its
+// placement are already in the terminal, and re-placing would churn an
+// erase/put loop the steady flow shows as flicker. Force slots (repaints,
+// protocol resets) still retransmit deliberately.
+func TestKittyOverlayStaysSilentWhenUnchanged(t *testing.T) {
 	t.Setenv("TMUX", "")
 	m := NewLoaderModel()
 	m.ui.width = 120
@@ -734,9 +738,8 @@ func TestKittyOverlayReplacesInsteadOfRetransmittingWhenUnchanged(t *testing.T) 
 	if first == "" {
 		t.Fatal("expected first overlay render")
 	}
-	second := m.kittyOverlay()
-	if !strings.Contains(second, "a=p") || strings.Contains(second, "a=T") {
-		t.Fatalf("expected unchanged overlay to re-place without retransmitting, got %q", second)
+	if second := m.kittyOverlay(); second != "" {
+		t.Fatalf("expected unchanged overlay to stay silent, got %q", second)
 	}
 	m.ui.imgs.forceKittyRedraw()
 	forced := m.kittyOverlay()
@@ -827,9 +830,6 @@ func TestKittyOverlayHidesUnderAnyModal(t *testing.T) {
 				t.Fatalf("expected initial transmit, got %q", first)
 			}
 			shownID := transmitImageID(t, first)
-			if placed := m.kittyOverlay(); !strings.Contains(placed, "a=p") {
-				t.Fatalf("expected a re-place, got %q", placed)
-			}
 			tc.open(&m)
 
 			hide := m.kittyOverlay()
@@ -894,8 +894,10 @@ func TestKittyOverlayRestoresAfterModalCloses(t *testing.T) {
 	if out := m.kittyOverlay(); !strings.Contains(out, "a=T") {
 		t.Fatalf("expected initial transmit, got %q", out)
 	}
-	placed := m.kittyOverlay()
-	oldP := placementIDOf(t, placed)
+	oldP := ""
+	if placed := m.kittyOverlay(); placed != "" {
+		oldP = placementIDOf(t, placed)
+	}
 
 	m.ui.helpOpen = true
 	hide := m.kittyOverlay()
@@ -917,11 +919,11 @@ func TestKittyOverlayRestoresAfterModalCloses(t *testing.T) {
 	if !strings.Contains(restored, "a=p") || strings.Contains(restored, "a=T") {
 		t.Fatalf("expected close to re-place without retransmitting, got %q", restored)
 	}
-	if newP := placementIDOf(t, restored); newP == oldP {
+	if newP := placementIDOf(t, restored); oldP != "" && newP == oldP {
 		t.Fatalf("expected a fresh placement ID on restore, got reused %s", newP)
 	}
-	if again := m.kittyOverlay(); !strings.Contains(again, "a=p") || strings.Contains(again, "a=T") {
-		t.Fatalf("expected settled overlay to re-place without transmitting, got %q", again)
+	if again := m.kittyOverlay(); again != "" {
+		t.Fatalf("expected settled overlay to stay silent (drawn placement persists), got %q", again)
 	}
 }
 
@@ -1209,7 +1211,7 @@ func TestKittyOverlayResetStateNextLoadReturnsEmptyWhenNothingDisplayed(t *testi
 	}
 }
 
-func TestAlbumCoverPanelKittyShowsPlaceholderWhileLoading(t *testing.T) {
+func TestAlbumCoverPanelKittyLoadingShellMatchesLoaded(t *testing.T) {
 	m := NewLoaderModel()
 	m.ui.width = 120
 	m.ui.height = 40
@@ -1220,13 +1222,16 @@ func TestAlbumCoverPanelKittyShowsPlaceholderWhileLoading(t *testing.T) {
 		ArtistName:    "artist",
 	}
 
-	panel := m.albumCoverPanel(40, 20, 30, 15)
-	if !strings.Contains(panel, "╭") {
-		t.Fatal("expected kitty loading state to show placeholder like ansi")
+	loading := m.albumCoverPanel(40, 20, 30, 15)
+	// Shell parity: the loading state renders the same shell the decoded
+	// cover gets — the default theme is unframed, so no border may pop
+	// in and out around decode.
+	if strings.Contains(loading, "╭") {
+		t.Fatalf("loading shell grew a border the default cover never shows: %q", loading)
 	}
 }
 
-func TestAlbumCoverPanelAnsiShowsPlaceholderWhileLoading(t *testing.T) {
+func TestAlbumCoverPanelAnsiLoadingShellMatchesLoaded(t *testing.T) {
 	m := NewLoaderModel()
 	m.ui.width = 120
 	m.ui.height = 40
@@ -1237,9 +1242,9 @@ func TestAlbumCoverPanelAnsiShowsPlaceholderWhileLoading(t *testing.T) {
 		ArtistName:    "artist",
 	}
 
-	panel := m.albumCoverPanel(40, 20, 30, 15)
-	if !strings.Contains(panel, "╭") {
-		t.Fatal("expected ansi loading state to keep placeholder box")
+	loading := m.albumCoverPanel(40, 20, 30, 15)
+	if strings.Contains(loading, "╭") {
+		t.Fatalf("ansi loading shell grew a border the decoded cover never shows: %q", loading)
 	}
 }
 
@@ -1295,8 +1300,8 @@ func TestKittyOverlayPlayerEpochForcesRedrawWithSameKeyInputs(t *testing.T) {
 	if first == "" {
 		t.Fatal("expected first kitty render")
 	}
-	if second := m.kittyOverlay(); !strings.Contains(second, "a=p") || strings.Contains(second, "a=T") {
-		t.Fatalf("expected unchanged state to re-place without redrawing, got %q", second)
+	if second := m.kittyOverlay(); second != "" {
+		t.Fatalf("expected unchanged state to stay silent, got %q", second)
 	}
 	m.transport.playerCoverEpoch++
 	third := m.kittyOverlay()
@@ -1305,6 +1310,9 @@ func TestKittyOverlayPlayerEpochForcesRedrawWithSameKeyInputs(t *testing.T) {
 	}
 	if strings.Contains(third, "a=d,d=A") {
 		t.Fatalf("expected same-URL epoch redraw never to delete globally, got %q", third)
+	}
+	if again := m.kittyOverlay(); again != "" {
+		t.Fatalf("expected the redrawn overlay to settle silent, got %q", again)
 	}
 }
 

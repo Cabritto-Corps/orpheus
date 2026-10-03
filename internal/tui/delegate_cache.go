@@ -46,10 +46,6 @@ func (c *delegateCache) put(k delegateKey, s string) {
 	c.mu.Unlock()
 }
 
-type placeholderCacheKey struct {
-	cols, rows int
-}
-
 type tabBarCacheKey struct {
 	width  int
 	active tab

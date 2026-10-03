@@ -170,7 +170,9 @@ func TestFilterExitArtGeometryStable(t *testing.T) {
 			bo, ao := strings.Split(before, "\n"), strings.Split(after, "\n")
 			t.Fatalf("protocol=%v: preview panel changed across filter exit (%d -> %d lines)", protocol, len(bo), len(ao))
 		}
-		if overlayCursor(beforeOverlay) != overlayCursor(afterOverlay) {
+		// Unchanged intent emits nothing (staying silent keeps the placed
+		// image live); any emission that still lands must anchor identically.
+		if afterOverlay != "" && overlayCursor(beforeOverlay) != overlayCursor(afterOverlay) {
 			t.Fatalf("protocol=%v: overlay placement moved across filter exit: %q -> %q", protocol, beforeOverlay, afterOverlay)
 		}
 	}

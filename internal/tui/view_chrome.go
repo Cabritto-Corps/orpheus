@@ -17,7 +17,14 @@ func (m model) headerView() string {
 
 	var statusStr, centerL1, rightL1 string
 
-	if m.transport.status != nil {
+	if m.startupPending() {
+		// Startup hold: no play/pause indicator, no title, no volume bar yet —
+		// every surface lands in the single reveal instead of trickling.
+		statusStr = m.styles.styleHeaderPaused.Render("Orpheus")
+		centerL1 = m.styles.styleHeaderSub.Render("connecting to Spotify…")
+		device := m.icon(iconDevice, iconDeviceNF) + " " + m.deviceName
+		rightL1 = m.styles.styleHeaderStatus.Render(truncate(device, max(1, w-lipgloss.Width(statusStr)-2)))
+	} else if m.transport.status != nil {
 		playIcon, pauseIcon := m.playPauseGlyphs()
 		if m.transport.status.Playing {
 			statusStr = m.styles.styleHeaderPlaying.Render("[" + playIcon + " Playing]")
@@ -51,19 +58,17 @@ func (m model) headerView() string {
 	} else {
 		statusStr = m.styles.styleHeaderPaused.Render("Orpheus")
 		centerL1 = m.styles.styleHeaderSub.Render("no active playback")
-		if m.transport.playerConnecting {
-			centerL1 = m.styles.styleHeaderSub.Render("connecting to Spotify…")
-		}
 		device := m.icon(iconDevice, iconDeviceNF) + " " + m.deviceName
 		// Must fit the full width here or it wraps and corrupts the
 		// chrome height (no truncation side exists in this state).
 		rightL1 = m.styles.styleHeaderStatus.Render(truncate(device, max(1, w-lipgloss.Width(statusStr)-2)))
 	}
 
-	line1 := layoutThreeZone(w, statusStr, centerL1, rightL1)
+	row1 := layoutThreeZoneParts(w, statusStr, centerL1, rightL1)
+	line1 := row1.row
 
 	var centerL2 string
-	if m.transport.status != nil {
+	if m.transport.status != nil && !m.startupPending() {
 		artist := m.transport.status.ArtistName
 		album := m.transport.status.AlbumName
 		if artist == "" {
@@ -75,13 +80,37 @@ func (m model) headerView() string {
 		}
 		centerL2 = m.styles.styleHeaderSub.Render(truncate(parts, max(1, w-2)))
 	}
-	line2 := layoutThreeZone(w, "", centerL2, "")
+	// One center column: the subtitle drops under the title's center, so the
+	// two lines never drift apart (each centered by a different formula held
+	// them a cell or two off each other).
+	var line2 string
+	if centerW2 := lipgloss.Width(centerL2); centerW2 > 0 {
+		centerW1 := lipgloss.Width(centerL1)
+		start2 := row1.centerStart + (centerW1-centerW2)/2
+		if centerW2 > centerW1 {
+			start2 = (w - centerW2) / 2
+		}
+		line2 = strings.Repeat(" ", max(0, start2)) + centerL2
+		if pad := w - lipgloss.Width(line2); pad > 0 {
+			line2 += strings.Repeat(" ", pad)
+		}
+	}
 
 	sep := m.styles.sectionDivider(w)
 	return line1 + "\n" + line2 + "\n" + sep
 }
 
 func layoutThreeZone(w int, left, center, right string) string {
+	return layoutThreeZoneParts(w, left, center, right).row
+}
+
+// layoutThreeZoneParts also reports the center content's start column, so a
+// following line can share the same center column (the subtitle drops under
+// the title's center; separate centering formulas never quite agree).
+func layoutThreeZoneParts(w int, left, center, right string) (out struct {
+	row         string
+	centerStart int
+}) {
 	leftW := lipgloss.Width(left)
 
 	// The right zone must always fit.
@@ -99,12 +128,14 @@ func layoutThreeZone(w int, left, center, right string) string {
 	// side zone eats its own gap instead of pushing the title aside.
 	leftGap := max(0, (w-centerW)/2-leftW)
 	rightGap := max(0, w-leftW-leftGap-centerW-rightW)
+	out.centerStart = leftW + leftGap
 
-	return left +
+	out.row = left +
 		strings.Repeat(" ", leftGap) +
 		center +
 		strings.Repeat(" ", rightGap) +
 		right
+	return out
 }
 
 func (m model) headerVolumeBar(vol int) string {
@@ -144,35 +175,37 @@ func (m model) playerBarView() string {
 
 	sep := m.styles.sectionDivider(barW)
 
-	if m.transport.status == nil {
-		// Full bar height even idle, or the bottom gutter shifts
-		// between idle and playing frames.
-		return sep + "\n"
+	// The bar is always in place; nil status renders the empty scaffold and
+	// the normal push flow fills it — no gate, no spinner, no shape change.
+	elapsedMS, durationMS, playing := 0, 0, false
+	if m.transport.status != nil {
+		elapsedMS = m.transport.status.ProgressMS
+		durationMS = m.transport.status.DurationMS
+		playing = m.transport.status.Playing
 	}
+
 	playIcon, pauseIcon := m.playPauseGlyphs()
 	stateIcon := m.styles.styleHeaderPaused.Render(pauseIcon)
-	if m.transport.status.Playing {
+	if playing {
 		stateIcon = m.styles.styleHeaderPlaying.Render(playIcon)
 	}
 
-	elapsedMs := m.transport.status.ProgressMS
-	if m.transport.status.DurationMS > 0 && elapsedMs > m.transport.status.DurationMS {
-		elapsedMs = m.transport.status.DurationMS
+	if durationMS > 0 && elapsedMS > durationMS {
+		elapsedMS = durationMS
 	}
-	if elapsedMs < 0 {
-		elapsedMs = 0
+	if elapsedMS < 0 {
+		elapsedMS = 0
 	}
 
 	pct := 0.0
-	if m.transport.status.DurationMS > 0 {
-		pct = float64(elapsedMs) / float64(m.transport.status.DurationMS)
-		pct = max(0, min(1, pct))
+	if durationMS > 0 {
+		pct = max(0, min(1, float64(elapsedMS)/float64(durationMS)))
 	}
 
-	elapsed := m.styles.stylePlayerTime.Render(fmtDuration(elapsedMs))
+	elapsed := m.styles.stylePlayerTime.Render(fmtDuration(elapsedMS))
 	total := m.styles.stylePlayerTime.Render("--:--")
-	if m.transport.status.DurationMS > 0 {
-		total = m.styles.stylePlayerTime.Render(fmtDuration(m.transport.status.DurationMS))
+	if durationMS > 0 {
+		total = m.styles.stylePlayerTime.Render(fmtDuration(durationMS))
 	}
 
 	elapsedW := lipgloss.Width(elapsed)
@@ -183,7 +216,7 @@ func (m model) playerBarView() string {
 	// terminals, pre-resize startup frame).
 	progressW = max(0, progressW)
 	var progressStr string
-	if m.transport.status.DurationMS <= 0 {
+	if durationMS <= 0 {
 		_, empty := m.styles.themeBarRunes()
 		progressStr = m.styles.styleProgressBarEmpty.Render(strings.Repeat(string(empty), progressW))
 	} else {
@@ -359,6 +392,14 @@ func (m model) kittyOverlayBytes() (string, bool) {
 		// cells may still show through.
 		return m.ui.imgs.hideOverlayWhileModal(), false
 	}
+	if m.startupPending() {
+		// Startup reveal: panels hold the connecting spinner, so no art may
+		// land yet. Pure deletes keep flowing so a stranded image self-heals.
+		if id := m.ui.imgs.takePendingKittyPurge(); id != 0 {
+			return deleteKittyImageData(id), false
+		}
+		return deleteKittyImage(m.ui.imgs.clearOverlayIntent()), false
+	}
 	layout := m.bodyLayout()
 	rect := m.coverArt(layout.coverCols, layout.coverRows)
 	if rect.empty() {
@@ -423,10 +464,15 @@ func (m model) kittyTransmitNewCover(intent overlayIntent, rect artRect, encoded
 		purgePrefix = deleteKittyImageData(id)
 	}
 	if !emit {
-		// Repaints erase placements (the art rect is blank text) and the
-		// frame diff swallows byte-identical emissions: re-place with a
-		// fresh placement ID every frame instead of emitting nothing.
-		return purgePrefix + m.ui.imgs.frameOverlayPlacement(rect), true
+		// Unchanged intent: the placement in the terminal is untouched (the
+		// renderer only rewrites changed cells), so re-placing would be pure
+		// churn — a placement erase before every put that the steady flow
+		// shows as the art blinking at tick cadence. The one exception is a
+		// modal-close restore, which reneeds its erased placement.
+		if !m.ui.imgs.takePendingOverlayRestore() {
+			return "", false
+		}
+		return m.ui.imgs.frameOverlayPlacement(rect), true
 	}
 	payload := buildKittyPayload(encoded, rect.cols, rect.rows, transmitID)
 	if payload == "" {

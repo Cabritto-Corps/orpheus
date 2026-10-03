@@ -71,6 +71,11 @@ func rawOverlayPayload(t *testing.T, cmd tea.Cmd) string {
 func TestHelpCloseRestoresArtImmediately(t *testing.T) {
 	m := kittyRestoreModel(t, tabPlayer)
 	m.ui.helpOpen = true
+	// The modal frame's own hide emission (an open keypress and every tick
+	// while open build it) is what arms the close-frame restore.
+	if hide := m.kittyOverlay(); !strings.Contains(hide, "a=d,d=i") {
+		t.Fatalf("expected the modal hide while help is open, got %q", hide)
+	}
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if next.(model).ui.helpOpen {
@@ -85,6 +90,9 @@ func TestTrackPopupCloseRestoresArtImmediately(t *testing.T) {
 	m := kittyRestoreModel(t, tabPlayer)
 	m.ui.trackPopupOpen = true
 	m.ui.trackPopupList = newTrackPopupList(m.styles, m.ui.width, m.ui.height)
+	if hide := m.kittyOverlay(); !strings.Contains(hide, "a=d,d=i") {
+		t.Fatalf("expected the modal hide while the popup is open, got %q", hide)
+	}
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if next.(model).ui.trackPopupOpen {
@@ -99,6 +107,9 @@ func TestSettingsCloseRestoresArtImmediately(t *testing.T) {
 	m := kittyRestoreModel(t, tabPlayer)
 	m.ui.settings.open = true
 	m.ui.settings.mode = settingsModeRoot
+	if hide := m.kittyOverlay(); !strings.Contains(hide, "a=d,d=i") {
+		t.Fatalf("expected the modal hide while settings is open, got %q", hide)
+	}
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if next.(model).ui.settings.open {

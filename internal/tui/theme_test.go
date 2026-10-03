@@ -120,7 +120,7 @@ func TestBuildThemeStylesAppliesAndIsIdempotent(t *testing.T) {
 	if second.colorGray != first.colorGray {
 		t.Fatal("buildThemeStyles is not idempotent")
 	}
-	if second.tabBar == first.tabBar || second.placeholder == first.placeholder {
+	if second.tabBar == first.tabBar || second.bars == first.bars {
 		t.Fatal("bundles must not share memo caches")
 	}
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 
 	"orpheus/internal/config"
@@ -333,12 +334,33 @@ func TestRenderedStyleSwitchReencodesVisibleCover(t *testing.T) {
 	if loaded.err != nil {
 		t.Fatalf("re-encode failed: %v", loaded.err)
 	}
-	nextModel, _ = next.handleImageLoadedMsg(loaded)
+	// The loaded message carries the force-minted overlay emission on its
+	// own cmd: building it is the emission, so assert the shipped bytes
+	// instead of asking the (now unchanged) slot again.
+	nextModel, overlayCmd := next.handleImageLoadedMsg(loaded)
 	next = nextModel.(model)
 	if !next.ui.imgs.hasKittyEncoding(url) {
 		t.Fatal("the retained cover must regain its kitty encoding after the switch")
 	}
-	if out := next.kittyOverlay(); !strings.Contains(out, "\x1b_G") {
-		t.Fatalf("expected the re-encoded cover to reach the overlay, got %q", out)
+	found := false
+	forEachRaw(overlayCmd, func(msg tea.RawMsg) { found = true })
+	if !found {
+		t.Fatal("expected the re-encoded cover to reach the overlay")
+	}
+}
+
+func forEachRaw(cmd tea.Cmd, visit func(msg tea.RawMsg)) {
+	if cmd == nil {
+		return
+	}
+	switch msg := cmd().(type) {
+	case tea.RawMsg:
+		visit(msg)
+	case tea.BatchMsg:
+		for _, sub := range msg {
+			if sub != nil {
+				forEachRaw(sub, visit)
+			}
+		}
 	}
 }

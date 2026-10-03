@@ -70,23 +70,15 @@ func TestKittyOverlayCmdEmitsRaw(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected tea.RawMsg, got %T", cmd())
 	}
-	// Each frame emission mints a fresh placement ID (diff-dedupe
-	// defeat), so consecutive commands must differ while naming the
-	// same stored image.
 	first := fmt.Sprint(msg.Msg)
-	second, ok := m.kittyOverlayCmd()().(tea.RawMsg)
-	if !ok {
-		t.Fatal("expected a second overlay command on the unchanged intent")
-	}
-	secondBytes := fmt.Sprint(second.Msg)
-	if first == secondBytes {
-		t.Fatal("consecutive overlay commands are byte-identical")
-	}
 	if !strings.Contains(first, "a=T") {
 		t.Fatalf("expected the first command to transmit, got %q", tail(first, 120))
 	}
-	if !strings.Contains(secondBytes, "a=p") || strings.Contains(secondBytes, "a=T") {
-		t.Fatalf("expected the second command to re-place, got %q", tail(secondBytes, 120))
+	// An unchanged intent emits nothing: the placement already lives in
+	// the terminal and re-placing churns erase/put loops the user sees
+	// as flicker.
+	if cmd := m.kittyOverlayCmd(); cmd != nil {
+		t.Fatal("expected no overlay command for the unchanged intent")
 	}
 	m.ui.imgs.protocol = imageProtocolNone
 	// No pending purge here (the slot was never reset for a switch), so
@@ -103,6 +95,11 @@ func TestKittyOverlayCmdEmitsRaw(t *testing.T) {
 // silent, stranding it permanently. The emission-time guard drops stale
 // content at delivery instead.
 func TestKittyOverlayStaleReplaceDroppedAfterModalOpens(t *testing.T) {
+	// Emissions change the terminal at build time and deliver post-frame:
+	// an emission built before a modal opens (image load fast-path) must
+	// not land after it, or it resurrects the image over the scrim. The
+	// emission-time guard drops stale content at delivery; commit already
+	// updated the slot, so the next real emission re-places cleanly.
 	t.Setenv("TMUX", "")
 	m := framedTestModel()
 	m.ui.width = 100
@@ -114,25 +111,29 @@ func TestKittyOverlayStaleReplaceDroppedAfterModalOpens(t *testing.T) {
 	if out := m.kittyOverlay(); !strings.Contains(out, "a=T") {
 		t.Fatalf("expected initial transmit, got %q", out)
 	}
+	// A content emission for a NEW subject built pre-modal…
+	m.ui.imgs.encoded["u2"] = "ZmFnZQ=="
+	m.transport.status.AlbumImageURL = "u2"
 	cmd := m.kittyOverlayCmd()
 	if cmd == nil {
-		t.Fatal("expected a re-place command on the unchanged intent")
+		t.Fatal("expected the changed-subject command to build")
 	}
-	// The Update wrapper mirrors modal state onto the slot; simulate
-	// the modal-open Update running before the queued cmd executes.
+	// …is dropped at delivery when the modal opened in between. The Update
+	// wrapper mirrors modal state onto the slot; simulate the modal-open
+	// Update running before the queued cmd executes.
 	m.ui.imgs.setOverlaySuppressed(true)
 	if msg := cmd(); msg != nil {
 		t.Fatalf("stale pre-modal emission delivered after modal open: %v", msg)
 	}
 	// While un-suppressed the same shape of emission still delivers.
 	m.ui.imgs.setOverlaySuppressed(false)
-	live := m.kittyOverlayCmd()
-	if live == nil {
-		t.Fatal("expected a live emission while un-suppressed")
+	m.ui.helpOpen = true
+	if hide := m.kittyOverlay(); hide != "" && !strings.Contains(hide, "a=d,d=i") {
+		t.Fatalf("expected the modal hide to be built for the new subject, got %q", hide)
 	}
-	raw, ok := live().(tea.RawMsg)
-	if !ok || !strings.Contains(fmt.Sprint(raw.Msg), "a=p") {
-		t.Fatalf("expected the live emission to re-place, got %v", live())
+	m.ui.helpOpen = false
+	if cmd := m.kittyOverlayCmd(); cmd == nil {
+		t.Fatal("expected the modal-close re-place command for the new subject")
 	}
 	// Pure-delete emissions bypass suppression entirely: the modal
 	// hide itself must always deliver.

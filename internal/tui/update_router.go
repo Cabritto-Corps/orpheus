@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"time"
+
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 )
@@ -83,7 +85,16 @@ func (m model) handlePlayerBackendMsg(msg playerBackendMsg) (tea.Model, tea.Cmd)
 			m.catalogSource.set(msg.catalog)
 		}
 		m.catalog = msg.catalog
-		return m, m.loadPlaylistsCmd()
+		// Arm the sync bound: the player backend pushes no state at attach,
+		// so an idle startup reveals on the grace timer instead of waiting.
+		m.transport.revealArmed = true
+		m.transport.revealGraceEnd = time.Now().Add(firstStateGrace)
+		return m, tea.Batch(
+			m.loadPlaylistsCmd(),
+			// The deadline re-render: the hold must release on its own,
+			// decoupled from whichever tick interval applies then.
+			tea.Tick(firstStateGrace, func(time.Time) tea.Msg { return revealGraceMsg{} }),
+		)
 	}
 	return m, nil
 }

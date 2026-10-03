@@ -27,6 +27,8 @@ type frameVariant struct {
 func guardModel(tb testing.TB, v frameVariant) model {
 	tb.Helper()
 	m := newModel(tb.Context(), nil, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
+	// Past the startup sync gate: the guard tests exercise steady-state frames.
+	m.browse.librarySettled = true
 	m.ui.width = v.width
 	m.ui.height = v.height
 	m.ui.nerdFonts = false

@@ -4,12 +4,18 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/lipgloss/v2"
 
 	"orpheus/internal/spotify"
 )
+
+// startupText is the single hold message for every startup-gated surface:
+// attaching the session and loading the library are one connecting phase to
+// the user, and three messages only made the hold look random.
+const startupText = "connecting to Spotify..."
 
 // stablePreview remembers the last unfiltered browse selection per list so
 // the cover preview never chases the filter cursor: opening search resets
@@ -78,11 +84,24 @@ func (m model) stableAlbumSelection() (playlistItem, bool) {
 	return m.styles.previewStable.forAlbums(m.browse.albumList.FilterState() == list.Filtering, live, ok)
 }
 
-// startupPending: the startup reveal gate. Content panels hold placeholders
-// until the session is attached AND the first library load has resolved —
-// everything then comes up together instead of trickling in.
+// startupPending: the single startup sync gate. Content panels hold the
+// connecting spinner until the session is attached AND the first library
+// load resolves AND (a playback state has been pushed OR the grace deadline
+// passes — an idle backend never pushes). Everything then eyes up together
+// in one frame instead of trickling in.
 func (m model) startupPending() bool {
-	return m.transport.playerConnecting || !m.browse.librarySettled
+	switch {
+	case m.transport.playerConnecting:
+		return true
+	case !m.browse.librarySettled:
+		// The library settle is THE reveal: a status push mid-load does not
+		// split the frame; everything lands together once it settles.
+		return true
+	case m.transport.status != nil || m.transport.statePushSeen:
+		return false
+	default:
+		return m.transport.revealArmed && time.Now().Before(m.transport.revealGraceEnd)
+	}
 }
 
 func (m model) playlistsTabView() string {
@@ -108,16 +127,10 @@ func (m model) playlistBrowserPanel(w, h int) string {
 			rateHint = "\n" + m.styles.styleDimmed.Render(hint)
 		}
 		inner = m.styles.styleError.Render(truncate(errStr, w-2)) + rateHint + "\n" + m.styles.styleDimmed.Render("r to retry")
-	} else if m.startupPending() {
+	} else if m.startupPending() || (m.browse.playlistsLoading && len(m.browse.playlistList.Items()) == 0) {
 		// A stale-looking "No playlists yet" reads as data loss; hold the
-		// connecting placeholder until the session itself is attached.
-		if m.transport.playerConnecting {
-			inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " connecting to Spotify...")
-		} else {
-			inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " loading library...")
-		}
-	} else if m.browse.playlistsLoading && len(m.browse.playlistList.Items()) == 0 {
-		inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " loading library...")
+		// shared connecting spinner instead.
+		inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " " + startupText)
 	} else if len(m.browse.playlistList.Items()) == 0 {
 		inner = m.styles.styleDimmed.Render("No playlists yet — press r to refresh")
 	} else {
@@ -147,6 +160,13 @@ func (m model) coverPreviewPanel(w, h, coverCols, coverRows int) string {
 	label := m.styles.styleSectionLabel.Render("Preview")
 	labelLine := label + "\n" + m.styles.sectionDivider(w)
 	innerW := w - 2
+
+	if m.startupPending() {
+		// Startup hold: no shell, no meta — the art and its frame land in
+		// the single reveal together with everything else.
+		content := labelLine
+		return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
+	}
 
 	var coverStr string
 	pl, plOk := m.stablePlaylistSelection()
@@ -205,16 +225,10 @@ func (m model) albumBrowserPanel(w, h int) string {
 			rateHint = "\n" + m.styles.styleDimmed.Render(hint)
 		}
 		inner = m.styles.styleError.Render(truncate(errStr, w-2)) + rateHint + "\n" + m.styles.styleDimmed.Render("r to retry")
-	} else if m.startupPending() {
+	} else if m.startupPending() || (m.browse.playlistsLoading && len(m.browse.albumList.Items()) == 0) {
 		// Same gate as the playlists panel: never show "No saved albums yet"
 		// while the session itself is still attaching.
-		if m.transport.playerConnecting {
-			inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " connecting to Spotify...")
-		} else {
-			inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " loading albums...")
-		}
-	} else if m.browse.playlistsLoading && len(m.browse.albumList.Items()) == 0 {
-		inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " loading albums...")
+		inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " " + startupText)
 	} else if m.browse.albumsForbidden && len(m.browse.albumList.Items()) == 0 {
 		inner = m.styles.styleDimmed.Render("saved albums unavailable — re-run 'orpheus auth login' (needs user-library-read)")
 	} else if len(m.browse.albumList.Items()) == 0 {
@@ -233,10 +247,7 @@ func (m model) albumPreviewPanel(w, h, coverCols, coverRows int) string {
 	innerW := w - 2
 
 	if m.startupPending() {
-		// No cover, no meta until the reveal: art ahead of the connection is
-		// exactly the early render this panel must not do.
-		inner := m.styles.styleDimmed.Render(m.ui.spinner.View() + " connecting to Spotify...")
-		content := labelLine + "\n" + inner
+		content := labelLine
 		return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 	}
 
@@ -266,17 +277,10 @@ func (m model) albumCoverPanel(w, h, coverCols, coverRows int) string {
 	labelLine := label + "\n" + m.styles.sectionDivider(w-1)
 	innerW := w - 2
 
-	if m.transport.playerConnecting {
-		// Same reveal gate: placeholder art here renders before the session
-		// exists, and "nothing playing" would deny the connecting state.
-		inner := m.styles.styleDimmed.Render(m.ui.spinner.View() + " connecting to Spotify...")
-		content := labelLine + "\n" + inner
-		return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
-	}
-	if m.transport.status == nil && m.startupPending() {
-		// Attached but library still loading, nothing playing yet: hold.
-		inner := m.styles.styleDimmed.Render(m.ui.spinner.View() + " loading library...")
-		content := labelLine + "\n" + inner
+	if m.startupPending() {
+		// Startup hold: no placeholder art, no "nothing playing" — same
+		// label-only hold as the preview panels; everything lands together.
+		content := labelLine
 		return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 	}
 
@@ -332,10 +336,8 @@ func (m model) queuePanel(w, h int) string {
 	displayQueue := m.visibleQueue()
 
 	if m.transport.status == nil {
-		if m.transport.playerConnecting {
-			lines = append(lines, m.styles.styleDimmed.Render("  connecting to Spotify…"))
-		} else if m.startupPending() {
-			lines = append(lines, m.styles.styleDimmed.Render("  loading library..."))
+		if m.startupPending() {
+			lines = append(lines, m.styles.styleDimmed.Render("  "+startupText))
 		} else {
 			lines = append(lines, m.styles.styleDimmed.Render("  nothing playing"))
 		}
@@ -443,23 +445,17 @@ func (m model) blankArt(cols, rows int) string {
 	return sb.String()
 }
 
+// placeholderArt must match the loaded cover's shell exactly — same frame
+// border, same budget — or the border pops in and out around decode time:
+// the cover appears to move at the top of the panel.
 func (m model) placeholderArt(cols, rows int) string {
 	if cols <= 2 || rows <= 2 {
 		return ""
 	}
-	key := placeholderCacheKey{cols, rows}
-	if cached, ok := m.styles.placeholder.get(key); ok {
-		return cached
+	if m.styles.coverFrameFits(cols, rows) {
+		return m.styles.coverFrameBox(cols, rows)
 	}
-	// Render an empty interior and let the style supply the full cell.
-	out := lipgloss.NewStyle().
-		Border(m.styles.themeBorder()).
-		BorderForeground(m.styles.colorDivider).
-		Width(cols).
-		Height(rows).
-		Render("")
-	m.styles.placeholder.put(key, out)
-	return out
+	return m.blankArt(cols, rows)
 }
 
 // Header and rows share the constants so the grid aligns.

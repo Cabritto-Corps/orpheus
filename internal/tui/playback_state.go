@@ -13,6 +13,11 @@ import (
 	"orpheus/internal/spotify"
 )
 
+// stateGrace bounds the state-await tail of the startup sync: short enough
+// not to stall the reveal visibly, long enough for a resumed session's first
+// push to arrive.
+const firstStateGrace = 2 * time.Second
+
 func playbackCoverSubject(status *spotify.PlaybackStatus) string {
 	if status == nil {
 		return ""

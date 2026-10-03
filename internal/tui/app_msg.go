@@ -27,6 +27,10 @@ func PlayerBackendReady(catalog spotify.PlaylistCatalog) tea.Msg {
 	return playerBackendMsg{ready: true, catalog: catalog}
 }
 
+// revealGraceMsg re-renders the frame when the startup sync deadline
+// passes without a pushed state, releasing the hold on an idle backend.
+type revealGraceMsg struct{}
+
 func PlayerBackendFailed(err error) tea.Msg {
 	return playerBackendMsg{err: err}
 }
@@ -147,6 +151,9 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	if !m.acceptPlaybackStateSeq(msg.seq) {
 		return m, nil
 	}
+	// Any accepted push proves the state channel is live — even an idle
+	// (nil-status) one — and ends the sync bound.
+	m.transport.statePushSeen = true
 	prevStatus := m.transport.status
 	prevQueueHead := queueHeadTrackID(m.transport.queue)
 	inVolSettle := m.transport.volDebouncePending >= 0 ||

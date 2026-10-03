@@ -5,6 +5,9 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"orpheus/internal/spotify"
 )
 
 func TestLayoutThreeZoneCentersTitleOnTerminal(t *testing.T) {
@@ -72,6 +75,57 @@ func TestLayoutThreeZoneNeverExceedsWidth(t *testing.T) {
 			t.Errorf("%s: row width %d, want %d: %q", tc.name, lipgloss.Width(out), tc.w, out)
 		}
 	}
+}
+
+// The title and the artist+album subtitle share one center column: centered
+// by separate formulas they sat a couple of cells apart (measured on the
+// rendered header). Both spans must center within one cell of each other at
+// any width and status shape.
+func TestHeaderTextSharesCenterColumn(t *testing.T) {
+	cases := []struct {
+		name   string
+		status *spotify.PlaybackStatus
+	}{
+		{name: "playing", status: &spotify.PlaybackStatus{TrackName: "Bohemian Rhapsody", ArtistName: "Queen", AlbumName: "A Night at the Opera", Playing: true, Volume: 80}},
+		{name: "paused-short", status: &spotify.PlaybackStatus{TrackName: "One", ArtistName: "Metallica", AlbumName: "…And Justice for All", Playing: false, Volume: 45}},
+		{name: "shuffle-repeat", status: &spotify.PlaybackStatus{TrackName: "Untitled", ArtistName: "Interpol", AlbumName: "Turn On the Bright Lights", Playing: true, Volume: 70, ShuffleState: true, RepeatContext: true}},
+	}
+	for _, w := range []int{60, 100, 160} {
+		for _, tc := range cases {
+			m := NewLoaderModel()
+			m.ui.width = w
+			m.ui.height = 40
+			m.transport.status = tc.status
+
+			lines := strings.Split(ansi.Strip(m.headerView()), "\n")
+			mid1 := spanMid(lines[0], tc.status.TrackName)
+			mid2 := trimmedSpanMid(lines[1])
+			if absInt(mid1-mid2) > 1 {
+				t.Errorf("w=%d %s: header lines drift apart: titleMid=%d subMid=%d", w, tc.name, mid1, mid2)
+			}
+		}
+	}
+}
+
+// spanMid measures the cell midpoint of the visible span of needle inside a
+// stripped header line.
+func spanMid(line, needle string) int {
+	stripped := ansi.Strip(line)
+	before, _, ok := strings.Cut(stripped, needle)
+	if !ok {
+		return 0
+	}
+	first := ansi.StringWidth(before)
+	return first + (ansi.StringWidth(needle)+1)/2
+}
+
+// trimmedSpanMid is the cell midpoint of a stripped line whose content is a
+// single span with only spaces around it.
+func trimmedSpanMid(line string) int {
+	stripped := ansi.Strip(line)
+	first := ansi.StringWidth(stripped[:len(stripped)-len(strings.TrimLeft(stripped, " "))])
+	content := strings.TrimRight(strings.TrimLeft(stripped, " "), " ")
+	return first + ansi.StringWidth(content)/2
 }
 
 // The fix must not move anything when all zones fit: the normal row is

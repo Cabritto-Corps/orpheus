@@ -45,6 +45,7 @@ func prefetchProbeModel(tb testing.TB, exec loader.Executor) model {
 	m := newModel(context.Background(), nil, config.Config{DeviceName: "orpheus"},
 		nil, nil, loader.New(context.Background(), 64, exec))
 	m.ui.width, m.ui.height = 120, 40
+	m.browse.librarySettled = true
 	m.ui.activeTab = tabPlayer
 	m.ui.imgs = newImgCacheWithSelection("rendered", true, func(string) string { return "xterm-kitty" })
 	m.transport.status = &spotify.PlaybackStatus{

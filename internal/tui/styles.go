@@ -39,10 +39,9 @@ type themeStyles struct {
 	styleTabActive, styleTabInactive                                      lipgloss.Style
 	styleModalBox, styleModalTitle, styleModalHint, styleModalSelectedRow lipgloss.Style
 
-	tabBar      *stringCache[tabBarCacheKey]
-	placeholder *stringCache[placeholderCacheKey]
-	bars        *stringCache[barCacheKey]
-	dividers    *stringCache[dividerCacheKey]
+	tabBar   *stringCache[tabBarCacheKey]
+	bars     *stringCache[barCacheKey]
+	dividers *stringCache[dividerCacheKey]
 
 	// Last unfiltered browse selection per list, so the cover preview
 	// never chases the filter cursor (shared pointer: every model copy
@@ -131,7 +130,6 @@ func hexToRGB(s string) (r, g, b uint8, ok bool) {
 func buildThemeStyles(st themeState) *themeStyles {
 	s := &themeStyles{
 		tabBar:        newStringCache[tabBarCacheKey](),
-		placeholder:   newStringCache[placeholderCacheKey](),
 		bars:          newStringCache[barCacheKey](),
 		dividers:      newStringCache[dividerCacheKey](),
 		help:          help.New(),

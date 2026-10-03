@@ -82,12 +82,42 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// updateBrowseList forwards a key to a browse list and restores the
+// pre-filter selection when search is cancelled: bubbles moves the cursor
+// to the top when filtering opens (GoToStart) and leaves it there on esc,
+// so the cover preview would snap to whatever the filter happened to land
+// on. Enter keeps the filtered selection — only cancel restores.
+func (m *model) updateBrowseList(l *list.Model, msg tea.KeyPressMsg) tea.Cmd {
+	pre := l.FilterState()
+	preIdx := l.GlobalIndex()
+	var cmd tea.Cmd
+	*l, cmd = l.Update(msg)
+	post := l.FilterState()
+	switch {
+	case pre != list.Filtering && post == list.Filtering:
+		// Filter opened: remember where the user was.
+		m.browse.filterSavedIdx = preIdx
+		m.browse.filterRestorable = true
+	case pre == list.Filtering && post == list.Filtering:
+		// Typing: keep the armed state.
+	case pre == list.Filtering && post == list.Unfiltered:
+		// Cancel (esc) or empty-accept: reseat the pre-filter selection.
+		if m.browse.filterRestorable && m.browse.filterSavedIdx < len(l.Items()) {
+			l.Select(m.browse.filterSavedIdx)
+		}
+		m.browse.filterRestorable = false
+	default:
+		// Accept (FilterApplied) and plain navigation disarm: only cancel restores.
+		m.browse.filterRestorable = false
+	}
+	return cmd
+}
+
 func (m model) handlePlaylistKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	if m.browse.playlistList.FilterState() == list.Filtering {
 		prevURL := selectedImageURLFromList(m.browse.playlistList)
-		var cmd tea.Cmd
-		m.browse.playlistList, cmd = m.browse.playlistList.Update(msg)
+		cmd := m.updateBrowseList(&m.browse.playlistList, msg)
 		nextURL := selectedImageURLFromList(m.browse.playlistList)
 		cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd(), m.kittyOverlayCmd()}
 		if nextURL != "" && nextURL != prevURL {
@@ -118,8 +148,7 @@ func (m model) handlePlaylistKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	prevURL := selectedImageURLFromList(m.browse.playlistList)
-	var cmd tea.Cmd
-	m.browse.playlistList, cmd = m.browse.playlistList.Update(msg)
+	cmd := m.updateBrowseList(&m.browse.playlistList, msg)
 	nextURL := selectedImageURLFromList(m.browse.playlistList)
 	cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd(), m.kittyOverlayCmd()}
 	if nextURL != "" && nextURL != prevURL {
@@ -132,8 +161,7 @@ func (m model) handleAlbumKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	if m.browse.albumList.FilterState() == list.Filtering {
 		prevURL := selectedImageURLFromList(m.browse.albumList)
-		var cmd tea.Cmd
-		m.browse.albumList, cmd = m.browse.albumList.Update(msg)
+		cmd := m.updateBrowseList(&m.browse.albumList, msg)
 		nextURL := selectedImageURLFromList(m.browse.albumList)
 		cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd(), m.kittyOverlayCmd()}
 		if nextURL != "" && nextURL != prevURL {
@@ -163,8 +191,7 @@ func (m model) handleAlbumKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	prevURL := selectedImageURLFromList(m.browse.albumList)
-	var cmd tea.Cmd
-	m.browse.albumList, cmd = m.browse.albumList.Update(msg)
+	cmd := m.updateBrowseList(&m.browse.albumList, msg)
 	nextURL := selectedImageURLFromList(m.browse.albumList)
 	cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd(), m.kittyOverlayCmd()}
 	if nextURL != "" && nextURL != prevURL {

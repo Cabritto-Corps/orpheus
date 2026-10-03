@@ -65,6 +65,30 @@ func TestCoverPlaceholderKeepsOuterCellDimensions(t *testing.T) {
 	assertBlockDimensions(t, m.placeholderArt(cols, rows), cols, rows)
 }
 
+// placeholderArt must render the exact shell the loaded cover gets — the
+// coverOrPlaceholder empty states — or the border pops in and out around
+// decode time (the filter-exit wobble: "the moving of the border").
+func TestPlaceholderArtMatchesCoverShell(t *testing.T) {
+	for _, frame := range []string{"", "rounded", "thick"} {
+		m := NewLoaderModel()
+		st := themePresetState("default")
+		st.cover.Frame = frame
+		m.styles = buildThemeStyles(st)
+
+		const cols, rows = 20, 10
+		var want string
+		if m.styles.coverFrameFits(cols, rows) {
+			want = m.styles.coverFrameBox(cols, rows)
+		} else {
+			want = m.blankArt(cols, rows)
+		}
+		if got := m.placeholderArt(cols, rows); got != want {
+			t.Fatalf("frame=%q: placeholder diverges from the loaded shell:\ngot %q\nwant %q", frame, got, want)
+		}
+		assertBlockDimensions(t, m.placeholderArt(cols, rows), cols, rows)
+	}
+}
+
 // The album panel surfaces the same typed rate-limit hint as the playlists
 // panel: a 429 must name its retry window on both tabs, not just one. The
 // assertion targets the styled hint text, not the raw error string (which
