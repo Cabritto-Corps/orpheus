@@ -17,6 +17,8 @@ import (
 // enough for a resumed session's first push to arrive.
 const firstStateGrace = 2 * time.Second
 
+const queueMetaRevealGrace = 1500 * time.Millisecond
+
 func playbackCoverSubject(status *spotify.PlaybackStatus) string {
 	if status == nil {
 		return ""

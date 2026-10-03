@@ -90,6 +90,8 @@ func (m model) startupPending() bool {
 		return true
 	case !m.browse.librarySettled:
 		return true
+	case m.transport.queueMetaPending && time.Now().Before(m.transport.queueMetaRevealEnd):
+		return true
 	case m.transport.status != nil || m.transport.statePushSeen:
 		return false
 	default:

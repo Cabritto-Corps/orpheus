@@ -3,6 +3,7 @@ package librespot
 import (
 	"context"
 	"strings"
+	"time"
 
 	golibrespot "github.com/elxgy/go-librespot"
 	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
@@ -12,7 +13,6 @@ import (
 )
 
 func queueMetaImageURL(p *AppPlayer, coverFileId []byte) string {
-	// Snapshot under lock: metadata-resolution goroutine vs Run-goroutine swap.
 	prod := p.prodInfoSnapshot()
 	if prod == nil || len(coverFileId) == 0 {
 		return ""
@@ -48,16 +48,15 @@ func (p *AppPlayer) resetQueueMetaForContext() {
 	p.queueMetaMu.Lock()
 	defer p.queueMetaMu.Unlock()
 	p.queueMetaCache = cache.NewLRU[string, PlaybackStateQueueEntry](8192)
+	p.queueMetaPending.Store(true)
+	p.queueMetaRetriesLeft.Store(int32(queueMetaRetryBudget))
 }
 
-// Context metadata carries names but no art, and the TUI prefetch fires only on ImageURL entries.
-const headImageWindow = 8
-
-// The bound paces network, not memory: entries are small strings in an 8192-cap cache.
-const queueImageSweepWindow = 128
-
-// A whole context in one batch risks a megarequest timeout; large sweeps go out chunked.
-const queueMetaBatchChunk = 50
+const (
+	headImageWindow       = 8
+	queueImageSweepWindow = 128
+	queueMetaBatchChunk   = 100
+)
 
 // Callers pass an already-read slice: tracks.List must never be touched off the Run goroutine.
 func headImageURIs(upcoming []*connectpb.ProvidedTrack, missing func(id string) bool, n int) []string {
@@ -86,9 +85,9 @@ func (p *AppPlayer) queueHeadImageMissing(id string) bool {
 	return e == nil || strings.TrimSpace(e.ImageURL) == ""
 }
 
-func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*connectpb.ProvidedTrack, headURIs []string) bool {
+func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*connectpb.ProvidedTrack, headURIs []string) {
 	if len(all) == 0 && len(headURIs) == 0 {
-		return false
+		return
 	}
 
 	seen := make(map[string]struct{}, len(all))
@@ -147,29 +146,54 @@ func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*conn
 		toResolve = append(toResolve, uri)
 	}
 
+	if changed {
+		p.queueMetaPending.Store(false)
+		p.signalQueueMetaUpdated()
+	}
 	p.resolveQueueMetadataBatch(ctx, toResolve)
-	return changed
 }
 
-// Network runs on the caller's goroutine — call from background workers, never Run.
 func (p *AppPlayer) resolveQueueMetadataBatch(ctx context.Context, uris []string) bool {
 	if len(uris) == 0 {
 		return false
 	}
-	if len(uris) > queueMetaBatchChunk {
-		changed := false
-		for start := 0; start < len(uris); start += queueMetaBatchChunk {
-			end := min(start+queueMetaBatchChunk, len(uris))
-			if ctx.Err() != nil {
-				break
-			}
-			if p.resolveQueueMetadataChunk(ctx, uris[start:end]) {
-				changed = true
-			}
+	changed := false
+	for start := 0; start < len(uris); start += queueMetaBatchChunk {
+		if ctx.Err() != nil {
+			break
 		}
-		return changed
+		end := min(start+queueMetaBatchChunk, len(uris))
+		if !p.resolveQueueMetadataChunk(ctx, uris[start:end]) {
+			p.scheduleQueueMetaRetry(uris[start:end])
+			continue
+		}
+		changed = true
+		p.queueMetaPending.Store(false)
+		p.signalQueueMetaUpdated()
 	}
-	return p.resolveQueueMetadataChunk(ctx, uris)
+	return changed
+}
+
+func (p *AppPlayer) scheduleQueueMetaRetry(chunk []string) {
+	if p == nil || p.queueMetaRetriesLeft.Load() <= 0 {
+		return
+	}
+	p.queueMetaRetriesLeft.Add(-1)
+	if !p.queueMetaRetryArmed.CompareAndSwap(false, true) {
+		return
+	}
+	delay := queueMetaRetryDelay
+	go func() {
+		defer p.queueMetaRetryArmed.Store(false)
+		select {
+		case <-time.After(delay):
+		case <-p.ownerContext().Done():
+			return
+		}
+		metaCtx, cancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
+		defer cancel()
+		p.resolveQueueMetadataBatch(metaCtx, chunk)
+	}()
 }
 
 func (p *AppPlayer) resolveQueueMetadataChunk(ctx context.Context, uris []string) bool {
@@ -240,9 +264,7 @@ func (p *AppPlayer) maybeSweepQueueImages() {
 		defer p.queueSweepWarmInFlight.Store(false)
 		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
 		defer metaCancel()
-		if p.resolveQueueMetadataBatch(metaCtx, uris) {
-			p.signalQueueMetaUpdated()
-		}
+		p.resolveQueueMetadataBatch(metaCtx, uris)
 	}()
 }
 
@@ -263,9 +285,7 @@ func (p *AppPlayer) maybeWarmQueueHeadImages() {
 		defer p.queueHeadWarmInFlight.Store(false)
 		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
 		defer metaCancel()
-		if p.resolveQueueMetadataBatch(metaCtx, uris) {
-			p.signalQueueMetaUpdated()
-		}
+		p.resolveQueueMetadataBatch(metaCtx, uris)
 	}()
 }
 

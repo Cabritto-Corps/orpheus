@@ -51,25 +51,25 @@ type PlaybackStateQueueEntry struct {
 }
 
 type PlaybackStateUpdate struct {
-	DeviceName    string
-	DeviceID      string
-	TrackID       string
-	Volume        int
-	TrackName     string
-	ArtistName    string
-	AlbumName     string
-	AlbumImageURL string
-	Playing       bool
-	ProgressMS    int
-	DurationMS    int
-	ShuffleState  bool
-	RepeatContext bool
-	RepeatTrack   bool
-	Queue         []PlaybackStateQueueEntry
-	QueueHasMore  bool
-	QueueIncluded bool
-	// ContextURI is the loaded context used by play-from-track commands.
-	ContextURI string
+	DeviceName       string
+	DeviceID         string
+	TrackID          string
+	Volume           int
+	TrackName        string
+	ArtistName       string
+	AlbumName        string
+	AlbumImageURL    string
+	Playing          bool
+	ProgressMS       int
+	DurationMS       int
+	ShuffleState     bool
+	RepeatContext    bool
+	RepeatTrack      bool
+	Queue            []PlaybackStateQueueEntry
+	QueueHasMore     bool
+	QueueIncluded    bool
+	QueueMetaPending bool
+	ContextURI       string
 
 	// Error carries a transport-level failure; the TUI surfaces it as playbackErr.
 	Error string

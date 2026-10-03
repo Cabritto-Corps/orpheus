@@ -179,6 +179,56 @@ func TestStartupSyncReleases(t *testing.T) {
 	}
 }
 
+func TestStartupGateHoldsForQueueMetadata(t *testing.T) {
+	m := NewLoaderModel()
+	m.ui.width = 100
+	m.ui.height = 40
+	m.transport.status = &spotify.PlaybackStatus{TrackName: "song", DurationMS: 120000, ProgressMS: 5000}
+	m.transport.statePushSeen = true
+	if m.startupPending() {
+		t.Fatal("a settled startup must not hold")
+	}
+
+	next, _ := m.handlePlaybackStateMsg(playbackStateMsg{seq: 1, status: m.transport.status, queueMetaPending: true})
+	m = next.(model)
+	if !m.startupPending() {
+		t.Fatal("unresolved queue metadata must hold the reveal")
+	}
+	if m.transport.queueMetaRevealEnd.Before(time.Now()) {
+		t.Fatal("the metadata hold must carry a future deadline")
+	}
+
+	next, _ = m.handlePlaybackStateMsg(playbackStateMsg{seq: 2, status: m.transport.status})
+	resolved := next.(model)
+	if resolved.startupPending() {
+		t.Fatal("the metadata-completed push must release the reveal")
+	}
+
+	expired := NewLoaderModel()
+	expired.transport.status = m.transport.status
+	expired.transport.statePushSeen = true
+	next, _ = expired.handlePlaybackStateMsg(playbackStateMsg{seq: 1, status: m.transport.status, queueMetaPending: true})
+	expired = next.(model)
+	expired.transport.queueMetaRevealEnd = time.Now().Add(-time.Millisecond)
+	if expired.startupPending() {
+		t.Fatal("an expired metadata hold must release the reveal")
+	}
+
+	next, _ = expired.handlePlaybackStateMsg(playbackStateMsg{seq: 2, status: m.transport.status})
+	expired = next.(model)
+	if expired.startupPending() {
+		t.Fatal("a settled push must leave the gate open")
+	}
+	next, _ = expired.handlePlaybackStateMsg(playbackStateMsg{seq: 3, status: m.transport.status, queueMetaPending: true})
+	rising := next.(model)
+	if !rising.transport.queueMetaRevealEnd.After(time.Now()) {
+		t.Fatal("a second context load must rearm the metadata hold")
+	}
+	if !rising.startupPending() {
+		t.Fatal("re-pending metadata must rehold the reveal")
+	}
+}
+
 func TestHeaderHoldsDuringStartup(t *testing.T) {
 	m := NewLoaderModel()
 	m.ui.width = 100

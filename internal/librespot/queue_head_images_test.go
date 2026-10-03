@@ -473,3 +473,138 @@ func TestMaybeSweepQueueImagesWarmsBeyondHead(t *testing.T) {
 		t.Fatalf("imaged context re-swept: %d requests, want %d", n, len(uris)-headImageWindow-1)
 	}
 }
+
+func sweepChunkFillingURIs(total int) []string {
+	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	uris := make([]string, 0, total)
+	for i := range total {
+		id := fmt.Sprintf("7GhIk7Il098yCjg4BQ%c%c", alphabet[(i/62)%62], alphabet[i%62])
+		uris = append(uris, "spotify:track:"+id)
+	}
+	return uris
+}
+
+func TestQueueMetaBatchClearsPendingOnFirstChunk(t *testing.T) {
+	p := newTestAppPlayer()
+	p.queueMetaUpdated = make(chan struct{}, 1)
+	p.resetQueueMetaForContext()
+	prod := testQueueProdInfo(t)
+	p.prodInfo = &prod
+
+	uris := sweepChunkFillingURIs(queueMetaBatchChunk + 10)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	fetches := 0
+	resolve := func(chunk []string) map[string]spclient.ResolvedEntry {
+		out := make(map[string]spclient.ResolvedEntry, len(chunk))
+		for _, u := range chunk {
+			out[u] = spclient.ResolvedEntry{Name: "N", Artist: "A", DurationMS: 200000}
+		}
+		return out
+	}
+	p.metaBatchFetch = func(ctx context.Context, chunk []string) (map[string]spclient.ResolvedEntry, error) {
+		mu.Lock()
+		fetches++
+		n := fetches
+		mu.Unlock()
+		if n == 1 {
+			return resolve(chunk), nil
+		}
+		<-release
+		return resolve(chunk), nil
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.resolveQueueMetadataBatch(context.Background(), uris)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for p.queueMetaPending.Load() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if p.queueMetaPending.Load() {
+		t.Fatal("first chunk must release the pending flag")
+	}
+	select {
+	case <-done:
+		t.Fatal("pending must release before the whole batch completes")
+	default:
+	}
+	select {
+	case <-p.queueMetaUpdated:
+	default:
+		t.Fatal("first chunk must signal a delivery")
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("batch did not finish after the blocked chunk was released")
+	}
+}
+
+func TestQueueMetaRetrySpendsBudgetThenStops(t *testing.T) {
+	p := newTestAppPlayer()
+	p.resetQueueMetaForContext()
+	prod := testQueueProdInfo(t)
+	p.prodInfo = &prod
+	prevDelay := queueMetaRetryDelay
+	queueMetaRetryDelay = 20 * time.Millisecond
+	defer func() { queueMetaRetryDelay = prevDelay }()
+
+	var fetches atomic.Int32
+	p.metaBatchFetch = func(ctx context.Context, chunk []string) (map[string]spclient.ResolvedEntry, error) {
+		fetches.Add(1)
+		return nil, errQueueHeadProbe
+	}
+	if p.resolveQueueMetadataBatch(context.Background(), []string{"spotify:track:7GhIk7Il098yCjg4BQjzvb"}) {
+		t.Fatal("failed batch must report unchanged")
+	}
+	if left := p.queueMetaRetriesLeft.Load(); left != int32(queueMetaRetryBudget)-1 {
+		t.Fatalf("first failed chunk must spend one retry, budget=%d", left)
+	}
+	if !p.queueMetaPending.Load() {
+		t.Fatal("failed batches must not clear the pending flag")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for fetches.Load() != 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if fetches.Load() != 2 {
+		t.Fatalf("scheduled retry did not run, fetches=%d", fetches.Load())
+	}
+	time.Sleep(100 * time.Millisecond)
+	if left := p.queueMetaRetriesLeft.Load(); left != 0 {
+		t.Fatalf("second failure must drain the budget, left=%d", left)
+	}
+	if n := fetches.Load(); n != 2 {
+		t.Fatalf("exhausted budget must stop retrying, fetches=%d", n)
+	}
+}
+
+func TestResetQueueMetaForContextRearmsBudgetAndPending(t *testing.T) {
+	p := newTestAppPlayer()
+	p.queueMetaRetriesLeft.Store(0)
+	p.queueMetaPending.Store(false)
+	p.resetQueueMetaForContext()
+	if left := p.queueMetaRetriesLeft.Load(); left != int32(queueMetaRetryBudget) {
+		t.Fatalf("context reset must rearm the retry budget, left=%d", left)
+	}
+	if !p.queueMetaPending.Load() {
+		t.Fatal("context reset must arm the pending flag")
+	}
+}
+
+func TestPlaybackStateCarriesQueueMetaPending(t *testing.T) {
+	p, _ := newQueueHeadSignalPlayer(t, []string{"spotify:track:7GhIk7Il098yCjg4BQjzvb"})
+	p.queueMetaPending.Store(true)
+	out := p.BuildPlaybackStateUpdate()
+	if !out.QueueMetaPending {
+		t.Fatal("pending flag must ride a state push")
+	}
+	p.queueMetaPending.Store(false)
+	if out := p.BuildPlaybackStateUpdate(); out.QueueMetaPending {
+		t.Fatal("cleared flag must be absent from the push")
+	}
+}

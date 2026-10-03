@@ -107,6 +107,10 @@ type AppPlayer struct {
 	// queueSweepWarmInFlight collapses overlapping beyond-head sweeps.
 	queueSweepWarmInFlight atomic.Bool
 
+	queueMetaPending     atomic.Bool
+	queueMetaRetryArmed  atomic.Bool
+	queueMetaRetriesLeft atomic.Int32
+
 	advanceInFlight       atomic.Bool
 	connectionLostEmitted atomic.Bool
 	endGuardFailures      int

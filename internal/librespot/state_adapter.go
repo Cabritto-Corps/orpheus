@@ -49,6 +49,7 @@ func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUp
 			out.QueueHasMore = false
 		}
 	}
+	out.QueueMetaPending = p.queueMetaPending.Load()
 
 	if p.state.player.Track != nil {
 		out.TrackID = golibrespot.NormalizeSpotifyId(p.state.player.Track.Uri)
