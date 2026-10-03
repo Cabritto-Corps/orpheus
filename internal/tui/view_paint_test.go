@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 // The view paints backgrounds by re-asserting them after every style reset,
@@ -52,11 +53,7 @@ func withPaintTestModelStyle(t *testing.T, w, h int, style string) model {
 	st := themePresetState("default")
 	st.backgrounds.Style = style
 	m.styles = buildThemeStyles(st)
-	t.Setenv("TERM", "xterm-256color")
-	t.Setenv("NO_COLOR", "0")
-	t.Cleanup(func() {
-		t.Setenv("NO_COLOR", "1")
-	})
+	m.styles.colorProfile = colorprofile.TrueColor
 	m.ui.width = w
 	m.ui.height = h
 	return m
@@ -159,11 +156,9 @@ func TestTransparentModalKeepsChrome(t *testing.T) {
 }
 
 func TestSelectedRowKeepsHighlightThroughFragments(t *testing.T) {
-	t.Setenv("TERM", "xterm-256color")
-	t.Setenv("NO_COLOR", "0")
-
 	// A styled fragment inside a selected row, like the real gauge bar.
 	st := buildThemeStyles(themePresetState("default"))
+	st.colorProfile = colorprofile.TrueColor
 	row := "Crossfade|" + lipgloss.NewStyle().Foreground(st.colorBlue).Render("██████") + "|end"
 	out := st.modalRow(row, "", true, 96)
 

@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -165,11 +166,7 @@ func TestModalFrameTransparentBackdrop(t *testing.T) {
 	state := themePresetState("default")
 	state.backgrounds.Style = "transparent"
 	st := buildThemeStyles(state)
-	t.Setenv("TERM", "xterm-256color")
-	t.Setenv("NO_COLOR", "0")
-	t.Cleanup(func() {
-		t.Setenv("NO_COLOR", "1")
-	})
+	st.colorProfile = colorprofile.TrueColor
 	title := st.styleModalTitle.Render("Settings")
 	body := "\n  body line\n"
 	out := st.modalFrame(100, 30, title, st.styleModalHint.Render("esc: close"), body, 52, 12)
