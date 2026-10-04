@@ -68,6 +68,10 @@ func (m model) mainView() string {
 
 func (m model) modalView(kind modalKind) string {
 	switch kind {
+	case modalClientIDSetup:
+		return m.clientIDSetupModalView()
+	case modalAuthLogin:
+		return m.authLoginModalView()
 	case modalHelp:
 		return m.helpModalView()
 	case modalTrackPopup:

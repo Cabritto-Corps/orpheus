@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -135,6 +136,29 @@ func TestLoadEnvFileFallsBackToConfigDir(t *testing.T) {
 
 	if got := os.Getenv("ORPHEUS_TEST_FROM_CONFIG_DIR"); got != "from-config-env" {
 		t.Fatalf("expected env var from config-dir .env, got %q", got)
+	}
+}
+
+func TestSaveSpotifyClientIDPreservesEnvEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("# keep this\nOTHER_SETTING=hello\nSPOTIFY_CLIENT_ID=old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveSpotifyClientID(path, "new-client-id"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	for _, want := range []string{"# keep this", "OTHER_SETTING=hello", `SPOTIFY_CLIENT_ID="new-client-id"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("saved env missing %q: %s", want, got)
+		}
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("expected private .env mode 0600, stat=%v err=%v", info, err)
 	}
 }
 

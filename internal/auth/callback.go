@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -34,13 +35,20 @@ func WaitForCallback(ctx context.Context, redirectURI, expectedState string) (st
 		state := r.URL.Query().Get("state")
 		if state != expectedState {
 			http.Error(w, "invalid oauth state", http.StatusBadRequest)
-			send("", errors.New("invalid oauth state"))
+			return
+		}
+		if providerErr := strings.TrimSpace(r.URL.Query().Get("error")); providerErr != "" {
+			http.Error(w, "Spotify authorization was not completed", http.StatusBadRequest)
+			description := strings.TrimSpace(r.URL.Query().Get("error_description"))
+			if description != "" {
+				providerErr += ": " + description
+			}
+			send("", fmt.Errorf("Spotify authorization failed: %s", providerErr))
 			return
 		}
 		code := r.URL.Query().Get("code")
 		if code == "" {
 			http.Error(w, "missing authorization code", http.StatusBadRequest)
-			send("", errors.New("missing authorization code"))
 			return
 		}
 		_, _ = w.Write([]byte("Authentication successful. You can close this tab."))

@@ -19,7 +19,11 @@ func (m model) headerView() string {
 
 	if m.startupPending() {
 		statusStr = m.styles.styleHeaderPaused.Render("Orpheus")
-		centerL1 = m.styles.styleHeaderSub.Render("connecting to Spotify…")
+		if m.ui.authLoginURL != "" && !m.ui.authLoginOpen {
+			centerL1 = m.styles.styleHeaderSub.Render("Spotify sign-in required · press L to open")
+		} else {
+			centerL1 = m.styles.styleHeaderSub.Render("connecting to Spotify…")
+		}
 		device := m.icon(iconDevice, iconDeviceNF) + " " + m.deviceName
 		rightL1 = m.styles.styleHeaderStatus.Render(truncate(device, max(1, w-lipgloss.Width(statusStr)-2)))
 	} else if m.transport.status != nil {
