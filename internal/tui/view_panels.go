@@ -136,7 +136,7 @@ func (m model) playlistBrowserPanel(w, h int) string {
 
 	if m.transport.playbackErr != nil {
 		diag := spotify.DiagnoseError(m.transport.playbackErr)
-		errLine := m.transport.playbackErr.Error()
+		errLine := "Playback unavailable (library browsing may still work): " + m.transport.playbackErr.Error()
 		if diag.Category != "" && diag.Category != "unknown" {
 			errLine = diag.Category + ": " + errLine
 		}

@@ -52,16 +52,16 @@ func main() {
 			slog.Error("startup configuration failed", "error", err)
 			os.Exit(1)
 		}
-		if err := cfg.ValidateForAuth(); err != nil {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		completed, err := tui.RunAuthLogin(ctx, cfg)
+		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintln(os.Stderr, "orpheus auth login: "+err.Error())
 			os.Exit(1)
 		}
-		authManager, err := auth.NewPKCEManager(cfg, auth.NewFileTokenStore(cfg.TokenPath))
-		if err != nil {
-			slog.Error("oauth setup failed", "error", err)
-			os.Exit(1)
+		if completed {
+			fmt.Println("Spotify login complete. Run orpheus to start Orpheus.")
 		}
-		runAuthLogin(authManager, cfg)
 		return
 	}
 	if len(os.Args) >= 2 && os.Args[1] == "auth" {
@@ -144,37 +144,6 @@ func isRetryableTokenRefreshError(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "timeout") || strings.Contains(msg, "tempor")
-}
-
-func runAuthLogin(authManager *auth.Manager, cfg config.Config) {
-	session, err := authManager.BeginAuth()
-	if err != nil {
-		slog.Error("failed to create oauth session", "error", err)
-		os.Exit(1)
-	}
-
-	slog.Info("open this URL to authenticate", "authorization_url", session.AuthURL)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	code, err := auth.WaitForCallback(ctx, cfg.RedirectURI, session.State)
-	if err != nil {
-		slog.Error("oauth callback failed", "error", err)
-		os.Exit(1)
-	}
-
-	exchangeCtx, exchangeCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer exchangeCancel()
-	token, err := authManager.ExchangeCode(exchangeCtx, code, session.Verifier)
-	if err != nil {
-		slog.Error("oauth code exchange failed", "error", err)
-		os.Exit(1)
-	}
-	if err := authManager.SaveToken(token); err != nil {
-		slog.Error("failed to persist oauth token", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("oauth login successful", "token_path", cfg.TokenPath)
 }
 
 func runCheck(ctx context.Context, authManager *auth.Manager, token *oauth2.Token, cfg config.Config) {
@@ -287,6 +256,44 @@ func runLibrespotTUI() (err error) {
 	if cfgErr != nil {
 		slog.Warn("spotify config not fully loaded", "error", cfgErr)
 	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	// Complete Web API setup before starting the player. When the Client ID is
+	// missing, RunAuthLogin guides the user through setup and OAuth, then the
+	// app continues with the newly persisted config and token in this process.
+	if cfgErr == nil {
+		needsWebLogin := strings.TrimSpace(cfg.SpotifyClientID) == ""
+		if !needsWebLogin {
+			if authMgr, authErr := auth.NewPKCEManager(cfg, auth.NewFileTokenStore(cfg.TokenPath)); authErr != nil {
+				return fmt.Errorf("spotify auth setup: %w", authErr)
+			} else if token, tokenErr := authMgr.LoadToken(); tokenErr != nil || token == nil {
+				needsWebLogin = true
+			} else {
+				tokenCtx := context.WithValue(ctx, oauth2.HTTPClient, oauthHTTPClient())
+				if _, refreshErr := ensureUsableTokenWithRetry(tokenCtx, authMgr); requiresSpotifyReauth(refreshErr) {
+					needsWebLogin = true
+					slog.Info("Spotify Web API token needs authorization; starting sign-in")
+				}
+			}
+		}
+		if needsWebLogin {
+			completed, loginErr := tui.RunAuthLogin(ctx, cfg)
+			if loginErr != nil {
+				if errors.Is(loginErr, context.Canceled) {
+					return nil
+				}
+				return fmt.Errorf("spotify sign-in: %w", loginErr)
+			}
+			if !completed {
+				return nil
+			}
+			cfg, cfgErr = config.LoadFromEnv()
+			if cfgErr != nil {
+				return fmt.Errorf("reload Spotify configuration: %w", cfgErr)
+			}
+		}
+	}
 
 	logPath := os.Getenv("ORPHEUS_LOG_FILE")
 	if logPath == "" {
@@ -313,9 +320,6 @@ func runLibrespotTUI() (err error) {
 	log.SetFormatter(&logrus.TextFormatter{DisableColors: true})
 	logger := &librespot.LogrusAdapter{Log: logrus.NewEntry(log)}
 	log.SetReportCaller(false)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 
 	librespotCfg := librespot.DefaultConfig()
 	if cfg.DeviceName != "" {
@@ -380,6 +384,9 @@ func runLibrespotTUI() (err error) {
 	if err != nil {
 		return err
 	}
+	logger.OnAuthRequired = func(url string) {
+		handle.Program.Send(tui.AuthLoginRequired(url))
+	}
 
 	supervisor := &backendSupervisor{}
 	sessionCtx, stopSessionSetup := context.WithCancel(ctx)
@@ -399,4 +406,14 @@ func runLibrespotTUI() (err error) {
 		return err
 	}
 	return nil
+}
+
+func requiresSpotifyReauth(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "invalid_grant") ||
+		strings.Contains(message, "invalid_token") ||
+		strings.Contains(message, "token expired and refresh token is not set")
 }

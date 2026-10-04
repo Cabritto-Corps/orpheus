@@ -16,6 +16,9 @@ import (
 func TestPlayerBackendFailedSurfacesStartupError(t *testing.T) {
 	m := NewLoaderModel()
 	m.transport.playerConnecting = true
+	m.ui.authLoginURL = "https://accounts.spotify.com/authorize?state=private"
+	m.ui.authLoginOpen = true
+	m.ui.authLoginPlayback = true
 	boom := errors.New("login unavailable")
 
 	next, cmd := m.handlePlayerBackendMsg(playerBackendMsg{err: boom})
@@ -25,6 +28,9 @@ func TestPlayerBackendFailedSurfacesStartupError(t *testing.T) {
 	}
 	if got.transport.playbackErr != boom {
 		t.Fatalf("expected the startup failure to surface, got %v", got.transport.playbackErr)
+	}
+	if got.ui.authLoginOpen || got.ui.authLoginURL != "" || got.ui.authLoginPlayback {
+		t.Fatal("failed player startup must close the now-stale playback login modal")
 	}
 	if cmd != nil {
 		t.Fatalf("expected no follow-up command for a failed backend, got %v", cmd)

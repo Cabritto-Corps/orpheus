@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/viewport"
 
+	"orpheus/internal/config"
 	"orpheus/internal/librespot"
 	"orpheus/internal/loader"
 	"orpheus/internal/spotify"
@@ -99,6 +100,21 @@ type browseModel struct {
 type uiModel struct {
 	activeTab               tab
 	helpOpen                bool
+	authLoginURL            string
+	authLoginOpen           bool
+	authLoginNotice         string
+	clientIDSetupOpen       bool
+	clientIDInput           string
+	clientIDEditing         bool
+	clientIDNotice          string
+	clientIDSaving          bool
+	clientIDComplete        bool
+	authLoginOnly           bool
+	authLoginFinished       bool
+	authLoginSucceeded      bool
+	authLoginError          string
+	authLoginPlayback       bool
+	config                  config.Config
 	spinner                 spinner.Model
 	navToken                int
 	trackPopupOpen          bool
@@ -160,6 +176,8 @@ type modalKind int
 
 const (
 	modalNone modalKind = iota
+	modalClientIDSetup
+	modalAuthLogin
 	modalHelp
 	modalSettingsRoot
 	modalSettingsKeys
@@ -170,6 +188,12 @@ const (
 )
 
 func (m model) modalKind() modalKind {
+	if m.ui.clientIDSetupOpen {
+		return modalClientIDSetup
+	}
+	if m.ui.authLoginOpen && m.ui.authLoginURL != "" {
+		return modalAuthLogin
+	}
 	if m.ui.helpOpen {
 		return modalHelp
 	}

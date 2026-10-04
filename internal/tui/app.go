@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -152,6 +153,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 		},
 		ui: uiModel{
 			activeTab:              tabPlaylists,
+			config:                 cfg,
 			imgs:                   newImgCacheWithSelection(imageStyle, imageStyleSet, os.Getenv),
 			spinner:                themedSpinner(styles),
 			startupCoverBoostTicks: 40,
@@ -230,6 +232,7 @@ func startProgram(ctx context.Context, catalog spotify.PlaylistCatalog, cfg conf
 	catalogSource := newCatalogSource(catalog)
 	ldr := loader.New(ctx, 128, NewDynamicCatalogExecutor(ctx, catalogSource.get))
 	m := newModel(ctx, catalog, cfg, tuiCmdCh, contextTracksCh, ldr)
+	m.ui.clientIDSetupOpen = strings.TrimSpace(cfg.SpotifyClientID) == ""
 	m.catalogSource = catalogSource
 	m.transport.playerConnecting = markConnecting
 	// Match the terminal's own background to the theme's page color for the
@@ -251,6 +254,9 @@ func startProgram(ctx context.Context, catalog spotify.PlaylistCatalog, cfg conf
 }
 
 func (m model) Init() tea.Cmd {
+	if m.ui.authLoginOnly {
+		return nil
+	}
 	return tea.Batch(
 		preloadLikedSongsArtCmd(m),
 		m.loadPlaylistsCmd(),
