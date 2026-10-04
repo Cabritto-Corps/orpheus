@@ -76,7 +76,7 @@ func RunAuthLogin(ctx context.Context, cfg config.Config) (bool, error) {
 	}
 	if result.ui.authLoginFinished {
 		if result.ui.authLoginError == "" {
-			return false, errors.New("Spotify sign-in failed")
+			return false, errors.New("spotify sign-in failed")
 		}
 		return false, errors.New(result.ui.authLoginError)
 	}
