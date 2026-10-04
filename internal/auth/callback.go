@@ -43,7 +43,7 @@ func WaitForCallback(ctx context.Context, redirectURI, expectedState string) (st
 			if description != "" {
 				providerErr += ": " + description
 			}
-			send("", fmt.Errorf("Spotify authorization failed: %s", providerErr))
+			send("", fmt.Errorf("spotify authorization failed: %s", providerErr))
 			return
 		}
 		code := r.URL.Query().Get("code")

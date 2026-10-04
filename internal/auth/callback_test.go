@@ -88,7 +88,7 @@ func TestWaitForCallbackReturnsProviderDenial(t *testing.T) {
 	}
 	select {
 	case err := <-result:
-		if err == nil || err.Error() != "Spotify authorization failed: access_denied" {
+		if err == nil || err.Error() != "spotify authorization failed: access_denied" {
 			t.Fatalf("provider denial error = %v", err)
 		}
 	case <-ctx.Done():
