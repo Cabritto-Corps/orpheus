@@ -64,6 +64,12 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.loadVisiblePlaylistCoversCmd(), m.kittyOverlayCmd())
 		}
 	}
+	if !filtering && m.ui.authLoginURL != "" && !m.ui.authLoginOpen &&
+		keyMatches(msg, key.NewBinding(key.WithKeys("l"))) {
+		m.ui.authLoginOpen = true
+		m.ui.authLoginNotice = ""
+		return m, nil
+	}
 
 	if !filtering {
 		if action := m.matchGlobalPlaybackKey(msg); action != "" {
@@ -201,6 +207,12 @@ func (m model) handleAlbumKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // routeModalKey dispatches a key to the open dialog; quit-first already ran in handleKey.
 func (m model) routeModalKey(msg tea.KeyPressMsg, kind modalKind) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
+	if kind == modalClientIDSetup {
+		return m.handleClientIDSetupKey(msg)
+	}
+	if kind == modalAuthLogin {
+		return m.handleAuthLoginKey(msg)
+	}
 	if kind == modalHelp {
 		if keyMatches(msg, k.CloseModal) || keyMatches(msg, k.ToggleHelp) {
 			m.ui.helpOpen = false

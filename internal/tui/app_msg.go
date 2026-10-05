@@ -22,6 +22,24 @@ type playerBackendMsg struct {
 	err     error
 }
 
+type authLoginRequiredMsg struct{ url string }
+type authBrowserResultMsg struct{ err error }
+type authClipboardResultMsg struct{ err error }
+type clientIDSavedMsg struct{ err error }
+type clientIDBrowserMsg struct{ err error }
+type clientIDCopyMsg struct{ err error }
+type clientIDGuideBrowserMsg struct{ err error }
+type clientIDPasteMsg struct {
+	text string
+	err  error
+}
+type authLoginCompleteMsg struct{ err error }
+
+// AuthLoginRequired opens the Spotify sign-in dialog with the private login URL.
+func AuthLoginRequired(url string) tea.Msg {
+	return authLoginRequiredMsg{url: url}
+}
+
 func PlayerBackendReady(catalog spotify.PlaylistCatalog) tea.Msg {
 	return playerBackendMsg{ready: true, catalog: catalog}
 }
