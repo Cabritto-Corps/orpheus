@@ -97,6 +97,39 @@ func TestSearchPaginationLoadsNearEnd(t *testing.T) {
 	}
 }
 
+func TestSearchRowPreviewHierarchyAndRecentsPreview(t *testing.T) {
+	m := NewLoaderModel()
+	m.ui.width, m.ui.height = 120, 40
+	m.browse.search.list.SetItems([]list.Item{
+		searchResultItem{result: spotify.SearchResultItem{ID: "t", Kind: "track", Name: "Song", Owner: "Singer", AlbumName: "Album", DurationMS: 180000}},
+	})
+	m.browse.search.list.Select(0)
+	if got := m.browse.search.list.SelectedItem().(searchResultItem).Description(); got != "Singer" {
+		t.Fatalf("track row description = %q, want artist only", got)
+	}
+	if view := m.browse.search.list.View(); !strings.Contains(view, "3:00") {
+		t.Fatalf("track row must carry the duration column: %q", view)
+	}
+	preview := m.searchPreviewPanel(40, 20, 10, 5)
+	name, artist, album := strings.Index(preview, "Song"), strings.Index(preview, "Singer"), strings.Index(preview, "Album")
+	if name < 0 || artist < 0 || album < 0 || name > artist || artist > album {
+		t.Fatalf("preview must order name, artist, album: %q", preview)
+	}
+
+	m.browse.recentsList.SetItems([]list.Item{
+		trackItem{item: spotify.QueueItem{ID: "r", Name: "Recent", Artist: "Singer", Album: "Album", DurationMS: 180000}},
+	})
+	m.browse.recentsList.Select(0)
+	recent := m.recentsPreviewPanel(40, 20, 10, 5)
+	rname, rartist, ralbum := strings.Index(recent, "Recent"), strings.Index(recent, "Singer"), strings.Index(recent, "Album")
+	if rname < 0 || rartist < 0 || ralbum < 0 || rname > rartist || rartist > ralbum {
+		t.Fatalf("recents preview must order name, artist, album: %q", recent)
+	}
+	if strings.Contains(recent, "3:00") {
+		t.Fatalf("recents preview must not repeat the duration: %q", recent)
+	}
+}
+
 func TestSearchPanelStatusAndSingleSpinner(t *testing.T) {
 	m := NewLoaderModel()
 	m.ui.width, m.ui.height = 120, 40

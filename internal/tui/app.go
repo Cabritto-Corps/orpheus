@@ -100,11 +100,7 @@ func (s searchResultItem) FilterValue() string { return s.result.Name + " " + s.
 
 func (s searchResultItem) Description() string {
 	if s.result.Kind == "track" {
-		album := strings.TrimSpace(s.result.AlbumName)
-		if album != "" {
-			return s.result.Owner + " • " + album + " • " + fmtDuration(s.result.DurationMS)
-		}
-		return s.result.Owner + " • " + fmtDuration(s.result.DurationMS)
+		return s.result.Owner
 	}
 	if s.result.Kind == "artist" {
 		if len(s.result.Genres) > 0 {
@@ -164,15 +160,8 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 		imageStyle, imageStyleSet = config.ExplicitImageStyle(cfg.SettingsPath)
 	}
 	imgs := newImgCacheWithSelection(imageStyle, imageStyleSet, os.Getenv)
-	recents := list.New(nil, newSearchResultDelegate(styles, imgs), 40, 20)
-	recents.SetShowTitle(false)
-	recents.SetShowStatusBar(false)
-	recents.SetFilteringEnabled(true)
-	recents.SetShowFilter(true)
-	recents.SetShowHelp(false)
-	recents.FilterInput.Prompt = "Search: "
-	applyListStyles(&recents, styles)
-	searchList := list.New(nil, newSearchResultDelegate(styles, imgs), 40, 20)
+	recents := newBrowseList(styles)
+	searchList := list.New(nil, newCachedPlaylistDelegate(styles), 40, 20)
 	searchList.SetShowTitle(false)
 	searchList.SetShowStatusBar(false)
 	searchList.SetFilteringEnabled(false)

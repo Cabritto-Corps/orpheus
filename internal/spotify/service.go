@@ -87,6 +87,7 @@ type QueueItem struct {
 	ID         string
 	Name       string
 	Artist     string
+	Album      string
 	DurationMS int
 	ImageURL   string
 	// Queued marks manual-queue entries; unset means a context track.

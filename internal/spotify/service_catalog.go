@@ -364,6 +364,7 @@ func (s *Service) ListRecentlyPlayedTracks(ctx context.Context, limit int) ([]Qu
 					Name string `json:"name"`
 				} `json:"artists"`
 				Album struct {
+					Name   string          `json:"name"`
 					Images []PlaylistImage `json:"images"`
 				} `json:"album"`
 			} `json:"track"`
@@ -388,6 +389,7 @@ func (s *Service) ListRecentlyPlayedTracks(ctx context.Context, limit int) ([]Qu
 		}
 		tracks = append(tracks, QueueItem{
 			ID: track.ID, Name: track.Name, Artist: strings.Join(artists, ", "),
+			Album:      track.Album.Name,
 			DurationMS: track.DurationMS, ImageURL: pickDisplayImageURL(track.Album.Images),
 		})
 	}

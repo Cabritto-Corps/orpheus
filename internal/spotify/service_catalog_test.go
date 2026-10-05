@@ -53,14 +53,14 @@ func TestRecentlyPlayedTracksParseTrackMetadata(t *testing.T) {
 		return httpJSONResponse(http.StatusOK, `{
 			"items": [{"track": {"id":"recent", "name":"Recent song", "duration_ms":180000,
 				"artists":[{"name":"Artist One"},{"name":"Artist Two"}],
-				"album":{"images":[{"url":"recent-cover", "width":640, "height":640}]}}}]
+				"album":{"name":"Recent album", "images":[{"url":"recent-cover", "width":640, "height":640}]}}}]
 		}`), nil
 	})}}
 	tracks, err := s.ListRecentlyPlayedTracks(context.Background(), 90)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tracks) != 1 || tracks[0].ID != "recent" || tracks[0].Artist != "Artist One, Artist Two" || tracks[0].ImageURL != "recent-cover" {
+	if len(tracks) != 1 || tracks[0].ID != "recent" || tracks[0].Artist != "Artist One, Artist Two" || tracks[0].Album != "Recent album" || tracks[0].ImageURL != "recent-cover" {
 		t.Fatalf("recent track metadata lost: %#v", tracks)
 	}
 }

@@ -370,9 +370,7 @@ func dumpKittyOverlay(out string) {
 // The bool marks content emissions: false (pure deletes) bypass delivery
 // suppression, true is guarded by kittyOverlayCmd.
 func (m model) kittyOverlayBytes() (string, bool) {
-	cover, coverContent := m.kittyCoverOverlayBytes()
-	thumbs, thumbContent := m.kittyThumbnailOverlayBytes()
-	return cover + thumbs, coverContent || thumbContent
+	return m.kittyCoverOverlayBytes()
 }
 
 func (m model) kittyCoverOverlayBytes() (string, bool) {

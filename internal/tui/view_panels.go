@@ -265,7 +265,10 @@ func (m model) recentsPreviewPanel(w, h, coverCols, coverRows int) string {
 		}
 		content += "\n" + cover + "\n" +
 			m.styles.stylePlaylistName.Render(truncate(selected.item.Name, max(1, w-2))) + "\n" +
-			m.styles.stylePlaylistOwner.Render(truncate(selected.item.Artist+" • "+fmtDuration(selected.item.DurationMS), max(1, w-2)))
+			m.styles.stylePlaylistOwner.Render(truncate(selected.item.Artist, max(1, w-2)))
+		if album := strings.TrimSpace(selected.item.Album); album != "" {
+			content += "\n" + m.styles.stylePlaylistOwner.Render(truncate(album, max(1, w-2)))
+		}
 	}
 	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 }
@@ -308,10 +311,29 @@ func (m model) searchBrowserPanel(w, h int) string {
 func (m model) searchPreviewPanel(w, h, coverCols, coverRows int) string {
 	labelLine := m.styles.styleSectionLabel.Render("Preview") + "\n" + m.styles.sectionDivider(w)
 	cover := m.placeholderArt(coverCols, coverRows)
-	if selected, ok := m.browse.search.list.SelectedItem().(searchResultItem); ok && selected.result.ImageURL != "" {
-		cover = m.coverOrPlaceholder(selected.result.ImageURL, coverCols, coverRows)
+	content := labelLine + "\n" + cover
+	if selected, ok := m.browse.search.list.SelectedItem().(searchResultItem); ok {
+		if selected.result.ImageURL != "" {
+			cover = m.coverOrPlaceholder(selected.result.ImageURL, coverCols, coverRows)
+		}
+		lines := []string{labelLine, cover,
+			m.styles.stylePlaylistName.Render(truncate(selected.result.Name, max(1, w-2)))}
+		sub := strings.TrimSpace(selected.result.Owner)
+		if selected.result.Kind == "album" && selected.result.TrackCount > 0 {
+			sub += fmt.Sprintf(" • %d tracks", selected.result.TrackCount)
+		}
+		if selected.result.Kind == "artist" {
+			sub = strings.Join(selected.result.Genres, ", ")
+		}
+		if sub != "" {
+			lines = append(lines, m.styles.stylePlaylistOwner.Render(truncate(sub, max(1, w-2))))
+		}
+		if album := strings.TrimSpace(selected.result.AlbumName); selected.result.Kind == "track" && album != "" {
+			lines = append(lines, m.styles.stylePlaylistOwner.Render(truncate(album, max(1, w-2))))
+		}
+		content = lipgloss.JoinVertical(lipgloss.Left, lines...)
 	}
-	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(labelLine + "\n" + cover)
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
 }
 
 func (m model) albumBrowserPanel(w, h int) string {

@@ -626,6 +626,7 @@ func (m model) handleTrackPopupKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 	m.ui.activeTab = tabPlayer
+	m.freezeSessionTrack(m.transport.status)
 	if m.transport.status != nil && m.transport.status.TrackID != "" {
 		m.transport.pendingContextFrom = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
 		m.transport.pendingContextFromAt = time.Now()
@@ -661,6 +662,7 @@ func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 func (m model) selectAndPlayPlaylist(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.ui.activeTab = tabPlayer
 	m.transport.playbackErr = nil
+	m.freezeSessionTrack(m.transport.status)
 	if m.transport.status != nil {
 		m.transport.pendingContextFrom = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
 		m.transport.pendingContextFromAt = time.Now()

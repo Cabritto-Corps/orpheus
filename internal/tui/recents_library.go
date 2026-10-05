@@ -32,21 +32,7 @@ func mergeRecentTracks(groups ...[]spotify.QueueItem) []spotify.QueueItem {
 				continue
 			}
 			if index, ok := positions[key]; ok {
-				previous := &tracks[index]
-				if previous.Name == "" {
-					previous.Name = track.Name
-				}
-				if previous.Artist == "" {
-					previous.Artist = track.Artist
-				} else if track.Artist != "" {
-					previous.Artist = mergeArtistNames(previous.Artist, track.Artist)
-				}
-				if previous.DurationMS <= 0 {
-					previous.DurationMS = track.DurationMS
-				}
-				if previous.ImageURL == "" {
-					previous.ImageURL = track.ImageURL
-				}
+				fillRecentTrack(&tracks[index], track)
 				continue
 			}
 			positions[key] = len(tracks)
@@ -57,6 +43,26 @@ func mergeRecentTracks(groups ...[]spotify.QueueItem) []spotify.QueueItem {
 		}
 	}
 	return tracks
+}
+
+func fillRecentTrack(previous *spotify.QueueItem, track spotify.QueueItem) {
+	if previous.Name == "" {
+		previous.Name = track.Name
+	}
+	if previous.Artist == "" {
+		previous.Artist = track.Artist
+	} else if track.Artist != "" {
+		previous.Artist = mergeArtistNames(previous.Artist, track.Artist)
+	}
+	if previous.Album == "" {
+		previous.Album = track.Album
+	}
+	if previous.DurationMS <= 0 {
+		previous.DurationMS = track.DurationMS
+	}
+	if previous.ImageURL == "" {
+		previous.ImageURL = track.ImageURL
+	}
 }
 
 func mergeArtistNames(first, second string) string {
@@ -159,12 +165,19 @@ func (m *model) upsertCurrentPlaybackRecent(previous, current *spotify.PlaybackS
 		currentID = recentIdentity(current.TrackID)
 	}
 	if previousID != "" && previousID != currentID {
-		m.browse.sessionRecentTracks = mergeRecentTracks(
-			[]spotify.QueueItem{playbackQueueItem(previous)},
-			m.browse.sessionRecentTracks,
-		)
+		m.freezeSessionTrack(previous)
 	}
 	return m.refreshRecentsList()
+}
+
+func (m *model) freezeSessionTrack(status *spotify.PlaybackStatus) {
+	if status == nil || recentIdentity(status.TrackID) == "" {
+		return
+	}
+	m.browse.sessionRecentTracks = mergeRecentTracks(
+		[]spotify.QueueItem{playbackQueueItem(status)},
+		m.browse.sessionRecentTracks,
+	)
 }
 
 func playbackQueueItem(status *spotify.PlaybackStatus) spotify.QueueItem {
@@ -173,6 +186,7 @@ func playbackQueueItem(status *spotify.PlaybackStatus) spotify.QueueItem {
 	}
 	return spotify.QueueItem{
 		ID: status.TrackID, Name: status.TrackName, Artist: status.ArtistName,
+		Album:      status.AlbumName,
 		DurationMS: status.DurationMS, ImageURL: status.AlbumImageURL,
 	}
 }

@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"orpheus/internal/config"
+	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
 
@@ -42,6 +43,34 @@ func TestRecentsLibraryAggregatesAndDeduplicatesSources(t *testing.T) {
 	}
 	if got := m.browse.recentsTracks[1].ID; got != "recent" {
 		t.Fatalf("API recent order changed: %q", got)
+	}
+}
+
+func TestPlaySingleTrackFreezesOutgoingDuration(t *testing.T) {
+	m := NewLoaderModel()
+	m.tuiCmdCh = make(chan librespot.TUICommand, 2)
+	m.transport.status = &spotify.PlaybackStatus{
+		TrackID: "spotify:track:aaa", TrackName: "A", ArtistName: "Artist",
+		DurationMS: 180000, AlbumImageURL: "cover-a",
+	}
+	next, _ := m.playSingleTrack("spotify:track:bbb", "")
+	got := next.(model)
+	if len(got.browse.sessionRecentTracks) != 1 {
+		t.Fatalf("outgoing track was not frozen: %#v", got.browse.sessionRecentTracks)
+	}
+	frozen := got.browse.sessionRecentTracks[0]
+	if frozen.Name != "A" || frozen.DurationMS != 180000 {
+		t.Fatalf("frozen track lost its duration: %#v", frozen)
+	}
+	mutilated := got.transport.status
+	current := &spotify.PlaybackStatus{TrackID: "spotify:track:bbb", TrackName: "B"}
+	got.upsertCurrentPlaybackRecent(mutilated, current)
+	again := got
+	if len(again.browse.sessionRecentTracks) != 1 {
+		t.Fatalf("re-freeze duplicated the session entry: %#v", again.browse.sessionRecentTracks)
+	}
+	if d := again.browse.sessionRecentTracks[0].DurationMS; d != 180000 {
+		t.Fatalf("re-freeze clobbered the duration: %#v", again.browse.sessionRecentTracks[0])
 	}
 }
 
