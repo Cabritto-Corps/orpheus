@@ -305,7 +305,7 @@ func (m model) searchBrowserPanel(w, h int) string {
 	default:
 		inner = s.list.View()
 	}
-	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(labelLine + "\n" + inputLine + "\n" + inner)
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(labelLine + "\n" + inputLine + "\n\n" + inner)
 }
 
 func (m model) searchPreviewPanel(w, h, coverCols, coverRows int) string {
