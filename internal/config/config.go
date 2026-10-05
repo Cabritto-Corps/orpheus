@@ -1,7 +1,10 @@
 package config
 
 import (
+	"bufio"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -42,7 +45,7 @@ func LoadFromEnv() (Config, error) {
 	cfg := Config{
 		SpotifyClientID:   envAny("spotify_client_id", "SPOTIFY_CLIENT_ID"),
 		RedirectURI:       envDefault("spotify_redirect_uri", "http://127.0.0.1:8989/callback"),
-		Scopes:            splitCSV(envDefault("spotify_scopes", "streaming,user-read-playback-state,user-modify-playback-state,user-read-currently-playing,playlist-read-private,playlist-read-collaborative,user-library-read")),
+		Scopes:            splitCSV(envDefault("spotify_scopes", "streaming,user-read-playback-state,user-modify-playback-state,user-read-currently-playing,user-read-recently-played,playlist-read-private,playlist-read-collaborative,user-library-read")),
 		DeviceName:        envDefault("spotify_device_name", "orpheus"),
 		TokenPath:         envDefault("orpheus_token_path", defaultTokenPath()),
 		SettingsPath:      envDefault("orpheus_config_file", defaultSettingsPath()),
@@ -227,6 +230,76 @@ func resolveEnvFilePath() string {
 		return path
 	}
 	return ""
+}
+
+// SaveSpotifyClientID persists the user's Web API app ID without changing other
+// environment entries. The file is private because it contains user config.
+func SaveSpotifyClientID(path, clientID string) error {
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" || strings.ContainsAny(clientID, "\r\n") {
+		return errors.New("invalid Spotify Client ID")
+	}
+	if path == "" {
+		if _, err := os.Stat(".env"); err == nil {
+			path = ".env"
+		} else {
+			dir, err := DefaultConfigDir()
+			if err != nil {
+				return err
+			}
+			path = filepath.Join(dir, ".env")
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	var lines []string
+	if f, err := os.Open(path); err == nil {
+		s := bufio.NewScanner(f)
+		for s.Scan() {
+			lines = append(lines, s.Text())
+		}
+		readErr := s.Err()
+		_ = f.Close()
+		if readErr != nil {
+			return readErr
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	replaced := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		if strings.HasPrefix(trimmed, "SPOTIFY_CLIENT_ID=") || strings.HasPrefix(trimmed, "spotify_client_id=") {
+			lines[i] = "SPOTIFY_CLIENT_ID=" + strconv.Quote(clientID)
+			replaced = true
+		}
+	}
+	if !replaced {
+		lines = append(lines, "SPOTIFY_CLIENT_ID="+strconv.Quote(clientID))
+	}
+	content := strings.Join(lines, "\n") + "\n"
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".env-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := io.WriteString(tmp, content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("save Spotify Client ID: %w", err)
+	}
+	return nil
 }
 
 var configWarnings []string

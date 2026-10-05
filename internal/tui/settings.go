@@ -295,6 +295,10 @@ func (m model) reloadCurrentKittyCoverCmd() tea.Cmd {
 		url = selectedImageURLFromList(m.browse.playlistList)
 	case tabAlbums:
 		url = selectedImageURLFromList(m.browse.albumList)
+	case tabSearch:
+		url = selectedSearchImageURL(m.browse.search.list)
+	case tabRecents:
+		url = selectedRecentImageURL(m.browse.recentsList)
 	case tabPlayer:
 		if m.transport.status != nil {
 			url = m.transport.status.AlbumImageURL
@@ -717,6 +721,10 @@ func (m *model) rethemeBrowseLists() {
 	// In-place: SetDelegate keeps items, cursor and pagination (no teardown).
 	m.browse.playlistList.SetDelegate(newCachedPlaylistDelegate(m.styles))
 	m.browse.albumList.SetDelegate(newCachedPlaylistDelegate(m.styles))
+	m.browse.search.list.SetDelegate(newCachedPlaylistDelegate(m.styles))
+	m.browse.recentsList.SetDelegate(newCachedPlaylistDelegate(m.styles))
 	applyListStyles(&m.browse.playlistList, m.styles)
 	applyListStyles(&m.browse.albumList, m.styles)
+	applyListStyles(&m.browse.search.list, m.styles)
+	applyListStyles(&m.browse.recentsList, m.styles)
 }

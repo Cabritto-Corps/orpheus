@@ -32,6 +32,7 @@ type API interface {
 	CurrentUser(ctx context.Context) (*spotifyapi.PrivateUser, error)
 	CurrentUsersAlbums(ctx context.Context, opts ...spotifyapi.RequestOption) (*spotifyapi.SavedAlbumPage, error)
 	GetQueue(ctx context.Context) (*spotifyapi.Queue, error)
+	Search(ctx context.Context, query string, t spotifyapi.SearchType, opts ...spotifyapi.RequestOption) (*spotifyapi.SearchResult, error)
 }
 
 const (
@@ -86,6 +87,7 @@ type QueueItem struct {
 	ID         string
 	Name       string
 	Artist     string
+	Album      string
 	DurationMS int
 	ImageURL   string
 	// Queued marks manual-queue entries; unset means a context track.
@@ -121,12 +123,36 @@ type PlaylistItemsPage struct {
 	HasMore    bool
 }
 
+type SearchResultItem struct {
+	ID         string
+	Name       string
+	URI        string
+	Kind       string
+	Owner      string
+	AlbumName  string
+	ImageURL   string
+	DurationMS int
+	TrackCount int
+	Genres     []string
+}
+
+type SearchPage struct {
+	Items      []SearchResultItem
+	Offset     int
+	Limit      int
+	NextOffset int
+	HasMore    bool
+}
+
 type PlaylistCatalog interface {
 	ListUserPlaylistsPage(ctx context.Context, offset, limit int) (*PlaylistPage, error)
 	ListSavedAlbumsPage(ctx context.Context, offset, limit int) (*PlaylistPage, error)
+	ListSavedTracksPage(ctx context.Context, offset, limit int) (*PlaylistItemsPage, error)
+	ListRecentlyPlayedTracks(ctx context.Context, limit int) ([]QueueItem, error)
 	ListPlaylistItemsPage(ctx context.Context, playlistID string, offset, limit int) (*PlaylistItemsPage, error)
 	ListAlbumTracksPage(ctx context.Context, albumID string, offset, limit int) (*PlaylistItemsPage, error)
 	ResolveContextImageURL(ctx context.Context, kind, id string) (string, error)
+	SearchPage(ctx context.Context, query string, offset, limit int) (*SearchPage, error)
 }
 
 const (

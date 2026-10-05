@@ -68,6 +68,10 @@ func (m model) mainView() string {
 
 func (m model) modalView(kind modalKind) string {
 	switch kind {
+	case modalClientIDSetup:
+		return m.clientIDSetupModalView()
+	case modalAuthLogin:
+		return m.authLoginModalView()
 	case modalHelp:
 		return m.helpModalView()
 	case modalTrackPopup:
@@ -86,10 +90,14 @@ func (m model) pageView() string {
 
 	var body string
 	switch m.ui.activeTab {
+	case tabRecents:
+		body = m.recentsTabView()
 	case tabPlaylists:
 		body = m.playlistsTabView()
 	case tabAlbums:
 		body = m.albumsTabView()
+	case tabSearch:
+		body = m.searchTabView()
 	default:
 		body = m.playbackScreenView()
 	}

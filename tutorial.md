@@ -13,7 +13,7 @@
 
 ![app information](assets/app_information.png)
 
-1. Then go into user management and add yourself as a user to the app (add your spotify account email)
+1. Then go into **User Management** and add yourself as a user to the app using the email address on your Spotify account. In Development Mode, only users listed here can authorize the app (up to 5 users).
 
 ![add user](assets/user_management.png)
 
@@ -27,8 +27,14 @@ SPOTIFY_CLIENT_ID=your_client_id_here
 
 1. Now run ```./orpheus auth login```, this will give a local link for authorization via the browser (using the client ID you just created)
 
-2. Now just run ```./orpheus``` and it will prompt you to auth again, this is because go-librespot uses another client_id, after that you should see orpheus actual screen
+2. Run `./orpheus`. The Web API login provides library access; playback uses go-librespot's separate Spotify sign-in and saves its own credentials. If playback authentication fails, library browsing may still be available, but playback will not work until that sign-in succeeds.
 
-3. Press `?` to see keybinds
+3. Press `?` to see keybinds, or `o` → Keybinds to change them. `ctrl+f` opens
+   Spotify Search (`ctrl+l` and `f3` are aliases); `/` filters the current library
+   list. In Search, type a query, use `↑` / `↓` to browse, and `enter` to play a
+   song without leaving the results. Switch to Player with `tab` when needed.
+
+   When testing source changes, run `make build` and restart `./orpheus`, not an
+   older installed binary.
 
 4. Enjoy the music!

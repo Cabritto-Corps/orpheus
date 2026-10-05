@@ -50,9 +50,8 @@ type overlayIntent struct {
 	revision uint64
 }
 
-// overlayState is the single displayed-image slot. At most one cover is
-// ever on screen, so one slot plus a monotonic ID counter is the whole
-// bookkeeping: no chunk caches, no string keys, no parallel counters.
+// overlayState owns the single large preview slot. List thumbnails have their
+// own placements but share nextID, so no two terminal images use the same ID.
 type overlayState struct {
 	shown   overlayIntent
 	shownID uint64
@@ -94,6 +93,9 @@ func (c *imgCache) commitOverlayIntent(intent overlayIntent) (emit bool, transmi
 	if c.overlay.visible {
 		displacedID = c.overlay.shownID
 	}
+	// A new subject supersedes an empty/modal hide; only an unchanged subject
+	// should consume pendingRestore and re-place the existing image.
+	c.overlay.pendingRestore = false
 	c.overlay.shown = intent
 	c.overlay.shownID = c.overlay.nextID
 	c.overlay.visible = true
@@ -101,20 +103,17 @@ func (c *imgCache) commitOverlayIntent(intent overlayIntent) (emit bool, transmi
 	return true, c.overlay.shownID, displacedID
 }
 
-// clearOverlayIntent forgets the displayed image and reports the ID to
-// delete. The remembered intent is kept: when content returns for the same
-// intent the commit path retransmits (the terminal holds nothing).
-// Repeated clears report 0 — deletion happens exactly once.
-func (c *imgCache) clearOverlayIntent() (deletedID uint64) {
+// hideOverlayForEmptyPreview removes the active placement but retains its
+// image data for an unchanged preview to restore. Repeat the delete each
+// empty frame so a missed terminal packet cannot leave ghost art behind.
+func (c *imgCache) hideOverlayForEmptyPreview() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.overlay.visible {
-		return 0
+	if !c.overlay.visible || c.overlay.shownID == 0 {
+		return ""
 	}
-	deletedID = c.overlay.shownID
-	c.overlay.visible = false
-	c.overlay.shownID = 0
-	return deletedID
+	c.overlay.pendingRestore = true
+	return deleteKittyImage(c.overlay.shownID)
 }
 
 // hideOverlayWhileModal drops the shown cover under an open modal with an

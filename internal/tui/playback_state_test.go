@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	golibrespot "github.com/elxgy/go-librespot"
 
@@ -554,6 +555,54 @@ func TestMergeStatusFromPreviousUsesQueueImageFallback(t *testing.T) {
 	merged = mergeStatusFromPrevious(nil, queue, withURL)
 	if merged.AlbumImageURL != "https://img/direct" {
 		t.Fatalf("expected direct URL to win over queue fallback, got %+v", merged)
+	}
+}
+
+func TestMergePlaybackImageFromRecentsLibrary(t *testing.T) {
+	status := &spotify.PlaybackStatus{TrackID: "new-track", TrackName: "New Track"}
+	tracks := []spotify.QueueItem{{ID: "new-track", ImageURL: "https://img/new-track"}}
+	got := mergePlaybackImageFromTracks(status, tracks)
+	if got.AlbumImageURL != tracks[0].ImageURL {
+		t.Fatalf("missing playback art was not filled from Recents: %+v", got)
+	}
+	if status.AlbumImageURL != "" {
+		t.Fatal("expected helper to leave its input status unchanged")
+	}
+
+	status.AlbumImageURL = "https://img/direct"
+	if got := mergePlaybackImageFromTracks(status, tracks); got.AlbumImageURL != status.AlbumImageURL {
+		t.Fatalf("direct playback art should take precedence, got %q", got.AlbumImageURL)
+	}
+}
+
+func TestPlaybackTrackChangeFollowsRecentsSelectionAndArt(t *testing.T) {
+	m := NewLoaderModel()
+	m.ui.width, m.ui.height = 120, 40
+	m.ui.activeTab = tabRecents
+	m.browse.librarySettled = true
+	m.transport.status = &spotify.PlaybackStatus{
+		TrackID: "old-track", TrackName: "Old Track", ArtistName: "Artist", AlbumImageURL: "old-cover", Playing: true,
+	}
+	m.browse.recentsTracks = []spotify.QueueItem{
+		{ID: "old-track", Name: "Old Track", Artist: "Artist", ImageURL: "old-cover"},
+		{ID: "new-track", Name: "New Track", Artist: "Artist", ImageURL: "new-cover", DurationMS: 120000},
+	}
+	m.browse.recentsList.SetItems([]list.Item{
+		trackItem{item: m.browse.recentsTracks[0]},
+		trackItem{item: m.browse.recentsTracks[1]},
+	})
+	m.browse.recentsList.Select(0)
+
+	next, _ := m.handlePlaybackStateMsg(playbackStateMsg{status: &spotify.PlaybackStatus{
+		TrackID: "new-track", TrackName: "New Track", ArtistName: "Artist", DurationMS: 120000, Playing: true,
+	}})
+	got := next.(model)
+	if got.transport.status.AlbumImageURL != "new-cover" {
+		t.Fatalf("expected current track art to use its loaded Recents image, got %q", got.transport.status.AlbumImageURL)
+	}
+	selected, ok := got.browse.recentsList.SelectedItem().(trackItem)
+	if !ok || recentIdentity(selected.item.ID) != "new-track" {
+		t.Fatalf("expected Recents preview to follow the current track, got %+v", got.browse.recentsList.SelectedItem())
 	}
 }
 

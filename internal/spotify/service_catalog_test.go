@@ -24,6 +24,47 @@ func httpJSONResponse(status int, body string) *http.Response {
 	}
 }
 
+func TestSavedTracksPreserveAllArtistsAndCover(t *testing.T) {
+	s := &Service{itemsHTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/v1/me/tracks" {
+			t.Fatalf("unexpected saved tracks endpoint: %s", req.URL.Path)
+		}
+		return httpJSONResponse(http.StatusOK, `{
+			"items": [{"track": {"id":"song", "name":"Saved song", "duration_ms":180000,
+				"artists":[{"name":"zTokyo"},{"name":"Guest Singer"}],
+				"album":{"images":[{"url":"cover-url", "width":640, "height":640}]}}}],
+			"next":null
+		}`), nil
+	})}}
+	page, err := s.ListSavedTracksPage(context.Background(), 0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.ItemInfos) != 1 || page.ItemInfos[0].Artist != "zTokyo, Guest Singer" || page.ItemInfos[0].ImageURL != "cover-url" {
+		t.Fatalf("saved song metadata lost: %#v", page)
+	}
+}
+
+func TestRecentlyPlayedTracksParseTrackMetadata(t *testing.T) {
+	s := &Service{itemsHTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/v1/me/player/recently-played" || req.URL.Query().Get("limit") != "50" {
+			t.Fatalf("unexpected recently played request: %s", req.URL.String())
+		}
+		return httpJSONResponse(http.StatusOK, `{
+			"items": [{"track": {"id":"recent", "name":"Recent song", "duration_ms":180000,
+				"artists":[{"name":"Artist One"},{"name":"Artist Two"}],
+				"album":{"name":"Recent album", "images":[{"url":"recent-cover", "width":640, "height":640}]}}}]
+		}`), nil
+	})}}
+	tracks, err := s.ListRecentlyPlayedTracks(context.Background(), 90)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tracks) != 1 || tracks[0].ID != "recent" || tracks[0].Artist != "Artist One, Artist Two" || tracks[0].Album != "Recent album" || tracks[0].ImageURL != "recent-cover" {
+		t.Fatalf("recent track metadata lost: %#v", tracks)
+	}
+}
+
 func TestListPlaylistItemsPageParsesItemAndTrack(t *testing.T) {
 	s := &Service{
 		itemsHTTPClient: &http.Client{
@@ -34,7 +75,7 @@ func TestListPlaylistItemsPageParsesItemAndTrack(t *testing.T) {
 				return httpJSONResponse(http.StatusOK, `{
 					"items":[
 						{"item":{"id":"item-1","name":"Song A","duration_ms":1000,"artists":[{"name":"Artist A"}]}},
-						{"track":{"id":"track-2","name":"Song B","duration_ms":2000,"artists":[{"name":"Artist B"}]}}
+						{"item":{"id":"track-2","name":"Song B","duration_ms":2000,"artists":[{"name":"Artist B"},{"name":"Guest Artist"}],"album":{"images":[{"url":"track-cover","width":640,"height":640}]}}}
 					],
 					"next":"https://api.spotify.com/v1/playlists/pl/items?offset=2&limit=2"
 				}`), nil
@@ -49,7 +90,7 @@ func TestListPlaylistItemsPageParsesItemAndTrack(t *testing.T) {
 	if len(page.ItemIDs) != 2 || page.ItemIDs[0] != "item-1" || page.ItemIDs[1] != "track-2" {
 		t.Fatalf("unexpected ids: %#v", page.ItemIDs)
 	}
-	if len(page.ItemInfos) != 2 || page.ItemInfos[1].Artist != "Artist B" {
+	if len(page.ItemInfos) != 2 || page.ItemInfos[1].Artist != "Artist B, Guest Artist" || page.ItemInfos[1].ImageURL != "track-cover" {
 		t.Fatalf("unexpected infos: %#v", page.ItemInfos)
 	}
 	if !page.HasMore {

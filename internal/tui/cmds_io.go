@@ -9,6 +9,7 @@ import (
 	_ "image/png"
 	"strings"
 	"sync"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -17,6 +18,19 @@ import (
 )
 
 const playlistAPIPageSize = 50
+
+func (m model) loadRecentsLibraryCmd() tea.Cmd {
+	catalog := m.resolveCatalog()
+	if catalog == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 3*time.Minute)
+		defer cancel()
+		recent, err := catalog.ListRecentlyPlayedTracks(ctx, 50)
+		return recentsLibraryMsg{recentTracks: recent, err: err}
+	}
+}
 
 func (m model) loadPlaylistsCmd() tea.Cmd {
 	catalog := m.resolveCatalog()
