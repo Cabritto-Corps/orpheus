@@ -152,16 +152,22 @@ func (m model) tabBarView() string {
 		label string
 		t     tab
 	}{
+		{"Songs", tabSongs},
 		{"Playlists", tabPlaylists},
 		{"Albums", tabAlbums},
+		{"Search", tabSearch},
 		{"Player", tabPlayer},
 	}
 	var parts []string
 	for _, entry := range tabs {
+		label := entry.label
+		if m.ui.width < 54 {
+			label = map[string]string{"Songs": "Song", "Playlists": "List", "Albums": "Alb", "Search": "Find", "Player": "Play"}[label]
+		}
 		if m.ui.activeTab == entry.t {
-			parts = append(parts, m.styles.styleTabActive.Render(" "+entry.label+" "))
+			parts = append(parts, m.styles.styleTabActive.Render(" "+label+" "))
 		} else {
-			parts = append(parts, m.styles.styleTabInactive.Render(" "+entry.label+" "))
+			parts = append(parts, m.styles.styleTabInactive.Render(" "+label+" "))
 		}
 	}
 	sep := m.styles.styleDivider.Render("\u2502")
@@ -364,6 +370,12 @@ func dumpKittyOverlay(out string) {
 // The bool marks content emissions: false (pure deletes) bypass delivery
 // suppression, true is guarded by kittyOverlayCmd.
 func (m model) kittyOverlayBytes() (string, bool) {
+	cover, coverContent := m.kittyCoverOverlayBytes()
+	thumbs, thumbContent := m.kittyThumbnailOverlayBytes()
+	return cover + thumbs, coverContent || thumbContent
+}
+
+func (m model) kittyCoverOverlayBytes() (string, bool) {
 	if m.ui.imgs == nil {
 		return "", false
 	}
@@ -372,7 +384,7 @@ func (m model) kittyOverlayBytes() (string, bool) {
 		if id := m.ui.imgs.takePendingKittyPurge(); id != 0 {
 			return deleteKittyImageData(id), false
 		}
-		return deleteKittyImage(m.ui.imgs.clearOverlayIntent()), false
+		return clearKittyPreview(m.ui.imgs), false
 	}
 	if m.ui.imgs.protocolForRender() != imageProtocolKitty {
 		// The switch resets the slot without naming the shown image;
@@ -395,12 +407,16 @@ func (m model) kittyOverlayBytes() (string, bool) {
 		if id := m.ui.imgs.takePendingKittyPurge(); id != 0 {
 			return deleteKittyImageData(id), false
 		}
-		return deleteKittyImage(m.ui.imgs.clearOverlayIntent()), false
+		return clearKittyPreview(m.ui.imgs), false
+	}
+	if m.ui.width < 64 && (m.ui.activeTab == tabSearch || m.ui.activeTab == tabSongs) {
+		// Narrow layouts contain only the list, not a large preview panel.
+		return clearKittyPreview(m.ui.imgs), false
 	}
 	layout := m.bodyLayout()
 	rect := m.coverArt(layout.coverCols, layout.coverRows)
 	if rect.empty() {
-		return deleteKittyImage(m.ui.imgs.clearOverlayIntent()), false
+		return clearKittyPreview(m.ui.imgs), false
 	}
 
 	var url, subjectID string
@@ -415,6 +431,16 @@ func (m model) kittyOverlayBytes() (string, bool) {
 			url = al.summary.ImageURL
 			subjectID = strings.TrimSpace(al.summary.ID)
 		}
+	case tabSearch:
+		if item, ok := m.browse.search.list.SelectedItem().(searchResultItem); ok {
+			url = item.result.ImageURL
+			subjectID = strings.TrimSpace(item.result.ID)
+		}
+	case tabSongs:
+		if item, ok := m.browse.songsList.SelectedItem().(trackItem); ok {
+			url = item.item.ImageURL
+			subjectID = strings.TrimSpace(item.item.ID)
+		}
 	case tabPlayer:
 		if m.transport.status != nil {
 			url = m.transport.status.AlbumImageURL
@@ -425,7 +451,7 @@ func (m model) kittyOverlayBytes() (string, bool) {
 		}
 	}
 	if url == "" {
-		return deleteKittyImage(m.ui.imgs.clearOverlayIntent()), false
+		return clearKittyPreview(m.ui.imgs), false
 	}
 
 	encoded := m.ui.imgs.encodedFor(url)
@@ -435,7 +461,7 @@ func (m model) kittyOverlayBytes() (string, bool) {
 		if m.ui.imgs.kittyShownTab() == m.ui.activeTab {
 			return "", false
 		}
-		return deleteKittyImage(m.ui.imgs.clearOverlayIntent()), false
+		return clearKittyPreview(m.ui.imgs), false
 	}
 
 	revision := uint64(0)
@@ -450,6 +476,15 @@ func (m model) kittyOverlayBytes() (string, bool) {
 		revision: revision,
 	}
 	return m.kittyTransmitNewCover(intent, rect, encoded)
+}
+
+// Empty previews keep the cached image available for a fast restore, but
+// repeatedly erase its placement so stale art cannot linger over placeholders.
+func clearKittyPreview(imgs *imgCache) string {
+	if imgs == nil {
+		return ""
+	}
+	return imgs.hideOverlayForEmptyPreview()
 }
 
 // A pre-transmit pending purge rides along front: no stranded image

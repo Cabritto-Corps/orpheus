@@ -90,10 +90,14 @@ func (m model) pageView() string {
 
 	var body string
 	switch m.ui.activeTab {
+	case tabSongs:
+		body = m.songsTabView()
 	case tabPlaylists:
 		body = m.playlistsTabView()
 	case tabAlbums:
 		body = m.albumsTabView()
+	case tabSearch:
+		body = m.searchTabView()
 	default:
 		body = m.playbackScreenView()
 	}

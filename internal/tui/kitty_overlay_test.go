@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/list"
+
 	"orpheus/internal/spotify"
 )
 
@@ -69,6 +71,44 @@ func TestKittyOverlayFramedPlacementMatchesPanelAnchor(t *testing.T) {
 	}
 	if want := fmt.Sprintf("c=%d,r=%d", rect.cols, rect.rows); !strings.Contains(out, want) {
 		t.Fatalf("expected display extents %q, got %q", want, out)
+	}
+}
+
+func TestKittyPreviewIsPurgedWhenSwitchingToTabsWithoutSelection(t *testing.T) {
+	t.Setenv("TMUX", "")
+	m := NewLoaderModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.ui.activeTab = tabSongs
+	m.browse.librarySettled = true
+	m.ui.imgs.protocol = imageProtocolKitty
+	m.ui.imgs.encoded["song-cover"] = "c29uZw=="
+	m.browse.songsList.SetItems([]list.Item{trackItem{item: spotify.QueueItem{ID: "song", Name: "Song", ImageURL: "song-cover"}}})
+	first := m.kittyOverlay()
+	if !strings.Contains(first, "a=T") {
+		t.Fatal("expected Songs preview placement")
+	}
+	shownID := m.ui.imgs.overlay.shownID
+
+	for _, nextTab := range []tab{tabAlbums, tabSearch} {
+		if m.ui.activeTab != tabSongs {
+			m.ui.activeTab = tabSongs
+			if restored := m.kittyOverlay(); !strings.Contains(restored, "a=p") {
+				t.Fatalf("expected Songs preview to return before switching to %s: %q", nextTab, restored)
+			}
+			shownID = m.ui.imgs.overlay.shownID
+		}
+		m.ui.activeTab = nextTab
+		if nextTab == tabAlbums {
+			m.browse.albumList.SetItems(nil)
+		}
+		hide := m.kittyOverlay()
+		if !strings.Contains(hide, fmt.Sprintf("a=d,d=i,i=%d", shownID)) {
+			t.Fatalf("switch to empty %s tab did not hide the old preview: %q", nextTab, hide)
+		}
+		if again := m.kittyOverlay(); !strings.Contains(again, "a=d,d=i") {
+			t.Fatalf("empty %s tab stopped self-healing the hidden preview: %q", nextTab, again)
+		}
 	}
 }
 

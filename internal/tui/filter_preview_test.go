@@ -223,7 +223,7 @@ func TestFilterCancelRestoresSelectionAndArt(t *testing.T) {
 	}
 }
 
-func TestFilterAcceptKeepsFilteredSelection(t *testing.T) {
+func TestFilterEnterSelectsFilteredPlaylistImmediately(t *testing.T) {
 	m := filterChurnModel(t, imageProtocolKitty)
 	next, _ := m.Update(pressRune('/'))
 	m = next.(model)
@@ -236,8 +236,8 @@ func TestFilterAcceptKeepsFilteredSelection(t *testing.T) {
 	m.browse.playlistList = l
 	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(model)
-	if m.browse.playlistList.FilterState() != list.FilterApplied {
-		t.Fatal("expected FilterApplied after accept")
+	if m.ui.activeTab != tabPlayer {
+		t.Fatal("Enter should play the filtered playlist without requiring a second Enter")
 	}
 	if got := m.browse.playlistList.GlobalIndex(); got != 3 {
 		t.Fatalf("accept must keep the filtered selection (beta one), got index %d", got)

@@ -69,6 +69,11 @@ func guardModel(tb testing.TB, v frameVariant) model {
 	}
 	m.browse.playlistList.SetItems(items)
 	m.browse.albumList.SetItems(items[:20])
+	songs := make([]list.Item, 10)
+	for i := range songs {
+		songs[i] = trackItem{item: spotify.QueueItem{Name: fmt.Sprintf("Saved song %d", i), Artist: "Saved artist", DurationMS: 180000}}
+	}
+	m.browse.songsList.SetItems(songs)
 	if v.erroring {
 		m.browse.playlistsErr = fmt.Errorf("429 too many requests")
 		m.transport.playbackErr = fmt.Errorf("playback unavailable")
@@ -144,7 +149,7 @@ func assertFrameContract(t *testing.T, name string, frame string, w, h int) {
 func TestViewFrameContract(t *testing.T) {
 	sizes := [][2]int{{40, 12}, {50, 16}, {60, 20}, {80, 24}, {120, 40}}
 	for _, size := range sizes {
-		for _, tb := range []tab{tabPlaylists, tabAlbums, tabPlayer} {
+		for _, tb := range []tab{tabSongs, tabPlaylists, tabAlbums, tabSearch, tabPlayer} {
 			for _, playing := range []bool{true, false} {
 				for _, variant := range []frameVariant{
 					{name: "plain", hasQueue: true},
@@ -164,7 +169,7 @@ func TestViewFrameContractAllThemes(t *testing.T) {
 	sizes := [][2]int{{40, 12}, {120, 40}}
 	for _, themeName := range themeRegistryNames() {
 		for _, size := range sizes {
-			for _, tb := range []tab{tabPlaylists, tabAlbums, tabPlayer} {
+			for _, tb := range []tab{tabSongs, tabPlaylists, tabAlbums, tabSearch, tabPlayer} {
 				variant := frameVariant{name: themeName, width: size[0], height: size[1], tab: tb, hasQueue: true}
 				m := guardModel(t, variant)
 				// Retheme the lists too, so delegate rows (not just chrome)
@@ -182,7 +187,7 @@ func TestViewFrameContractBackgroundModes(t *testing.T) {
 	sizes := [][2]int{{60, 20}, {120, 40}}
 	for _, style := range backgroundStyleChoices {
 		for _, size := range sizes {
-			for _, tb := range []tab{tabPlaylists, tabAlbums, tabPlayer} {
+			for _, tb := range []tab{tabSongs, tabPlaylists, tabAlbums, tabSearch, tabPlayer} {
 				variant := frameVariant{name: "bg-" + style, width: size[0], height: size[1], tab: tb, hasQueue: true}
 				m := guardModel(t, variant)
 				st := themePresetState("default")
@@ -248,8 +253,8 @@ func TestKittyOverlaySilentBelowFrameThreshold(t *testing.T) {
 			t.Fatalf("expected no placement %q below the frame threshold, got %q", want, small)
 		}
 	}
-	if m.ui.imgs.overlay.visible {
-		t.Fatal("expected the overlay slot cleared below the frame threshold")
+	if !m.ui.imgs.overlay.pendingRestore {
+		t.Fatal("expected the hidden overlay placement to be marked for restoration")
 	}
 }
 
@@ -275,10 +280,14 @@ func TestModalHeaderNeverOverflows(t *testing.T) {
 
 func tabName(t tab) string {
 	switch t {
+	case tabSongs:
+		return "songs"
 	case tabPlaylists:
 		return "playlists"
 	case tabAlbums:
 		return "albums"
+	case tabSearch:
+		return "search"
 	default:
 		return "player"
 	}

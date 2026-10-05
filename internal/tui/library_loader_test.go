@@ -13,8 +13,12 @@ import (
 )
 
 type fakeCatalog struct {
-	playlists func(offset, limit int) (*spotify.PlaylistPage, error)
-	albums    func(offset, limit int) (*spotify.PlaylistPage, error)
+	playlists     func(offset, limit int) (*spotify.PlaylistPage, error)
+	albums        func(offset, limit int) (*spotify.PlaylistPage, error)
+	songs         func(offset, limit int) (*spotify.PlaylistItemsPage, error)
+	playlistItems func(id string, offset, limit int) (*spotify.PlaylistItemsPage, error)
+	albumItems    func(id string, offset, limit int) (*spotify.PlaylistItemsPage, error)
+	recent        func(limit int) ([]spotify.QueueItem, error)
 }
 
 func (f fakeCatalog) ListUserPlaylistsPage(_ context.Context, offset, limit int) (*spotify.PlaylistPage, error) {
@@ -25,16 +29,74 @@ func (f fakeCatalog) ListSavedAlbumsPage(_ context.Context, offset, limit int) (
 	return f.albums(offset, limit)
 }
 
-func (f fakeCatalog) ListPlaylistItemsPage(_ context.Context, _ string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
+func (f fakeCatalog) ListSavedTracksPage(_ context.Context, offset, limit int) (*spotify.PlaylistItemsPage, error) {
+	if f.songs != nil {
+		return f.songs(offset, limit)
+	}
 	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 }
 
-func (f fakeCatalog) ListAlbumTracksPage(_ context.Context, _ string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
+func (f fakeCatalog) ListRecentlyPlayedTracks(_ context.Context, limit int) ([]spotify.QueueItem, error) {
+	if f.recent != nil {
+		return f.recent(limit)
+	}
+	return nil, nil
+}
+
+func TestSavedTracksPopulateSongsTab(t *testing.T) {
+	catalog := fakeCatalog{
+		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset}, nil
+		},
+		albums: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset}, nil
+		},
+		songs: func(offset, limit int) (*spotify.PlaylistItemsPage, error) {
+			return &spotify.PlaylistItemsPage{
+				Offset: offset, Limit: limit, NextOffset: 1,
+				ItemInfos: []spotify.QueueItem{{ID: "saved-id", Name: "Saved Song", Artist: "Artist", ImageURL: "saved-art"}},
+			}, nil
+		},
+	}
+	m := newModel(context.Background(), catalog, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
+	msg := m.loadPlaylistsCmd()().(playlistsMsg)
+	next, _ := m.handlePlaylistsMsg(msg)
+	got := next.(model)
+	if len(got.browse.songsList.Items()) != 1 || got.browse.songsList.Items()[0].(trackItem).item.ID != "saved-id" {
+		t.Fatalf("saved songs were not loaded into Songs: %#v", got.browse.songsList.Items())
+	}
+	if image := got.browse.songsList.Items()[0].(trackItem).item.ImageURL; image != "saved-art" {
+		t.Fatalf("saved song art was lost: %q", image)
+	}
+	if len(got.browse.playlistList.Items()) == 0 {
+		t.Fatal("Liked Songs disappeared from Playlists")
+	}
+	liked, ok := got.browse.playlistList.Items()[0].(playlistItem)
+	if !ok || liked.summary.Kind != spotify.ContextKindLikedSongs {
+		t.Fatalf("first playlist item is not Liked Songs: %#v", got.browse.playlistList.Items()[0])
+	}
+}
+
+func (f fakeCatalog) ListPlaylistItemsPage(_ context.Context, id string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
+	if f.playlistItems != nil {
+		return f.playlistItems(id, offset, limit)
+	}
+	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+}
+
+func (f fakeCatalog) ListAlbumTracksPage(_ context.Context, id string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
+	if f.albumItems != nil {
+		return f.albumItems(id, offset, limit)
+	}
 	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 }
 
 func (f fakeCatalog) ResolveContextImageURL(_ context.Context, _ string, _ string) (string, error) {
 	return "", nil
+}
+
+func (f fakeCatalog) SearchPage(_ context.Context, _ string, offset, limit int) (*spotify.SearchPage, error) {
+	return &spotify.SearchPage{Offset: offset, Limit: limit, NextOffset: offset + limit}, nil
 }
 
 func TestInitBootstrapsLibraryLoad(t *testing.T) {

@@ -18,8 +18,15 @@ const (
 
 type playlistsMsg struct {
 	items           []spotify.PlaylistSummary
+	savedTracks     []spotify.QueueItem
 	albumsForbidden bool
 	err             error
+}
+
+type songsLibraryMsg struct {
+	recentTracks     []spotify.QueueItem
+	collectionTracks []spotify.QueueItem
+	err              error
 }
 
 type imageLoadedMsg struct {
@@ -56,6 +63,19 @@ type tickMsg time.Time
 
 type navDebounceMsg struct {
 	token int
+}
+
+type searchDebounceMsg struct {
+	token int
+	query string
+}
+
+type searchResultsMsg struct {
+	token  int
+	query  string
+	offset int
+	page   *spotify.SearchPage
+	err    error
 }
 
 type playbackStateMsg struct {
@@ -167,6 +187,27 @@ func (m model) navDebounceCmd(token int) tea.Cmd {
 	return tea.Tick(navDebounceInterval, func(time.Time) tea.Msg {
 		return navDebounceMsg{token: token}
 	})
+}
+
+func (m model) searchDebounceCmd(token int, query string) tea.Cmd {
+	return tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg {
+		return searchDebounceMsg{token: token, query: query}
+	})
+}
+
+func (m model) searchCmd(token int, query string, offset int) tea.Cmd {
+	catalog := m.resolveCatalog()
+	if catalog == nil {
+		return func() tea.Msg {
+			return searchResultsMsg{token: token, query: query, offset: offset, err: errors.New("spotify catalog is not ready")}
+		}
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, catalogRequestTimeout)
+		defer cancel()
+		page, err := catalog.SearchPage(ctx, query, offset, 10)
+		return searchResultsMsg{token: token, query: query, offset: offset, page: page, err: err}
+	}
 }
 
 func (m model) imageRetryCmd(url string, attempt int, token int) tea.Cmd {

@@ -63,12 +63,13 @@ On Linux, missing ALSA/FLAC/Ogg/Vorbis libraries are detected with `ldd` and the
 | Repeat | cycle repeat: off → context → track | `l` |
 | Spotify Connect | the player shows up in Spotify's device picker, control it from your phone too | — |
 | **Library** | | |
-| Tabs | playlists, albums and the player screen | `tab` |
-| Liked songs | your saved tracks as a built-in playlist | — |
+| Tabs | songs, playlists, albums, Search and Player | `tab` |
+| Songs | up to 100 tracks: current, recent, saved, then playlist/album tracks; duplicates removed | — |
 | Track popup | open every track of a playlist / album | `space` on a row |
-| Search filter | filter the list as you type | `/` |
+| Search filter | filter the current list as you type; Songs matches title and artists | `/` |
+| Spotify Search | open the Search tab for tracks, albums and artists | `ctrl+f` (also `ctrl+l` / `f3`) |
 | Select / play | enter a playlist or play the selection | `enter` |
-| Refresh library | reload playlists / albums | `r` |
+| Refresh library | reload songs, playlists and albums | `r` |
 | **Queue** | | |
 | Queue panel | upcoming tracks with index, artist and duration | `↑` / `↓` to browse |
 | Play from queue | start any row | `enter` |
@@ -89,6 +90,12 @@ On Linux, missing ALSA/FLAC/Ogg/Vorbis libraries are detected with `ldd` and the
 
 Every keybind can be changed in settings (`o` → Keybinds).
 
+In Search, results update as you type. Use `↑` / `↓` to browse and `enter` to play.
+Playing a song in Search or Songs keeps the list open so you can choose another; albums and artists
+open Player. `tab` switches tabs, and `/` focuses the search field again after `esc`.
+Search and Songs thumbnails use full-resolution graphics on Kitty-compatible
+terminals when Images is set to `rendered`; other terminals use pixelated ANSI art.
+
 ### Build and run locally
 
 To work on the source instead of installing a release, install Go 1.26 or newer and the audio development libraries, then build from a clone:
@@ -98,6 +105,9 @@ git clone https://github.com/Cabritto-Corps/orpheus.git
 cd orpheus
 make build
 ```
+
+After changing the source, rebuild and restart **`./orpheus`**. Running an older
+installed `orpheus` from your PATH will not include the changes in your checkout.
 
 Follow the [initial setup tutorial](tutorial.md) to create a Spotify app and set `SPOTIFY_CLIENT_ID` (Spotify Premium is required). Then run `./orpheus auth login` and `./orpheus`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the platform-specific build dependencies, tests, and pull request workflow.
 

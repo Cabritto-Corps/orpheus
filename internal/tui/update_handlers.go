@@ -26,6 +26,14 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 	m.browse.playlistList.SetSize(listInnerW, listInnerH)
 	m.browse.albumList.SetSize(listInnerW, listInnerH)
+	m.browse.songsList.SetSize(listInnerW, listInnerH)
+	m.browse.search.list.SetSize(listInnerW, listInnerH-2)
+	m.browse.search.input.SetWidth(max(10, listInnerW-18))
+	if m.ui.width < 64 {
+		m.browse.songsList.SetSize(max(1, m.ui.width-1), max(1, listInnerH))
+		m.browse.search.list.SetSize(max(1, m.ui.width-1), max(1, listInnerH-2))
+		m.browse.search.input.SetWidth(max(1, m.ui.width-18))
+	}
 	m.normalizeLibraryPagination()
 
 	if m.ui.helpOpen {
@@ -41,6 +49,7 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 	return m, tea.Batch(
 		m.loadVisiblePlaylistCoversCmd(),
+		m.loadSelectedSearchCoverCmd(),
 		m.kittyOverlayCmd(),
 	)
 }
@@ -187,7 +196,6 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 		ImageURL: likedSongsImageURL,
 	}})
 	alItems := make([]list.Item, 0, len(msg.items))
-
 	seenPl := make(map[string]struct{}, len(plItems))
 	for _, item := range plItems {
 		pl, ok := item.(playlistItem)
@@ -251,6 +259,9 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 			m.browse.albumList.Select(idx)
 		}
 	}
+	if m.browse.songsList.FilterState() == list.Unfiltered {
+		m.browse.songsSavedTracks = mergeSongTracks(msg.savedTracks)
+	}
 	playlistPreviewURL := selectedImageURLFromList(m.browse.playlistList)
 	if playlistPreviewURL == "" && len(plItems) > 0 {
 		if first, ok := plItems[0].(playlistItem); ok {
@@ -265,12 +276,27 @@ func (m model) handlePlaylistsMsg(msg playlistsMsg) (tea.Model, tea.Cmd) {
 	}
 
 	slog.Info("library items loaded", "playlists", len(plItems), "albums", len(alItems), "missing_image_urls", missingImageURLs)
+	songsCmd := m.loadSongsLibraryCmd(msg.items)
+	m.browse.songsLoading = songsCmd != nil
+	refreshCmd := m.refreshSongsList()
 	return m, tea.Batch(
+		refreshCmd,
+		songsCmd,
 		m.loadImageCmd(playlistPreviewURL, true),
 		m.loadImageCmd(albumPreviewURL, true),
+		m.loadVisiblePlaylistCoversCmd(),
 		m.loadLibraryCoversCmd(len(plItems)+len(alItems)),
 		m.queueMissingLibraryImageResolvesCmd(missingImageURLs),
 	)
+}
+
+func (m model) handleSongsLibraryMsg(msg songsLibraryMsg) (tea.Model, tea.Cmd) {
+	m.browse.songsLoading = false
+	m.browse.songsLoadErr = msg.err
+	m.browse.songsRecentTracks = mergeSongTracks(msg.recentTracks)
+	m.browse.songsCollectionTracks = mergeSongTracks(msg.collectionTracks)
+	cmd := m.refreshSongsList()
+	return m, tea.Batch(cmd, m.loadVisiblePlaylistCoversCmd(), m.loadImageCmd(selectedSongImageURL(m.browse.songsList), true))
 }
 
 func (m model) handleNavDebounceMsg(msg navDebounceMsg) (tea.Model, tea.Cmd) {
@@ -280,10 +306,21 @@ func (m model) handleNavDebounceMsg(msg navDebounceMsg) (tea.Model, tea.Cmd) {
 	if m.ui.activeTab == tabPlayer {
 		return m, nil
 	}
+	if m.ui.activeTab == tabSearch {
+		m, more := m.loadMoreSearchIfNeeded()
+		return m, tea.Batch(more, m.loadSelectedSearchCoverCmd(), m.drainCoverQueueCmd(coverQueueDrainBatch))
+	}
 	return m, tea.Batch(
 		m.loadVisiblePlaylistCoversCmd(),
 		m.drainCoverQueueCmd(coverQueueDrainBatch),
 	)
+}
+
+func (m model) loadSelectedSearchCoverCmd() tea.Cmd {
+	if m.ui.activeTab != tabSearch {
+		return nil
+	}
+	return m.loadImageCmd(selectedSearchImageURL(m.browse.search.list), true)
 }
 
 func (m model) handleImageLoadedMsg(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
@@ -444,6 +481,8 @@ func (m model) handleFilterMatchesMsg(msg list.FilterMatchesMsg) (tea.Model, tea
 		return m, cmd
 	}
 	switch m.ui.activeTab {
+	case tabSongs:
+		m.browse.songsList, cmd = m.browse.songsList.Update(msg)
 	case tabPlaylists:
 		m.browse.playlistList, cmd = m.browse.playlistList.Update(msg)
 	case tabAlbums:

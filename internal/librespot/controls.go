@@ -22,6 +22,8 @@ import (
 	"orpheus/internal/playbackdomain"
 )
 
+const autoplayResolveRetryDelay = 500 * time.Millisecond
+
 // prefetchFanOutMax bounds streams warmed per pass: warming the whole cache hammers
 // spclient for tracks the user likely never reaches; the next few cover skips.
 const prefetchFanOutMax = 3
@@ -626,8 +628,10 @@ func (p *AppPlayer) handleUnexpectedStop(failedSource golibrespot.AudioSource) {
 		p.emitPlaybackStateLight()
 		p.runtime.EmitPlaybackState(&PlaybackStateUpdate{Error: "playback stopped — press play to retry"})
 	case stopActionReload:
+		p.emitTransportStoppedSnapshot()
 		p.reloadAfterOutputFailure(uri)
 	case stopActionAdvance:
+		p.emitTransportStoppedSnapshot()
 		p.advanceAfterOutputFailure()
 	case stopActionGiveUp:
 		p.runtime.Log.WithField("uri", uri).Error("giving up output-error recovery after repeated failures")
@@ -640,6 +644,13 @@ func (p *AppPlayer) handleUnexpectedStop(failedSource golibrespot.AudioSource) {
 	default:
 		p.emitPlaybackStateLight()
 	}
+}
+
+// Publish an idle snapshot before recovery performs slow stream/network work.
+func (p *AppPlayer) emitTransportStoppedSnapshot() {
+	p.setPlayerPositionAtNow(p.currentPositionMs())
+	p.setPlayerTransportState(false, false, false)
+	p.emitPlaybackStateLight()
 }
 
 // Rebuilds once; failure falls through to the advance path instead of looping.
@@ -701,6 +712,45 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 	if err != nil {
 		return fmt.Errorf("failed creating track list: %w", err)
 	}
+	return p.commitLoadedContext(ctx, spotCtx, ctxTracks, skipTo, paused, drop, true, true)
+}
+
+// loadAutoplayContext deliberately starts from the station's first available
+// page. Spotify station page URLs can return 404 beyond that page; the normal
+// context seek eagerly loads every page and then clears the track list on error.
+func (p *AppPlayer) loadAutoplayContext(ctx context.Context, spotCtx *connectpb.Context, drop bool) error {
+	p.resetStopRecoveryGuard()
+	p.clearDeadTracks()
+	ctxTracks, err := tracks.NewTrackListFromContext(ctx, p.runtime.Log, p.sess.Spclient(), spotCtx, 0)
+	if err != nil {
+		return fmt.Errorf("failed creating autoplay track list: %w", err)
+	}
+	if !ctxTracks.GoNext(ctx) {
+		return fmt.Errorf("autoplay station %s has no tracks on its first page", spotCtx.Uri)
+	}
+	// Shuffling a station also forces a full-page scan, which is unsupported for
+	// the ephemeral radio-router station URLs. Keep the first-page order instead.
+	if p.state.player.Options == nil {
+		p.state.player.Options = &connectpb.ContextPlayerOptions{}
+	}
+	p.state.player.Options.ShufflingContext = false
+	return p.commitLoadedContext(ctx, spotCtx, ctxTracks, nil, false, drop, false, false)
+}
+
+func (p *AppPlayer) commitLoadedContext(
+	ctx context.Context,
+	spotCtx *connectpb.Context,
+	ctxTracks *tracks.List,
+	skipTo skipToFunc,
+	paused, drop, loadAllTracks, prepareTrackList bool,
+) error {
+	previousContextURI := strings.TrimSpace(p.state.player.ContextUri)
+	newContextURI := strings.TrimSpace(spotCtx.Uri)
+	if newContextURI != "" && !strings.HasPrefix(newContextURI, "spotify:station:") {
+		p.autoplaySourceContextURI = newContextURI
+	} else if p.autoplaySourceContextURI == "" && previousContextURI != "" && !strings.HasPrefix(previousContextURI, "spotify:station:") {
+		p.autoplaySourceContextURI = previousContextURI
+	}
 	golibrespot.SetPaused(p.state.player, paused)
 	sessionId := make([]byte, 16)
 	if _, err := rand.Read(sessionId); err != nil {
@@ -728,26 +778,28 @@ func (p *AppPlayer) loadContext(ctx context.Context, spotCtx *connectpb.Context,
 	maps.Copy(p.state.player.ContextMetadata, spotCtx.Metadata)
 	p.state.player.Timestamp = time.Now().UnixMilli()
 	p.state.player.PositionAsOfTimestamp = 0
-	if skipTo == nil {
-		if err := ctxTracks.TrySeek(ctx, func(_ *connectpb.ContextTrack) bool { return true }); err != nil {
+	if prepareTrackList {
+		if skipTo == nil {
+			if err := ctxTracks.TrySeek(ctx, func(_ *connectpb.ContextTrack) bool { return true }); err != nil {
+				return fmt.Errorf("failed seeking to track: %w", err)
+			}
+		} else if err := ctxTracks.TrySeek(ctx, skipTo); err != nil {
 			return fmt.Errorf("failed seeking to track: %w", err)
 		}
 		if err := ctxTracks.ToggleShuffle(ctx, p.state.player.Options.ShufflingContext); err != nil {
-			return fmt.Errorf("failed shuffling context")
-		}
-	} else {
-		if err := ctxTracks.TrySeek(ctx, skipTo); err != nil {
-			return fmt.Errorf("failed seeking to track: %w", err)
-		}
-		if err := ctxTracks.ToggleShuffle(ctx, p.state.player.Options.ShufflingContext); err != nil {
-			return fmt.Errorf("failed shuffling context")
+			return fmt.Errorf("failed shuffling context: %w", err)
 		}
 	}
 	p.state.tracks = ctxTracks
 	p.resetQueueMetaForContext()
 	p.resetPlaybackCaches(true)
 	p.syncPlayerTrackState(ctxTracks, nil)
-	allTracks := ctxTracks.AllTracks(ctx)
+	var allTracks []*connectpb.ProvidedTrack
+	if loadAllTracks {
+		allTracks = ctxTracks.AllTracks(ctx)
+		// Refresh Connect's queue after all pages are loaded.
+		p.syncPlayerTrackState(ctxTracks, nil)
+	}
 	// Head cover URLs are computed on Run (tracks.List is single-goroutine);
 	// the batch itself runs off it.
 	headURIs := headImageURIs(ctxTracks.UpcomingTracksLoaded(headImageWindow), p.queueHeadImageMissing, headImageWindow)
@@ -1258,8 +1310,13 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 		uri = p.state.player.Track.Uri
 	}
 	hasNextTrack := selection.hasNextTrack
-	if !hasNextTrack && !p.runtime.Cfg.DisableAutoplay && !strings.HasPrefix(p.state.player.ContextUri, "spotify:station:") {
+	if !hasNextTrack && !p.runtime.Cfg.DisableAutoplay {
+		// Autoplay resolution can take several seconds. Publish the ended
+		// transport before doing network work so the client does not keep
+		// animating the previous track as if it were still audible.
+		p.emitTransportStoppedSnapshot()
 		p.state.player.Suppressions = &connectpb.Suppressions{}
+		autoplayContext := autoplayContextURI(p.state.player.ContextUri, p.autoplaySourceContextURI)
 		var prevTrackUris []string
 		if p.state.tracks != nil {
 			for _, track := range p.state.tracks.AllTracks(ctx) {
@@ -1270,15 +1327,17 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 			p.runtime.Log.Warnf("cannot resolve autoplay station because there are no previous tracks in context %s", p.state.player.ContextUri)
 			return false, nil
 		}
-		spotCtx, err := p.sess.Spclient().ContextResolveAutoplay(ctx, &playerpb.AutoplayContextRequest{
-			ContextUri:     new(p.state.player.ContextUri),
-			RecentTrackUri: prevTrackUris,
-		})
+		spotCtx, err := resolveAutoplayContextWithRetry(ctx, func(resolveCtx context.Context) (*connectpb.Context, error) {
+			return p.sess.Spclient().ContextResolveAutoplay(resolveCtx, &playerpb.AutoplayContextRequest{
+				ContextUri:     new(autoplayContext),
+				RecentTrackUri: prevTrackUris,
+			})
+		}, waitAutoplayResolveRetry)
 		if err != nil {
-			p.runtime.Log.WithError(err).Warnf("failed resolving station for %s", p.state.player.ContextUri)
+			p.runtime.Log.WithError(err).Warnf("failed resolving station for %s", autoplayContext)
 			return false, nil
 		}
-		if err := p.loadContext(ctx, spotCtx, func(_ *connectpb.ContextTrack) bool { return true }, false, drop); err != nil {
+		if err := p.loadAutoplayContext(ctx, spotCtx, drop); err != nil {
 			p.runtime.Log.WithError(err).Warnf("failed loading station for %s", p.state.player.ContextUri)
 			return false, nil
 		}
@@ -1326,6 +1385,49 @@ func (p *AppPlayer) advanceNext(ctx context.Context, forceNext, drop bool) (bool
 		}
 		return hasNextTrack, nil
 	}
+}
+
+func resolveAutoplayContextWithRetry(
+	ctx context.Context,
+	resolve func(context.Context) (*connectpb.Context, error),
+	wait func(context.Context, time.Duration) error,
+) (*connectpb.Context, error) {
+	for attempt := 1; ; attempt++ {
+		spotCtx, err := resolve(ctx)
+		if err == nil && spotCtx != nil && strings.TrimSpace(spotCtx.Uri) != "" {
+			return spotCtx, nil
+		}
+		if err == nil {
+			err = errors.New("Spotify returned an empty autoplay context URI")
+		}
+		delay := time.Duration(min(attempt, 6)) * autoplayResolveRetryDelay
+		if waitErr := wait(ctx, delay); waitErr != nil {
+			if err != nil {
+				return nil, errors.Join(err, waitErr)
+			}
+			return nil, waitErr
+		}
+	}
+}
+
+func waitAutoplayResolveRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func autoplayContextURI(current, source string) string {
+	current = strings.TrimSpace(current)
+	source = strings.TrimSpace(source)
+	if strings.HasPrefix(current, "spotify:station:") && source != "" {
+		return source
+	}
+	return current
 }
 
 // Shared dead/unplayable skip step; leaves the attempt counter untouched.

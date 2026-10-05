@@ -8,6 +8,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 
 	"orpheus/internal/config"
@@ -92,9 +93,30 @@ type browseModel struct {
 	filterSavedIdx   int
 	// librarySettled: first library load resolved, success or failure.
 	// Refreshes must never re-blank the panels.
-	librarySettled bool
-	playlistList   list.Model
-	albumList      list.Model
+	librarySettled           bool
+	playlistList             list.Model
+	albumList                list.Model
+	songsList                list.Model
+	songsTracks              []spotify.QueueItem
+	songsSelectionTouched    bool
+	songsSavedTracks         []spotify.QueueItem
+	songsRecentTracks        []spotify.QueueItem
+	songsSessionRecentTracks []spotify.QueueItem
+	songsCollectionTracks    []spotify.QueueItem
+	songsLoading             bool
+	songsLoadErr             error
+	search                   searchModel
+}
+
+type searchModel struct {
+	input     textinput.Model
+	list      list.Model
+	query     string
+	requestID int
+	offset    int
+	hasMore   bool
+	loading   bool
+	err       error
 }
 
 type uiModel struct {

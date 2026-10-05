@@ -93,6 +93,9 @@ type PlaylistItemWire struct {
 	Artists    []struct {
 		Name string `json:"name"`
 	} `json:"artists"`
+	Album struct {
+		Images []PlaylistImage `json:"images"`
+	} `json:"album"`
 }
 
 type PlaylistEntryWire struct {

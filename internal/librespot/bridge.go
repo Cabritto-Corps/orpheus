@@ -17,6 +17,7 @@ const (
 	TUICommandQueueRemove
 	TUICommandQueueReorder
 	TUICommandQueueJump
+	TUICommandPlayTrack
 )
 
 // Queue commands address entries by VISIBLE position (up-next view, current

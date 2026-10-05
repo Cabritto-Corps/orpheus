@@ -51,6 +51,7 @@ type imgCache struct {
 	protocol         imageProtocol
 	protocolExplicit bool
 	overlay          overlayState
+	thumbnails       map[int]thumbnailPlacement
 	coverKeysByURL   map[string]map[coverKey]struct{}
 	pinned           map[string]struct{}
 }

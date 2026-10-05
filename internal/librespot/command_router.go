@@ -3,6 +3,7 @@ package librespot
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	golibrespot "github.com/elxgy/go-librespot"
 	"github.com/elxgy/go-librespot/player"
@@ -28,6 +29,25 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 		}
 		return true, p.loadContext(ctx, spotCtx, nil, false, true)
 	case TUICommandPlayContextFromTrack:
+		targetID := golibrespot.NormalizeSpotifyId(cmd.TrackID)
+		if targetID == "" {
+			return false, fmt.Errorf("empty track ID for play-from-track")
+		}
+		// Autoplay stations may not be resolvable again as ordinary contexts.
+		// Their selected upcoming tracks are already in the active TrackList,
+		// so seek that list directly before trying a Web API context resolve.
+		if p.seekCurrentContextTrack(ctx, cmd.URI, targetID) {
+			p.state.setActive(true)
+			golibrespot.SetPaused(p.state.player, false)
+			p.state.player.Suppressions = &connectpb.Suppressions{}
+			p.state.player.PlayOrigin = &connectpb.PlayOrigin{
+				FeatureIdentifier: "go-librespot",
+				FeatureVersion:    golibrespot.VersionNumberString(),
+			}
+			p.bumpPrefetchGeneration()
+			p.syncPlayerTrackState(p.state.tracks, nil)
+			return true, p.loadCurrentTrackFromTransition(ctx, false, true, "play loaded context track")
+		}
 		spotCtx, err := p.sess.Spclient().ContextResolve(ctx, cmd.URI)
 		if err != nil {
 			return true, fmt.Errorf("failed resolving context: %w", err)
@@ -38,10 +58,6 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 		p.state.player.PlayOrigin = &connectpb.PlayOrigin{
 			FeatureIdentifier: "go-librespot",
 			FeatureVersion:    golibrespot.VersionNumberString(),
-		}
-		targetID := golibrespot.NormalizeSpotifyId(cmd.TrackID)
-		if targetID == "" {
-			return false, fmt.Errorf("empty track ID for play-from-track")
 		}
 		skipTo := func(track *connectpb.ContextTrack) bool {
 			return golibrespot.NormalizeSpotifyId(track.Uri) == targetID
@@ -64,6 +80,19 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 			p.emitPlaybackState()
 		}
 		return true, nil
+	case TUICommandPlayTrack:
+		spotCtx, err := singleTrackContext(cmd.URI)
+		if err != nil {
+			return true, err
+		}
+		p.state.setActive(true)
+		golibrespot.SetPaused(p.state.player, false)
+		p.state.player.Suppressions = &connectpb.Suppressions{}
+		p.state.player.PlayOrigin = &connectpb.PlayOrigin{
+			FeatureIdentifier: "go-librespot",
+			FeatureVersion:    golibrespot.VersionNumberString(),
+		}
+		return true, p.loadContext(ctx, spotCtx, nil, false, true)
 	case TUICommandGetContextTracks:
 		resultCh := cmd.ResultCh
 		reqToken := cmd.ReqToken
@@ -147,6 +176,38 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 	default:
 		return false, nil
 	}
+}
+
+func (p *AppPlayer) seekCurrentContextTrack(ctx context.Context, contextURI, trackID string) bool {
+	if p == nil || p.state == nil || p.state.player == nil || p.state.tracks == nil ||
+		strings.TrimSpace(p.state.player.ContextUri) != strings.TrimSpace(contextURI) {
+		return false
+	}
+	targetID := golibrespot.NormalizeSpotifyId(trackID)
+	if targetID == "" {
+		return false
+	}
+	typ := golibrespot.InferSpotifyIdTypeFromContextUri(contextURI)
+	target := &connectpb.ContextTrack{Uri: "spotify:track:" + targetID}
+	return p.state.tracks.Seek(ctx, tracks.ContextTrackComparator(typ, target)) == nil
+}
+
+func singleTrackContext(uri string) (*connectpb.Context, error) {
+	uri = strings.TrimSpace(uri)
+	if uri == "" {
+		return nil, fmt.Errorf("empty track URI")
+	}
+	id, err := golibrespot.SpotifyIdFromUri(uri)
+	if err != nil || id == nil || id.Type() != golibrespot.SpotifyIdTypeTrack {
+		return nil, fmt.Errorf("invalid Spotify track URI %q", uri)
+	}
+	trackURI := id.Uri()
+	return &connectpb.Context{
+		Uri: trackURI,
+		Pages: []*connectpb.ContextPage{{
+			Tracks: []*connectpb.ContextTrack{{Uri: trackURI}},
+		}},
+	}, nil
 }
 
 func (p *AppPlayer) handleTUIPlaybackCommand(ctx context.Context, cmd TUICommand) (bool, error) {

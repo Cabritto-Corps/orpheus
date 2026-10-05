@@ -1,6 +1,8 @@
 package librespot
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -66,5 +68,62 @@ func TestMaybeAdvanceOnTrackEndGuardSkipsWhenTransitionInFlight(t *testing.T) {
 	}
 	if !p.state.player.IsPlaying {
 		t.Fatal("expected playback state to remain unchanged when guard skips duplicate transition")
+	}
+}
+
+func TestAutoplayUsesSourceContextAfterStationRollovers(t *testing.T) {
+	tests := []struct {
+		name, current, source, want string
+	}{
+		{"regular context", "spotify:playlist:abc", "spotify:playlist:origin", "spotify:playlist:abc"},
+		{"station uses origin", "spotify:station:abc", "spotify:playlist:origin", "spotify:playlist:origin"},
+		{"station without origin", "spotify:station:abc", "", "spotify:station:abc"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := autoplayContextURI(test.current, test.source); got != test.want {
+				t.Fatalf("autoplay context = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestResolveAutoplayContextRetriesUntilStationIsGenerated(t *testing.T) {
+	attempts := 0
+	want := &connectpb.Context{Uri: "spotify:station:generated"}
+	got, err := resolveAutoplayContextWithRetry(context.Background(), func(context.Context) (*connectpb.Context, error) {
+		attempts++
+		if attempts < 4 {
+			return nil, errors.New("autoplay context not ready")
+		}
+		return want, nil
+	}, func(context.Context, time.Duration) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want || attempts != 4 {
+		t.Fatalf("got context %p after %d attempts; want %p after 4", got, attempts, want)
+	}
+}
+
+func TestResolveAutoplayContextRetriesUntilCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	attempts := 0
+	_, err := resolveAutoplayContextWithRetry(ctx, func(context.Context) (*connectpb.Context, error) {
+		attempts++
+		return nil, errors.New("autoplay unavailable")
+	}, func(context.Context, time.Duration) error {
+		if attempts == 5 {
+			cancel()
+			return context.Canceled
+		}
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want cancellation", err)
+	}
+	if attempts != 5 {
+		t.Fatalf("attempts = %d, want 5", attempts)
 	}
 }

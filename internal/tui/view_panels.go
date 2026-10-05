@@ -203,6 +203,137 @@ func (m model) albumsTabView() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 }
 
+func (m model) searchTabView() string {
+	layout := m.bodyLayout()
+	if m.ui.width < 64 {
+		return lipgloss.NewStyle().Width(m.ui.width).MaxHeight(layout.bodyH).Render(m.searchBrowserPanel(m.ui.width, layout.bodyH))
+	}
+	left := m.searchPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
+	divider := m.styles.verticalDivider(layout.bodyH)
+	right := m.searchBrowserPanel(layout.rightW, layout.bodyH)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
+}
+
+func (m model) songsTabView() string {
+	layout := m.bodyLayout()
+	if m.ui.width < 64 {
+		w := m.ui.width
+		label := m.styles.styleSectionLabel.Render("Songs")
+		count := m.songsCountLabel()
+		return lipgloss.NewStyle().Width(w).MaxHeight(layout.bodyH).Render(label + "\n" + count + "\n" + m.styles.sectionDivider(w-1) + "\n" + m.browse.songsList.View())
+	}
+	left := m.songsPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
+	divider := m.styles.verticalDivider(layout.bodyH)
+	w := layout.rightW
+	label := m.styles.styleSectionLabel.Render("Songs")
+	count := m.songsCountLabel()
+	inner := m.browse.songsList.View()
+	if len(m.browse.songsList.Items()) == 0 {
+		inner = m.styles.styleDimmed.Render("No songs found")
+	}
+	if m.browse.songsLoadErr != nil && !m.browse.songsLoading {
+		inner += "\n" + m.styles.styleDimmed.Render("Some Spotify sources could not be loaded; re-run 'orpheus auth login' to refresh permissions")
+	}
+	right := lipgloss.NewStyle().Width(w).MaxHeight(layout.bodyH).Render(label + "\n" + count + "\n" + m.styles.sectionDivider(w-1) + "\n" + inner)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
+}
+
+func (m model) songsCountLabel() string {
+	count := len(m.browse.songsList.Items())
+	label := fmt.Sprintf("%d songs", count)
+	if count == maxSongsInSongsTab {
+		label += " (max 100)"
+	}
+	if m.browse.songsLoading {
+		label += " • loading playlists, albums and recent tracks…"
+	} else if m.browse.songsLoadErr != nil {
+		label += " • some sources unavailable"
+	}
+	return m.styles.styleDimmed.Render(label)
+}
+
+func (m model) songsPreviewPanel(w, h, coverCols, coverRows int) string {
+	label := m.styles.styleSectionLabel.Render("Preview")
+	content := label + "\n" + m.styles.sectionDivider(w)
+	selected, ok := m.browse.songsList.SelectedItem().(trackItem)
+	if !ok {
+		content += "\n" + m.placeholderArt(coverCols, coverRows) + "\n" + m.styles.styleDimmed.Render("your songs")
+	} else {
+		cover := m.placeholderArt(coverCols, coverRows)
+		if selected.item.ImageURL != "" {
+			cover = m.coverOrPlaceholder(selected.item.ImageURL, coverCols, coverRows)
+		}
+		content += "\n" + cover + "\n" +
+			m.styles.stylePlaylistName.Render(truncate(selected.item.Name, max(1, w-2))) + "\n" +
+			m.styles.stylePlaylistOwner.Render(truncate(selected.item.Artist+" • "+fmtDuration(selected.item.DurationMS), max(1, w-2)))
+	}
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
+}
+
+func (m model) searchBrowserPanel(w, h int) string {
+	s := m.browse.search
+	label := m.styles.styleSectionLabel.Render("Search")
+	status := "type at least 2 characters"
+	switch {
+	case s.loading && len(s.list.Items()) == 0:
+		status = m.ui.spinner.View() + " searching Spotify..."
+	case s.loading:
+		status = m.ui.spinner.View() + " loading more..."
+	case s.err != nil:
+		status = "search failed — press r to retry"
+	case len(s.list.Items()) > 0 && s.hasMore:
+		status = fmt.Sprintf("%d+ results", len(s.list.Items()))
+	case len(s.list.Items()) > 0:
+		status = fmt.Sprintf("%d results", len(s.list.Items()))
+	case s.query != "":
+		status = "no results"
+	}
+	status = truncate(status, max(1, w-2))
+	labelLine := label + "\n" + m.styles.styleDimmed.Render(status) + "\n" + m.styles.sectionDivider(w-1)
+	inputLine := s.input.View()
+	var inner string
+	switch {
+	case s.err != nil && len(s.list.Items()) == 0:
+		inner = m.styles.styleError.Render(truncate(s.err.Error(), w-2))
+	case len(s.list.Items()) == 0 && s.query == "":
+		inner = m.styles.styleDimmed.Render("Type to search songs, albums and artists • ↑/↓ browse • Enter plays")
+	case len(s.list.Items()) == 0 && !s.loading:
+		inner = m.styles.styleDimmed.Render("No results for this search")
+	case s.loading && len(s.list.Items()) == 0:
+		inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " searching Spotify...")
+	default:
+		inner = s.list.View()
+	}
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(labelLine + "\n" + inputLine + "\n" + inner)
+}
+
+func (m model) searchPreviewPanel(w, h, coverCols, coverRows int) string {
+	label := m.styles.styleSectionLabel.Render("Preview")
+	labelLine := label + "\n" + m.styles.sectionDivider(w)
+	innerW := w - 2
+	selected, ok := m.browse.search.list.SelectedItem().(searchResultItem)
+	if !ok {
+		return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(labelLine + "\n" + m.placeholderArt(coverCols, coverRows) + "\n" + m.styles.styleDimmed.Render("search Spotify to preview art"))
+	}
+	cover := m.placeholderArt(coverCols, coverRows)
+	if selected.result.ImageURL != "" {
+		cover = m.coverOrPlaceholder(selected.result.ImageURL, coverCols, coverRows)
+	}
+	kind := selected.result.Kind
+	meta := selected.result.Owner
+	if selected.result.Kind == "album" {
+		meta += fmt.Sprintf(" • %d tracks", selected.result.TrackCount)
+	} else if selected.result.Kind == "artist" {
+		meta = strings.Join(selected.result.Genres, ", ")
+	} else if selected.result.AlbumName != "" {
+		meta += " • " + selected.result.AlbumName
+	}
+	content := labelLine + "\n" + cover + "\n" +
+		m.styles.stylePlaylistName.Render(truncate(selected.result.Name, innerW)) + "\n" +
+		m.styles.stylePlaylistOwner.Render(truncate(kind+" • "+meta, innerW))
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
+}
+
 func (m model) albumBrowserPanel(w, h int) string {
 	count := len(m.browse.albumList.Items())
 	label := m.styles.styleSectionLabel.Render("Albums")

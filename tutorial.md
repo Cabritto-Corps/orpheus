@@ -29,6 +29,12 @@ SPOTIFY_CLIENT_ID=your_client_id_here
 
 2. Run `./orpheus`. The Web API login provides library access; playback uses go-librespot's separate Spotify sign-in and saves its own credentials. If playback authentication fails, library browsing may still be available, but playback will not work until that sign-in succeeds.
 
-3. Press `?` to see keybinds
+3. Press `?` to see keybinds, or `o` → Keybinds to change them. `ctrl+f` opens
+   Spotify Search (`ctrl+l` and `f3` are aliases); `/` filters the current library
+   list. In Search, type a query, use `↑` / `↓` to browse, and `enter` to play a
+   song without leaving the results. Switch to Player with `tab` when needed.
+
+   When testing source changes, run `make build` and restart `./orpheus`, not an
+   older installed binary.
 
 4. Enjoy the music!

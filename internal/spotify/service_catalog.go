@@ -264,6 +264,136 @@ func (s *Service) ListSavedAlbumsPage(ctx context.Context, offset, limit int) (*
 	return out, nil
 }
 
+func (s *Service) ListSavedTracksPage(ctx context.Context, offset, limit int) (*PlaylistItemsPage, error) {
+	if offset < 0 {
+		return nil, errors.New("track offset must be >= 0")
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 50
+	}
+	if s.itemsHTTPClient == nil {
+		return nil, errors.New("items http client is not configured")
+	}
+	params := url.Values{}
+	params.Set("limit", strconv.Itoa(limit))
+	params.Set("offset", strconv.Itoa(offset))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spotifyAPIBase+"me/tracks?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.itemsHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch saved tracks: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var page struct {
+		Items []struct {
+			Track struct {
+				ID         string `json:"id"`
+				Name       string `json:"name"`
+				DurationMS int    `json:"duration_ms"`
+				Artists    []struct {
+					Name string `json:"name"`
+				} `json:"artists"`
+				Album struct {
+					Images []PlaylistImage `json:"images"`
+				} `json:"album"`
+			} `json:"track"`
+		} `json:"items"`
+		Next *string `json:"next"`
+	}
+	if err := DecodeWebAPIJSON(resp, http.StatusOK, &page, func(status int, body string) error {
+		return &httpStatusError{status: status, err: fmt.Errorf("saved tracks: %s", body)}
+	}); err != nil {
+		return nil, err
+	}
+	out := &PlaylistItemsPage{Offset: offset, Limit: limit}
+	if len(page.Items) == 0 {
+		out.NextOffset = offset
+		return out, nil
+	}
+	for _, entry := range page.Items {
+		track := entry.Track
+		if track.ID == "" {
+			continue
+		}
+		artists := make([]string, 0, len(track.Artists))
+		for _, artist := range track.Artists {
+			if name := strings.TrimSpace(artist.Name); name != "" {
+				artists = append(artists, name)
+			}
+		}
+		out.ItemIDs = append(out.ItemIDs, track.ID)
+		out.ItemInfos = append(out.ItemInfos, QueueItem{
+			ID: track.ID, Name: track.Name, Artist: strings.Join(artists, ", "),
+			DurationMS: track.DurationMS, ImageURL: pickDisplayImageURL(track.Album.Images),
+		})
+	}
+	out.NextOffset = offset + len(page.Items)
+	out.HasMore = page.Next != nil && *page.Next != ""
+	return out, nil
+}
+
+func (s *Service) ListRecentlyPlayedTracks(ctx context.Context, limit int) ([]QueueItem, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 50
+	}
+	if s.itemsHTTPClient == nil {
+		return nil, errors.New("items http client is not configured")
+	}
+	params := url.Values{}
+	params.Set("limit", strconv.Itoa(limit))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spotifyAPIBase+"me/player/recently-played?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.itemsHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch recently played tracks: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var page struct {
+		Items []struct {
+			Track struct {
+				ID         string `json:"id"`
+				Name       string `json:"name"`
+				DurationMS int    `json:"duration_ms"`
+				Artists    []struct {
+					Name string `json:"name"`
+				} `json:"artists"`
+				Album struct {
+					Images []PlaylistImage `json:"images"`
+				} `json:"album"`
+			} `json:"track"`
+		} `json:"items"`
+	}
+	if err := DecodeWebAPIJSON(resp, http.StatusOK, &page, func(status int, body string) error {
+		return &httpStatusError{status: status, err: fmt.Errorf("recently played tracks: %s", body)}
+	}); err != nil {
+		return nil, err
+	}
+	tracks := make([]QueueItem, 0, len(page.Items))
+	for _, entry := range page.Items {
+		track := entry.Track
+		if track.ID == "" {
+			continue
+		}
+		artists := make([]string, 0, len(track.Artists))
+		for _, artist := range track.Artists {
+			if name := strings.TrimSpace(artist.Name); name != "" {
+				artists = append(artists, name)
+			}
+		}
+		tracks = append(tracks, QueueItem{
+			ID: track.ID, Name: track.Name, Artist: strings.Join(artists, ", "),
+			DurationMS: track.DurationMS, ImageURL: pickDisplayImageURL(track.Album.Images),
+		})
+	}
+	return tracks, nil
+}
+
 func (s *Service) ResolveContextImageURL(ctx context.Context, kind, id string) (string, error) {
 	kind = strings.TrimSpace(kind)
 	id = strings.TrimSpace(id)
@@ -339,10 +469,13 @@ func (s *Service) ListPlaylistItemsPage(ctx context.Context, playlistID string, 
 		if entry == nil || entry.ID == "" {
 			continue
 		}
-		qi := QueueItem{ID: entry.ID, Name: entry.Name, DurationMS: entry.DurationMS}
-		if len(entry.Artists) > 0 {
-			qi.Artist = entry.Artists[0].Name
+		artists := make([]string, 0, len(entry.Artists))
+		for _, artist := range entry.Artists {
+			if name := strings.TrimSpace(artist.Name); name != "" {
+				artists = append(artists, name)
+			}
 		}
+		qi := QueueItem{ID: entry.ID, Name: entry.Name, Artist: strings.Join(artists, ", "), DurationMS: entry.DurationMS, ImageURL: pickDisplayImageURL(entry.Album.Images)}
 		out.ItemIDs = append(out.ItemIDs, entry.ID)
 		out.ItemInfos = append(out.ItemInfos, qi)
 	}
@@ -478,14 +611,104 @@ func (s *Service) ListAlbumTracksPage(ctx context.Context, albumID string, offse
 		if item.ID == "" {
 			continue
 		}
-		qi := QueueItem{ID: item.ID, Name: item.Name, DurationMS: item.DurationMs}
-		if len(item.Artists) > 0 {
-			qi.Artist = item.Artists[0].Name
+		artists := make([]string, 0, len(item.Artists))
+		for _, artist := range item.Artists {
+			if name := strings.TrimSpace(artist.Name); name != "" {
+				artists = append(artists, name)
+			}
 		}
+		qi := QueueItem{ID: item.ID, Name: item.Name, Artist: strings.Join(artists, ", "), DurationMS: item.DurationMs}
 		out.ItemIDs = append(out.ItemIDs, item.ID)
 		out.ItemInfos = append(out.ItemInfos, qi)
 	}
 	out.NextOffset = offset + len(raw.Items)
 	out.HasMore = raw.Next != nil && *raw.Next != ""
+	return out, nil
+}
+
+func (s *Service) SearchPage(ctx context.Context, query string, offset, limit int) (*SearchPage, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, errors.New("search query must not be empty")
+	}
+	if offset < 0 {
+		return nil, errors.New("search offset must be >= 0")
+	}
+	if limit <= 0 || limit > 10 {
+		limit = 10
+	}
+	result, err := apiCallWithRetry(ctx, func() (*spotifyapi.SearchResult, error) {
+		return s.client.Search(ctx, query, spotifyapi.SearchTypeTrack|spotifyapi.SearchTypeAlbum|spotifyapi.SearchTypeArtist,
+			spotifyapi.Limit(limit), spotifyapi.Offset(offset))
+	})
+	if err != nil {
+		return nil, fmt.Errorf("search Spotify catalog: %w", err)
+	}
+	out := &SearchPage{Offset: offset, Limit: limit, NextOffset: offset + limit}
+	if result == nil {
+		return out, nil
+	}
+	if result.Tracks != nil {
+		out.HasMore = result.Tracks.Next != ""
+		for _, track := range result.Tracks.Tracks {
+			if track.ID == "" || track.URI == "" {
+				continue
+			}
+			artists := make([]string, 0, len(track.Artists))
+			for _, artist := range track.Artists {
+				if name := strings.TrimSpace(artist.Name); name != "" {
+					artists = append(artists, name)
+				}
+			}
+			imageURL := ""
+			if len(track.Album.Images) > 0 {
+				imageURL = track.Album.Images[0].URL
+			}
+			out.Items = append(out.Items, SearchResultItem{
+				ID: string(track.ID), Name: track.Name, URI: string(track.URI),
+				Kind: "track", Owner: strings.Join(artists, ", "),
+				AlbumName: track.Album.Name, ImageURL: imageURL, DurationMS: int(track.Duration),
+			})
+		}
+	}
+	if result.Albums != nil {
+		out.HasMore = out.HasMore || result.Albums.Next != ""
+		for _, album := range result.Albums.Albums {
+			if album.ID == "" || album.URI == "" {
+				continue
+			}
+			artists := make([]string, 0, len(album.Artists))
+			for _, artist := range album.Artists {
+				if name := strings.TrimSpace(artist.Name); name != "" {
+					artists = append(artists, name)
+				}
+			}
+			imageURL := ""
+			if len(album.Images) > 0 {
+				imageURL = album.Images[0].URL
+			}
+			out.Items = append(out.Items, SearchResultItem{
+				ID: string(album.ID), Name: album.Name, URI: string(album.URI),
+				Kind: "album", Owner: strings.Join(artists, ", "),
+				ImageURL: imageURL, TrackCount: int(album.TotalTracks),
+			})
+		}
+	}
+	if result.Artists != nil {
+		out.HasMore = out.HasMore || result.Artists.Next != ""
+		for _, artist := range result.Artists.Artists {
+			if artist.ID == "" || artist.URI == "" {
+				continue
+			}
+			imageURL := ""
+			if len(artist.Images) > 0 {
+				imageURL = artist.Images[0].URL
+			}
+			out.Items = append(out.Items, SearchResultItem{
+				ID: string(artist.ID), Name: artist.Name, URI: string(artist.URI),
+				Kind: "artist", ImageURL: imageURL, Genres: append([]string(nil), artist.Genres...),
+			})
+		}
+	}
 	return out, nil
 }

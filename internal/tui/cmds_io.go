@@ -9,6 +9,7 @@ import (
 	_ "image/png"
 	"strings"
 	"sync"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -17,6 +18,106 @@ import (
 )
 
 const playlistAPIPageSize = 50
+
+func (m model) loadSongsLibraryCmd(contexts []spotify.PlaylistSummary) tea.Cmd {
+	catalog := m.resolveCatalog()
+	if catalog == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, 3*time.Minute)
+		defer cancel()
+		collectionTracks := make([]spotify.QueueItem, 0)
+		var firstErr error
+		recent, err := catalog.ListRecentlyPlayedTracks(ctx, 50)
+		if err != nil {
+			firstErr = err
+			recent = nil
+		}
+		priorityTracks := mergeSongTracks(
+			[]spotify.QueueItem{playbackQueueItem(m.transport.status)},
+			m.browse.songsSessionRecentTracks,
+			recent,
+			m.browse.songsSavedTracks,
+		)
+		known := make(map[string]struct{}, maxSongsInSongsTab)
+		for _, track := range priorityTracks {
+			known[songIdentity(track.ID)] = struct{}{}
+		}
+		slots := max(0, maxSongsInSongsTab-len(priorityTracks))
+		scanBudget := min(maxSongsInSongsTab, slots)
+		loadContext := func(kind, id string) {
+			offset := 0
+			for slots > 0 && scanBudget > 0 {
+				var page *spotify.PlaylistItemsPage
+				var err error
+				limit := min(playlistAPIPageSize, scanBudget)
+				if kind == spotify.ContextKindAlbum {
+					page, err = catalog.ListAlbumTracksPage(ctx, id, offset, limit)
+				} else {
+					page, err = catalog.ListPlaylistItemsPage(ctx, id, offset, limit)
+				}
+				if err != nil {
+					if firstErr == nil {
+						firstErr = err
+					}
+					return
+				}
+				advanced := max(len(page.ItemInfos), page.NextOffset-offset)
+				scanBudget -= min(scanBudget, advanced)
+				for _, track := range page.ItemInfos {
+					key := songIdentity(track.ID)
+					if key == "" {
+						continue
+					}
+					if kind == spotify.ContextKindAlbum && track.ImageURL == "" {
+						track.ImageURL = contextImageURL(contexts, id)
+					}
+					if _, exists := known[key]; exists {
+						// Retain duplicate metadata so the final ordered merge can
+						// fill fields missing from a higher-priority source.
+						collectionTracks = append(collectionTracks, track)
+						continue
+					}
+					known[key] = struct{}{}
+					collectionTracks = append(collectionTracks, track)
+					slots--
+					if slots == 0 {
+						return
+					}
+				}
+				if !page.HasMore || page.NextOffset <= offset {
+					return
+				}
+				offset = page.NextOffset
+			}
+		}
+		for _, context := range contexts {
+			if slots == 0 || scanBudget == 0 {
+				break
+			}
+			if err := ctx.Err(); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				break
+			}
+			if context.ID != "" && (context.Kind == spotify.ContextKindAlbum || context.Kind == spotify.ContextKindPlaylist) {
+				loadContext(context.Kind, context.ID)
+			}
+		}
+		return songsLibraryMsg{recentTracks: recent, collectionTracks: collectionTracks, err: firstErr}
+	}
+}
+
+func contextImageURL(contexts []spotify.PlaylistSummary, id string) string {
+	for _, context := range contexts {
+		if context.Kind == spotify.ContextKindAlbum && context.ID == id {
+			return context.ImageURL
+		}
+	}
+	return ""
+}
 
 func (m model) loadPlaylistsCmd() tea.Cmd {
 	catalog := m.resolveCatalog()
@@ -35,8 +136,13 @@ func (m model) loadPlaylistsCmd() tea.Cmd {
 			albumsForbidden bool
 			err             error
 		}
+		type savedResult struct {
+			items []spotify.QueueItem
+			err   error
+		}
 		plCh := make(chan plResult, 1)
 		alCh := make(chan alResult, 1)
+		savedCh := make(chan savedResult, 1)
 
 		go func() {
 			var all []spotify.PlaylistSummary
@@ -55,6 +161,24 @@ func (m model) loadPlaylistsCmd() tea.Cmd {
 				playlistOffset = page.NextOffset
 			}
 			plCh <- plResult{items: all}
+		}()
+
+		go func() {
+			var all []spotify.QueueItem
+			offset := 0
+			more := true
+			for more && len(all) < maxSongsInSongsTab {
+				limit := min(playlistAPIPageSize, maxSongsInSongsTab-len(all))
+				page, err := catalog.ListSavedTracksPage(ctx, offset, limit)
+				if err != nil {
+					savedCh <- savedResult{err: err}
+					return
+				}
+				all = append(all, page.ItemInfos[:min(len(page.ItemInfos), maxSongsInSongsTab-len(all))]...)
+				more = page.HasMore && len(page.ItemInfos) > 0
+				offset = page.NextOffset
+			}
+			savedCh <- savedResult{items: all}
 		}()
 
 		go func() {
@@ -91,12 +215,17 @@ func (m model) loadPlaylistsCmd() tea.Cmd {
 		if ar.err != nil {
 			return playlistsMsg{err: ar.err}
 		}
+		sr := <-savedCh
+		if sr.err != nil {
+			return playlistsMsg{err: sr.err}
+		}
 
 		all := make([]spotify.PlaylistSummary, 0, len(pr.items)+len(ar.items))
 		all = append(all, pr.items...)
 		all = append(all, ar.items...)
 		return playlistsMsg{
 			items:           all,
+			savedTracks:     sr.items,
 			albumsForbidden: ar.albumsForbidden,
 		}
 	}
