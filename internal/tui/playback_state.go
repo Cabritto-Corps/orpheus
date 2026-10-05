@@ -438,7 +438,7 @@ func mergeStatusFromPrevious(prev *spotify.PlaybackStatus, queue []spotify.Queue
 }
 
 // mergePlaybackImageFromTracks fills missing playback art from the loaded
-// Songs library. Connect/autoplay updates can contain a track ID and title
+// Recents library. Connect/autoplay updates can contain a track ID and title
 // but omit album art already known to the catalog.
 func mergePlaybackImageFromTracks(status *spotify.PlaybackStatus, groups ...[]spotify.QueueItem) *spotify.PlaybackStatus {
 	if status == nil || strings.TrimSpace(status.AlbumImageURL) != "" {

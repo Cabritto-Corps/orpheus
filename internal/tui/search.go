@@ -156,10 +156,7 @@ func (m model) moveSearchSelection(delta int) (tea.Model, tea.Cmd) {
 	if len(items) == 0 {
 		return m, nil
 	}
-	index := s.list.Index() + delta
-	if index < 0 {
-		index = 0
-	}
+	index := max(s.list.Index()+delta, 0)
 	if index >= len(items) {
 		index = len(items) - 1
 	}

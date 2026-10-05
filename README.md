@@ -63,13 +63,13 @@ On Linux, missing ALSA/FLAC/Ogg/Vorbis libraries are detected with `ldd` and the
 | Repeat | cycle repeat: off → context → track | `l` |
 | Spotify Connect | the player shows up in Spotify's device picker, control it from your phone too | — |
 | **Library** | | |
-| Tabs | songs, playlists, albums, Search and Player | `tab` |
-| Songs | up to 100 tracks: current, recent, saved, then playlist/album tracks; duplicates removed | — |
+| Tabs | playlists, albums, Recents, Search and Player | `tab` |
+| Recents | up to 100 tracks: current, this session, then Spotify recent plays; duplicates removed | — |
 | Track popup | open every track of a playlist / album | `space` on a row |
-| Search filter | filter the current list as you type; Songs matches title and artists | `/` |
+| Search filter | filter the current list as you type; Recents matches title and artists | `/` |
 | Spotify Search | open the Search tab for tracks, albums and artists | `ctrl+f` (also `ctrl+l` / `f3`) |
 | Select / play | enter a playlist or play the selection | `enter` |
-| Refresh library | reload songs, playlists and albums | `r` |
+| Refresh library | reload recents, playlists and albums | `r` |
 | **Queue** | | |
 | Queue panel | upcoming tracks with index, artist and duration | `↑` / `↓` to browse |
 | Play from queue | start any row | `enter` |
@@ -91,9 +91,9 @@ On Linux, missing ALSA/FLAC/Ogg/Vorbis libraries are detected with `ldd` and the
 Every keybind can be changed in settings (`o` → Keybinds).
 
 In Search, results update as you type. Use `↑` / `↓` to browse and `enter` to play.
-Playing a song in Search or Songs keeps the list open so you can choose another; albums and artists
+Playing a song in Search or Recents keeps the list open so you can choose another; albums and artists
 open Player. `tab` switches tabs, and `/` focuses the search field again after `esc`.
-Search and Songs thumbnails use full-resolution graphics on Kitty-compatible
+Search and Recents thumbnails use full-resolution graphics on Kitty-compatible
 terminals when Images is set to `rendered`; other terminals use pixelated ANSI art.
 
 ### Build and run locally

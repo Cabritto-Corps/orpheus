@@ -79,22 +79,22 @@ func TestKittyPreviewIsPurgedWhenSwitchingToTabsWithoutSelection(t *testing.T) {
 	m := NewLoaderModel()
 	m.ui.width = 120
 	m.ui.height = 40
-	m.ui.activeTab = tabSongs
+	m.ui.activeTab = tabRecents
 	m.browse.librarySettled = true
 	m.ui.imgs.protocol = imageProtocolKitty
 	m.ui.imgs.encoded["song-cover"] = "c29uZw=="
-	m.browse.songsList.SetItems([]list.Item{trackItem{item: spotify.QueueItem{ID: "song", Name: "Song", ImageURL: "song-cover"}}})
+	m.browse.recentsList.SetItems([]list.Item{trackItem{item: spotify.QueueItem{ID: "song", Name: "Song", ImageURL: "song-cover"}}})
 	first := m.kittyOverlay()
 	if !strings.Contains(first, "a=T") {
-		t.Fatal("expected Songs preview placement")
+		t.Fatal("expected Recents preview placement")
 	}
 	shownID := m.ui.imgs.overlay.shownID
 
 	for _, nextTab := range []tab{tabAlbums, tabSearch} {
-		if m.ui.activeTab != tabSongs {
-			m.ui.activeTab = tabSongs
+		if m.ui.activeTab != tabRecents {
+			m.ui.activeTab = tabRecents
 			if restored := m.kittyOverlay(); !strings.Contains(restored, "a=p") {
-				t.Fatalf("expected Songs preview to return before switching to %s: %q", nextTab, restored)
+				t.Fatalf("expected Recents preview to return before switching to %s: %q", nextTab, restored)
 			}
 			shownID = m.ui.imgs.overlay.shownID
 		}

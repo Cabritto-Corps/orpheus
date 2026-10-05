@@ -93,19 +93,17 @@ type browseModel struct {
 	filterSavedIdx   int
 	// librarySettled: first library load resolved, success or failure.
 	// Refreshes must never re-blank the panels.
-	librarySettled           bool
-	playlistList             list.Model
-	albumList                list.Model
-	songsList                list.Model
-	songsTracks              []spotify.QueueItem
-	songsSelectionTouched    bool
-	songsSavedTracks         []spotify.QueueItem
-	songsRecentTracks        []spotify.QueueItem
-	songsSessionRecentTracks []spotify.QueueItem
-	songsCollectionTracks    []spotify.QueueItem
-	songsLoading             bool
-	songsLoadErr             error
-	search                   searchModel
+	librarySettled          bool
+	playlistList            list.Model
+	albumList               list.Model
+	recentsList             list.Model
+	recentsTracks           []spotify.QueueItem
+	recentsSelectionTouched bool
+	apiRecentTracks         []spotify.QueueItem
+	sessionRecentTracks     []spotify.QueueItem
+	recentsLoading          bool
+	recentsLoadErr          error
+	search                  searchModel
 }
 
 type searchModel struct {

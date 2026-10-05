@@ -152,9 +152,9 @@ func (m model) tabBarView() string {
 		label string
 		t     tab
 	}{
-		{"Songs", tabSongs},
 		{"Playlists", tabPlaylists},
 		{"Albums", tabAlbums},
+		{"Recents", tabRecents},
 		{"Search", tabSearch},
 		{"Player", tabPlayer},
 	}
@@ -162,7 +162,7 @@ func (m model) tabBarView() string {
 	for _, entry := range tabs {
 		label := entry.label
 		if m.ui.width < 54 {
-			label = map[string]string{"Songs": "Song", "Playlists": "List", "Albums": "Alb", "Search": "Find", "Player": "Play"}[label]
+			label = map[string]string{"Recents": "Recent", "Playlists": "List", "Albums": "Alb", "Search": "Find", "Player": "Play"}[label]
 		}
 		if m.ui.activeTab == entry.t {
 			parts = append(parts, m.styles.styleTabActive.Render(" "+label+" "))
@@ -409,7 +409,7 @@ func (m model) kittyCoverOverlayBytes() (string, bool) {
 		}
 		return clearKittyPreview(m.ui.imgs), false
 	}
-	if m.ui.width < 64 && (m.ui.activeTab == tabSearch || m.ui.activeTab == tabSongs) {
+	if m.ui.width < 64 && (m.ui.activeTab == tabSearch || m.ui.activeTab == tabRecents) {
 		// Narrow layouts contain only the list, not a large preview panel.
 		return clearKittyPreview(m.ui.imgs), false
 	}
@@ -436,8 +436,8 @@ func (m model) kittyCoverOverlayBytes() (string, bool) {
 			url = item.result.ImageURL
 			subjectID = strings.TrimSpace(item.result.ID)
 		}
-	case tabSongs:
-		if item, ok := m.browse.songsList.SelectedItem().(trackItem); ok {
+	case tabRecents:
+		if item, ok := m.browse.recentsList.SelectedItem().(trackItem); ok {
 			url = item.item.ImageURL
 			subjectID = strings.TrimSpace(item.item.ID)
 		}

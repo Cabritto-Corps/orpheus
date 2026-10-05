@@ -84,7 +84,7 @@ func (m model) needsImageURL(url string) bool {
 	if m.ui.activeTab == tabSearch && strings.TrimSpace(selectedSearchImageURL(m.browse.search.list)) == url {
 		return true
 	}
-	if m.ui.activeTab == tabSongs && strings.TrimSpace(selectedSongImageURL(m.browse.songsList)) == url {
+	if m.ui.activeTab == tabRecents && strings.TrimSpace(selectedRecentImageURL(m.browse.recentsList)) == url {
 		return true
 	}
 	for _, pl := range m.visiblePlaylistItems() {
@@ -117,8 +117,8 @@ func (m model) shouldForceKittyRedrawForLoadedURL(url string) bool {
 		return strings.TrimSpace(selectedImageURLFromList(m.browse.albumList)) == target
 	case tabSearch:
 		return strings.TrimSpace(selectedSearchImageURL(m.browse.search.list)) == target
-	case tabSongs:
-		return strings.TrimSpace(selectedSongImageURL(m.browse.songsList)) == target
+	case tabRecents:
+		return strings.TrimSpace(selectedRecentImageURL(m.browse.recentsList)) == target
 	default:
 		return false
 	}
@@ -140,7 +140,7 @@ func (m model) libraryHasImageURL(url string) bool {
 			return true
 		}
 	}
-	for _, item := range m.browse.songsList.Items() {
+	for _, item := range m.browse.recentsList.Items() {
 		track, ok := item.(trackItem)
 		if ok && track.item.ImageURL == url {
 			return true
@@ -229,12 +229,12 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 		m.transport.seekSentTarget = -1
 	}
 	followPlayingSong := false
-	if nextTrackID != "" && m.browse.songsList.FilterState() == list.Unfiltered {
-		if !m.browse.songsSelectionTouched {
+	if nextTrackID != "" && m.browse.recentsList.FilterState() == list.Unfiltered {
+		if !m.browse.recentsSelectionTouched {
 			followPlayingSong = true
 		} else if prevTrackID != "" && prevTrackID != nextTrackID {
-			if selected, ok := m.browse.songsList.SelectedItem().(trackItem); ok {
-				followPlayingSong = songIdentity(selected.item.ID) == prevTrackID
+			if selected, ok := m.browse.recentsList.SelectedItem().(trackItem); ok {
+				followPlayingSong = recentIdentity(selected.item.ID) == prevTrackID
 			}
 		}
 	}
@@ -253,13 +253,13 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	}
 	m.transport.status = mergePlaybackImageFromTracks(
 		mergeStatusFromPrevious(prevStatus, m.transport.queue, msg.status),
-		m.browse.songsTracks,
+		m.browse.recentsTracks,
 	)
-	var songsCmd tea.Cmd
+	var recentsCmd tea.Cmd
 	if m.transport.status != nil {
-		songsCmd = m.upsertCurrentPlaybackSong(prevStatus, m.transport.status)
+		recentsCmd = m.upsertCurrentPlaybackRecent(prevStatus, m.transport.status)
 		if followPlayingSong {
-			m.selectSongByIdentity(nextTrackID)
+			m.selectRecentByIdentity(nextTrackID)
 		}
 	}
 	if m.transport.status != nil {
@@ -272,8 +272,8 @@ func (m model) handlePlaybackStateMsg(msg playbackStateMsg) (tea.Model, tea.Cmd)
 	m.maybeClearTransportTransition(m.transport.status)
 	m.fireOnSongChange(prevStatus, m.transport.status)
 	cmds := []tea.Cmd{}
-	if songsCmd != nil {
-		cmds = append(cmds, songsCmd)
+	if recentsCmd != nil {
+		cmds = append(cmds, recentsCmd)
 	}
 	if m.shouldEnsureAlbumImageLoad(prevStatus, m.transport.status) {
 		cmds = append(cmds, m.loadImageCmd(m.transport.status.AlbumImageURL, true))
@@ -316,16 +316,16 @@ func (m *model) loadVisiblePlaylistCoversCmd() tea.Cmd {
 	if sel, ok := m.selectedAlbum(); ok {
 		add(sel.summary.ImageURL)
 	}
-	add(selectedSongImageURL(m.browse.songsList))
+	add(selectedRecentImageURL(m.browse.recentsList))
 	for _, pl := range m.visiblePlaylistItems() {
 		add(pl.summary.ImageURL)
 	}
 	for _, pl := range m.visibleAlbumItems() {
 		add(pl.summary.ImageURL)
 	}
-	songItems := m.browse.songsList.Items()
-	if m.browse.songsList.FilterState() == list.Unfiltered && len(songItems) > 0 {
-		center := min(max(m.browse.songsList.GlobalIndex(), 0), len(songItems)-1)
+	songItems := m.browse.recentsList.Items()
+	if m.browse.recentsList.FilterState() == list.Unfiltered && len(songItems) > 0 {
+		center := min(max(m.browse.recentsList.GlobalIndex(), 0), len(songItems)-1)
 		half := coverPreloadWindow / 2
 		start := max(0, center-half)
 		end := min(len(songItems), center+half+1)

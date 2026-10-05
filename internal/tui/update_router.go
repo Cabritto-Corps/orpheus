@@ -117,8 +117,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case playlistsMsg:
 		return m.handlePlaylistsMsg(msg)
-	case songsLibraryMsg:
-		return m.handleSongsLibraryMsg(msg)
+	case recentsLibraryMsg:
+		return m.handleRecentsLibraryMsg(msg)
 	case navDebounceMsg:
 		return m.handleNavDebounceMsg(msg)
 	case searchDebounceMsg:

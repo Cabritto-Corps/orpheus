@@ -214,50 +214,50 @@ func (m model) searchTabView() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 }
 
-func (m model) songsTabView() string {
+func (m model) recentsTabView() string {
 	layout := m.bodyLayout()
 	if m.ui.width < 64 {
 		w := m.ui.width
-		label := m.styles.styleSectionLabel.Render("Songs")
-		count := m.songsCountLabel()
-		return lipgloss.NewStyle().Width(w).MaxHeight(layout.bodyH).Render(label + "\n" + count + "\n" + m.styles.sectionDivider(w-1) + "\n" + m.browse.songsList.View())
+		label := m.styles.styleSectionLabel.Render("Recents")
+		count := m.recentsCountLabel()
+		return lipgloss.NewStyle().Width(w).MaxHeight(layout.bodyH).Render(label + "\n" + count + "\n" + m.styles.sectionDivider(w-1) + "\n" + m.browse.recentsList.View())
 	}
-	left := m.songsPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
+	left := m.recentsPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
 	divider := m.styles.verticalDivider(layout.bodyH)
 	w := layout.rightW
-	label := m.styles.styleSectionLabel.Render("Songs")
-	count := m.songsCountLabel()
-	inner := m.browse.songsList.View()
-	if len(m.browse.songsList.Items()) == 0 {
-		inner = m.styles.styleDimmed.Render("No songs found")
+	label := m.styles.styleSectionLabel.Render("Recents")
+	count := m.recentsCountLabel()
+	inner := m.browse.recentsList.View()
+	if len(m.browse.recentsList.Items()) == 0 {
+		inner = m.styles.styleDimmed.Render("No recent tracks")
 	}
-	if m.browse.songsLoadErr != nil && !m.browse.songsLoading {
+	if m.browse.recentsLoadErr != nil && !m.browse.recentsLoading {
 		inner += "\n" + m.styles.styleDimmed.Render("Some Spotify sources could not be loaded; re-run 'orpheus auth login' to refresh permissions")
 	}
 	right := lipgloss.NewStyle().Width(w).MaxHeight(layout.bodyH).Render(label + "\n" + count + "\n" + m.styles.sectionDivider(w-1) + "\n" + inner)
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 }
 
-func (m model) songsCountLabel() string {
-	count := len(m.browse.songsList.Items())
-	label := fmt.Sprintf("%d songs", count)
-	if count == maxSongsInSongsTab {
+func (m model) recentsCountLabel() string {
+	count := len(m.browse.recentsList.Items())
+	label := fmt.Sprintf("%d recent tracks", count)
+	if count == maxRecentsTracks {
 		label += " (max 100)"
 	}
-	if m.browse.songsLoading {
-		label += " • loading playlists, albums and recent tracks…"
-	} else if m.browse.songsLoadErr != nil {
+	if m.browse.recentsLoading {
+		label += " • loading recent tracks…"
+	} else if m.browse.recentsLoadErr != nil {
 		label += " • some sources unavailable"
 	}
 	return m.styles.styleDimmed.Render(label)
 }
 
-func (m model) songsPreviewPanel(w, h, coverCols, coverRows int) string {
+func (m model) recentsPreviewPanel(w, h, coverCols, coverRows int) string {
 	label := m.styles.styleSectionLabel.Render("Preview")
 	content := label + "\n" + m.styles.sectionDivider(w)
-	selected, ok := m.browse.songsList.SelectedItem().(trackItem)
+	selected, ok := m.browse.recentsList.SelectedItem().(trackItem)
 	if !ok {
-		content += "\n" + m.placeholderArt(coverCols, coverRows) + "\n" + m.styles.styleDimmed.Render("your songs")
+		content += "\n" + m.placeholderArt(coverCols, coverRows) + "\n" + m.styles.styleDimmed.Render("your recent tracks")
 	} else {
 		cover := m.placeholderArt(coverCols, coverRows)
 		if selected.item.ImageURL != "" {

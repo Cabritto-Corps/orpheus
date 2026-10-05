@@ -15,7 +15,6 @@ import (
 type fakeCatalog struct {
 	playlists     func(offset, limit int) (*spotify.PlaylistPage, error)
 	albums        func(offset, limit int) (*spotify.PlaylistPage, error)
-	songs         func(offset, limit int) (*spotify.PlaylistItemsPage, error)
 	playlistItems func(id string, offset, limit int) (*spotify.PlaylistItemsPage, error)
 	albumItems    func(id string, offset, limit int) (*spotify.PlaylistItemsPage, error)
 	recent        func(limit int) ([]spotify.QueueItem, error)
@@ -30,9 +29,6 @@ func (f fakeCatalog) ListSavedAlbumsPage(_ context.Context, offset, limit int) (
 }
 
 func (f fakeCatalog) ListSavedTracksPage(_ context.Context, offset, limit int) (*spotify.PlaylistItemsPage, error) {
-	if f.songs != nil {
-		return f.songs(offset, limit)
-	}
 	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 }
 
@@ -43,7 +39,7 @@ func (f fakeCatalog) ListRecentlyPlayedTracks(_ context.Context, limit int) ([]s
 	return nil, nil
 }
 
-func TestSavedTracksPopulateSongsTab(t *testing.T) {
+func TestSavedTracksExcludedFromRecents(t *testing.T) {
 	catalog := fakeCatalog{
 		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
 			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset}, nil
@@ -51,22 +47,19 @@ func TestSavedTracksPopulateSongsTab(t *testing.T) {
 		albums: func(offset, limit int) (*spotify.PlaylistPage, error) {
 			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset}, nil
 		},
-		songs: func(offset, limit int) (*spotify.PlaylistItemsPage, error) {
-			return &spotify.PlaylistItemsPage{
-				Offset: offset, Limit: limit, NextOffset: 1,
-				ItemInfos: []spotify.QueueItem{{ID: "saved-id", Name: "Saved Song", Artist: "Artist", ImageURL: "saved-art"}},
-			}, nil
+		recent: func(limit int) ([]spotify.QueueItem, error) {
+			return []spotify.QueueItem{{ID: "recent-id", Name: "Recent Song", Artist: "Artist", ImageURL: "recent-art"}}, nil
 		},
 	}
 	m := newModel(context.Background(), catalog, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
 	msg := m.loadPlaylistsCmd()().(playlistsMsg)
 	next, _ := m.handlePlaylistsMsg(msg)
 	got := next.(model)
-	if len(got.browse.songsList.Items()) != 1 || got.browse.songsList.Items()[0].(trackItem).item.ID != "saved-id" {
-		t.Fatalf("saved songs were not loaded into Songs: %#v", got.browse.songsList.Items())
-	}
-	if image := got.browse.songsList.Items()[0].(trackItem).item.ImageURL; image != "saved-art" {
-		t.Fatalf("saved song art was lost: %q", image)
+	rmsg := got.loadRecentsLibraryCmd()().(recentsLibraryMsg)
+	next, _ = got.handleRecentsLibraryMsg(rmsg)
+	got = next.(model)
+	if len(got.browse.recentsList.Items()) != 1 || got.browse.recentsList.Items()[0].(trackItem).item.ID != "recent-id" {
+		t.Fatalf("Recents must hold recent plays only: %#v", got.browse.recentsList.Items())
 	}
 	if len(got.browse.playlistList.Items()) == 0 {
 		t.Fatal("Liked Songs disappeared from Playlists")

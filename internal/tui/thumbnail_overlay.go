@@ -76,8 +76,8 @@ func (m model) thumbnailPlacements() map[int]thumbnailPlacement {
 		rows = m.browse.search.list
 		// Section title, status, divider and query input.
 		row += 4
-	case tabSongs:
-		rows = m.browse.songsList
+	case tabRecents:
+		rows = m.browse.recentsList
 		// Section title, count, divider and the list's filter/title row.
 		row += 4
 		if rows.FilterState() == list.Filtering {

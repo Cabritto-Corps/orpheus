@@ -90,8 +90,8 @@ func (m model) pageView() string {
 
 	var body string
 	switch m.ui.activeTab {
-	case tabSongs:
-		body = m.songsTabView()
+	case tabRecents:
+		body = m.recentsTabView()
 	case tabPlaylists:
 		body = m.playlistsTabView()
 	case tabAlbums:

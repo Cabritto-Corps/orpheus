@@ -23,7 +23,7 @@ import (
 type tab string
 
 const (
-	tabSongs                 tab = "songs"
+	tabRecents               tab = "recents"
 	tabPlaylists             tab = "playlists"
 	tabAlbums                tab = "albums"
 	tabSearch                tab = "search"
@@ -164,14 +164,14 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 		imageStyle, imageStyleSet = config.ExplicitImageStyle(cfg.SettingsPath)
 	}
 	imgs := newImgCacheWithSelection(imageStyle, imageStyleSet, os.Getenv)
-	songs := list.New(nil, newSearchResultDelegate(styles, imgs), 40, 20)
-	songs.SetShowTitle(false)
-	songs.SetShowStatusBar(false)
-	songs.SetFilteringEnabled(true)
-	songs.SetShowFilter(true)
-	songs.SetShowHelp(false)
-	songs.FilterInput.Prompt = "Search: "
-	applyListStyles(&songs, styles)
+	recents := list.New(nil, newSearchResultDelegate(styles, imgs), 40, 20)
+	recents.SetShowTitle(false)
+	recents.SetShowStatusBar(false)
+	recents.SetFilteringEnabled(true)
+	recents.SetShowFilter(true)
+	recents.SetShowHelp(false)
+	recents.FilterInput.Prompt = "Search: "
+	applyListStyles(&recents, styles)
 	searchList := list.New(nil, newSearchResultDelegate(styles, imgs), 40, 20)
 	searchList.SetShowTitle(false)
 	searchList.SetShowStatusBar(false)
@@ -204,7 +204,7 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 		browse: browseModel{
 			playlistList:     browser,
 			albumList:        albums,
-			songsList:        songs,
+			recentsList:      recents,
 			playlistsLoading: true,
 			search: searchModel{
 				input: searchInput,
@@ -238,7 +238,7 @@ func selectedImageURLFromList(l list.Model) string {
 	return sel.summary.ImageURL
 }
 
-func selectedSongImageURL(l list.Model) string {
+func selectedRecentImageURL(l list.Model) string {
 	selected, ok := l.SelectedItem().(trackItem)
 	if !ok {
 		return ""

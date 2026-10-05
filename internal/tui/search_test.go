@@ -187,7 +187,7 @@ func TestSearchDownCrossesListPages(t *testing.T) {
 	}
 	m.browse.search.list.SetItems(items)
 	perPage := m.browse.search.list.Paginator.PerPage
-	for i := 0; i < perPage; i++ {
+	for range perPage {
 		next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 		m = next.(model)
 	}

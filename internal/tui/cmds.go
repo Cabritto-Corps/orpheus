@@ -18,15 +18,13 @@ const (
 
 type playlistsMsg struct {
 	items           []spotify.PlaylistSummary
-	savedTracks     []spotify.QueueItem
 	albumsForbidden bool
 	err             error
 }
 
-type songsLibraryMsg struct {
-	recentTracks     []spotify.QueueItem
-	collectionTracks []spotify.QueueItem
-	err              error
+type recentsLibraryMsg struct {
+	recentTracks []spotify.QueueItem
+	err          error
 }
 
 type imageLoadedMsg struct {

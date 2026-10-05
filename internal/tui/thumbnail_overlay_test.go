@@ -28,7 +28,7 @@ func thumbnailModel(t *testing.T, active tab) model {
 		searchResultItem{result: spotify.SearchResultItem{ID: "two", Name: "Two", Kind: "track", ImageURL: "art-two"}},
 	}
 	m.browse.search.list.SetItems(items)
-	m.browse.songsList.SetItems([]list.Item{
+	m.browse.recentsList.SetItems([]list.Item{
 		trackItem{item: spotify.QueueItem{ID: "one", Name: "One", ImageURL: "art-one"}},
 		trackItem{item: spotify.QueueItem{ID: "two", Name: "Two", ImageURL: "art-two"}},
 	})
@@ -52,7 +52,7 @@ func TestRenderedThumbnailsUseGraphicsNotHalfBlocks(t *testing.T) {
 }
 
 func TestThumbnailGeometryAndCleanup(t *testing.T) {
-	for _, active := range []tab{tabSearch, tabSongs} {
+	for _, active := range []tab{tabSearch, tabRecents} {
 		t.Run(string(active), func(t *testing.T) {
 			m := thumbnailModel(t, active)
 			placements := m.thumbnailPlacements()

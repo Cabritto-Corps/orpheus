@@ -33,22 +33,22 @@ func TestSearchShortcutsIgnoreTerminalLockStateModifiers(t *testing.T) {
 	}
 }
 
-func TestSongsFilterMatchesTitleAndArtist(t *testing.T) {
+func TestRecentsFilterMatchesTitleAndArtist(t *testing.T) {
 	for _, query := range []string{"zto", "festa", "guest"} {
 		t.Run(query, func(t *testing.T) {
 			m := NewLoaderModel()
-			m.ui.activeTab = tabSongs
-			m.browse.songsList.SetItems([]list.Item{
+			m.ui.activeTab = tabRecents
+			m.browse.recentsList.SetItems([]list.Item{
 				trackItem{item: spotify.QueueItem{ID: "wanted", Name: "Até A Festa Acabar", Artist: "zTokyo, Guest Singer"}},
 				trackItem{item: spotify.QueueItem{ID: "other", Name: "Another Song", Artist: "Other Artist"}},
 			})
-			m.browse.songsList.SetFilterText(query)
-			visible := m.browse.songsList.VisibleItems()
+			m.browse.recentsList.SetFilterText(query)
+			visible := m.browse.recentsList.VisibleItems()
 			if len(visible) != 1 || visible[0].(trackItem).item.ID != "wanted" {
 				t.Fatalf("query %q did not match title/artist: %#v", query, visible)
 			}
 			// Render too: matches on artist indices must not break title highlighting.
-			if view := m.browse.songsList.View(); !strings.Contains(view, "Guest Singer") {
+			if view := m.browse.recentsList.View(); !strings.Contains(view, "Guest Singer") {
 				t.Fatal("filtered song did not render")
 			}
 		})
