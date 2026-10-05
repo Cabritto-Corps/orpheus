@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -9,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -21,8 +23,10 @@ import (
 type tab string
 
 const (
+	tabRecents               tab = "recents"
 	tabPlaylists             tab = "playlists"
 	tabAlbums                tab = "albums"
+	tabSearch                tab = "search"
 	tabPlayer                tab = "player"
 	coverPreloadWindow           = 20
 	imageLoadRetryMax            = 4
@@ -80,8 +84,35 @@ type trackItem struct {
 	item spotify.QueueItem
 }
 
+type searchResultItem struct {
+	result spotify.SearchResultItem
+}
+
+func (s searchResultItem) Title() string {
+	badge := strings.ToUpper(s.result.Kind)
+	if badge == "TRACK" {
+		badge = "SONG"
+	}
+	return "[" + badge + "] " + s.result.Name
+}
+
+func (s searchResultItem) FilterValue() string { return s.result.Name + " " + s.result.Owner }
+
+func (s searchResultItem) Description() string {
+	if s.result.Kind == "track" {
+		return s.result.Owner
+	}
+	if s.result.Kind == "artist" {
+		if len(s.result.Genres) > 0 {
+			return "artist • " + strings.Join(s.result.Genres[:min(2, len(s.result.Genres))], ", ")
+		}
+		return "artist"
+	}
+	return fmt.Sprintf("%s • %d tracks", s.result.Owner, s.result.TrackCount)
+}
+
 func (t trackItem) Title() string       { return t.item.Name }
-func (t trackItem) FilterValue() string { return t.item.Name }
+func (t trackItem) FilterValue() string { return t.item.Name + " " + t.item.Artist }
 func (t trackItem) Description() string { return t.item.Artist }
 
 // The themed default delegate wrapped in the render cache: rows carry the
@@ -128,7 +159,20 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 	if !imageStyleSet {
 		imageStyle, imageStyleSet = config.ExplicitImageStyle(cfg.SettingsPath)
 	}
-
+	imgs := newImgCacheWithSelection(imageStyle, imageStyleSet, os.Getenv)
+	recents := newBrowseList(styles)
+	searchList := list.New(nil, newCachedPlaylistDelegate(styles), 40, 20)
+	searchList.SetShowTitle(false)
+	searchList.SetShowStatusBar(false)
+	searchList.SetFilteringEnabled(false)
+	searchList.SetShowFilter(false)
+	searchList.SetShowHelp(false)
+	applyListStyles(&searchList, styles)
+	searchInput := textinput.New()
+	searchInput.Prompt = "Search Spotify: "
+	searchInput.Placeholder = "artist, album or track"
+	searchInput.CharLimit = 200
+	searchInput.Blur()
 	m := model{
 		ctx:             ctx,
 		catalog:         catalog,
@@ -149,12 +193,17 @@ func newModel(ctx context.Context, catalog spotify.PlaylistCatalog, cfg config.C
 		browse: browseModel{
 			playlistList:     browser,
 			albumList:        albums,
+			recentsList:      recents,
 			playlistsLoading: true,
+			search: searchModel{
+				input: searchInput,
+				list:  searchList,
+			},
 		},
 		ui: uiModel{
 			activeTab:              tabPlaylists,
 			config:                 cfg,
-			imgs:                   newImgCacheWithSelection(imageStyle, imageStyleSet, os.Getenv),
+			imgs:                   imgs,
 			spinner:                themedSpinner(styles),
 			startupCoverBoostTicks: 40,
 			cover:                  newCoverManager(),
@@ -176,6 +225,14 @@ func selectedImageURLFromList(l list.Model) string {
 		return ""
 	}
 	return sel.summary.ImageURL
+}
+
+func selectedRecentImageURL(l list.Model) string {
+	selected, ok := l.SelectedItem().(trackItem)
+	if !ok {
+		return ""
+	}
+	return selected.item.ImageURL
 }
 
 func normalizeListPagination(l *list.Model) {
@@ -266,6 +323,9 @@ func (m model) Init() tea.Cmd {
 
 func keyMatches(msg tea.KeyPressMsg, b key.Binding) bool {
 	k := msg.Key()
+	// Terminals may attach lock-state modifiers (Caps/Num/Scroll Lock) to
+	// every key event. They are state, not intentional shortcut modifiers.
+	k.Mod &^= tea.ModCapsLock | tea.ModNumLock | tea.ModScrollLock
 	for _, spec := range b.Keys() {
 		if matchKeySpec(k, spec) {
 			return true

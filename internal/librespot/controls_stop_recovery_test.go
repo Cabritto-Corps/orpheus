@@ -137,6 +137,17 @@ func TestUnexpectedStopWhilePausedSurfacesError(t *testing.T) {
 	assertNoPlaybackUpdate(t, ch)
 }
 
+func TestEmitTransportStoppedSnapshotReportsNotPlaying(t *testing.T) {
+	p, ch := newStopRecoveryTestPlayer(t)
+	p.emitTransportStoppedSnapshot()
+	if update := drainPlaybackUpdate(t, ch); update.Playing {
+		t.Fatal("expected recovery snapshot to stop reporting playback before stream work")
+	}
+	if p.state.player.IsPlaying || p.state.player.IsBuffering {
+		t.Fatal("expected recovery to mark the local transport idle")
+	}
+}
+
 func TestUnexpectedStopWithNoPrimaryIsIgnored(t *testing.T) {
 	p, ch := newStopRecoveryTestPlayer(t)
 	p.primaryStream = nil

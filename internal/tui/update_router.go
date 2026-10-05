@@ -12,8 +12,10 @@ import (
 // delivery time, dropping emissions stale since a modal opened.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	nm, cmd := m.update(msg)
-	if mm, ok := nm.(model); ok && mm.ui.imgs != nil {
-		mm.ui.imgs.setOverlaySuppressed(mm.modalKind() != modalNone)
+	if mm, ok := nm.(model); ok {
+		if mm.ui.imgs != nil {
+			mm.ui.imgs.setOverlaySuppressed(mm.modalKind() != modalNone)
+		}
 	}
 	return nm, cmd
 }
@@ -115,8 +117,14 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case playlistsMsg:
 		return m.handlePlaylistsMsg(msg)
+	case recentsLibraryMsg:
+		return m.handleRecentsLibraryMsg(msg)
 	case navDebounceMsg:
 		return m.handleNavDebounceMsg(msg)
+	case searchDebounceMsg:
+		return m.handleSearchDebounceMsg(msg)
+	case searchResultsMsg:
+		return m.handleSearchResultsMsg(msg)
 	case imageLoadedMsg:
 		return m.handleImageLoadedMsg(msg)
 	case imageRetryMsg:
@@ -145,6 +153,13 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.ui.clientIDSetupOpen && m.ui.clientIDEditing {
 			m.ui.clientIDInput += cleanClientIDPaste(msg.Content)
 			m.ui.clientIDNotice = ""
+		}
+		if m.ui.activeTab == tabSearch && m.browse.search.input.Focused() {
+			previous := m.browse.search.input.Value()
+			m.browse.search.input, _ = m.browse.search.input.Update(msg)
+			if query := strings.TrimSpace(m.browse.search.input.Value()); query != previous {
+				return m.setSearchQuery(query)
+			}
 		}
 		return m, nil
 	case tea.KeyReleaseMsg:

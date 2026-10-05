@@ -25,6 +25,7 @@ type keyMap struct {
 	SeekFwd       key.Binding
 	Refresh       key.Binding
 	Filter        key.Binding
+	Search        key.Binding
 	ToggleHelp    key.Binding
 	Select        key.Binding
 	CloseModal    key.Binding
@@ -40,18 +41,21 @@ type keyMap struct {
 
 func newKeys() keyMap {
 	return keyMap{
-		Tab:           key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch tab")),
-		PlayPause:     key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "play/pause")),
-		Next:          key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next")),
-		Prev:          key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "prev")),
-		Shuffle:       key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "shuffle")),
-		Loop:          key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "repeat")),
-		VolUp:         key.NewBinding(key.WithKeys("+", "="), key.WithHelp("+", "vol+")),
-		VolDown:       key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "vol-")),
-		SeekBack:      key.NewBinding(key.WithKeys("left"), key.WithHelp("←", "-5s")),
-		SeekFwd:       key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "+5s")),
-		Refresh:       key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
-		Filter:        key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+		Tab:       key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch tab")),
+		PlayPause: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "play/pause")),
+		Next:      key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next")),
+		Prev:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "prev")),
+		Shuffle:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "shuffle")),
+		Loop:      key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "repeat")),
+		VolUp:     key.NewBinding(key.WithKeys("+", "="), key.WithHelp("+", "vol+")),
+		VolDown:   key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "vol-")),
+		SeekBack:  key.NewBinding(key.WithKeys("left"), key.WithHelp("←", "-5s")),
+		SeekFwd:   key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "+5s")),
+		Refresh:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
+		Filter:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+		// Ctrl+L is swallowed by some terminal emulators as a redraw command;
+		// keep it as an alias but offer Ctrl+F and F3 as reliable alternatives.
+		Search:        key.NewBinding(key.WithKeys("ctrl+f", "ctrl+l", "f3"), key.WithHelp("ctrl+f", "open Search tab")),
 		ToggleHelp:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Select:        key.NewBinding(key.WithKeys("enter", "return"), key.WithHelp("enter", "play")),
 		CloseModal:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close")),
@@ -67,12 +71,12 @@ func newKeys() keyMap {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Tab, k.Select, k.PlayPause, k.Next, k.Prev, k.Shuffle, k.Loop, k.Filter, k.ToggleHelp, k.Settings, k.Quit}
+	return []key.Binding{k.Tab, k.Select, k.PlayPause, k.Next, k.Prev, k.Shuffle, k.Loop, k.Filter, k.Search, k.ToggleHelp, k.Settings, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Tab, k.Select, k.CloseModal, k.Refresh, k.Filter},
+		{k.Tab, k.Select, k.CloseModal, k.Refresh, k.Filter, k.Search},
 		{k.PlayPause, k.Next, k.Prev, k.Shuffle, k.Loop, k.VolUp, k.VolDown},
 		{k.QueueUp, k.QueueDown, k.QueueJump, k.QueueRemove, k.QueueMoveUp, k.QueueMoveDown},
 		{k.SeekBack, k.SeekFwd, k.ToggleHelp, k.Settings, k.Quit},
@@ -103,6 +107,7 @@ var actionRegistry = []actionMeta{
 	{"tab", "Navigation", "switch tab", "switch tab", func(k keyMap) key.Binding { return k.Tab }, func(m *keyMap, keys []string) { m.Tab = overrideBinding(m.Tab, keys) }},
 	{"refresh", "Navigation", "refresh library", "refresh library", func(k keyMap) key.Binding { return k.Refresh }, func(m *keyMap, keys []string) { m.Refresh = overrideBinding(m.Refresh, keys) }},
 	{"filter", "Navigation", "search filter", "search filter", func(k keyMap) key.Binding { return k.Filter }, func(m *keyMap, keys []string) { m.Filter = overrideBinding(m.Filter, keys) }},
+	{"search", "Navigation", "open Search tab", "open Search tab", func(k keyMap) key.Binding { return k.Search }, func(m *keyMap, keys []string) { m.Search = overrideBinding(m.Search, keys) }},
 	{"select", "Navigation", "select / play", "select / play", func(k keyMap) key.Binding { return k.Select }, func(m *keyMap, keys []string) { m.Select = overrideBinding(m.Select, keys) }},
 	{"toggle_help", "Navigation", "toggle help", "toggle help", func(k keyMap) key.Binding { return k.ToggleHelp }, func(m *keyMap, keys []string) { m.ToggleHelp = overrideBinding(m.ToggleHelp, keys) }},
 	{"settings", "Navigation", "open settings", "open settings", func(k keyMap) key.Binding { return k.Settings }, func(m *keyMap, keys []string) { m.Settings = overrideBinding(m.Settings, keys) }},
@@ -193,6 +198,7 @@ func (m model) helpGroupedBody(contentW, availH int) string {
 	}
 
 	// Stacked fallback for narrow terminals.
+	labelWidth = min(labelWidth, max(8, contentW-7))
 	parts := make([]string, 0, len(groups))
 	for _, title := range groups {
 		parts = append(parts, strings.Join(m.helpGroupLines(title, labelWidth, contentW), "\n"))

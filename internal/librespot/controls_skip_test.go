@@ -167,6 +167,33 @@ func newSkipTestPlayer(t *testing.T, pl *player.Player, uris []string) (*AppPlay
 	return p, updates
 }
 
+func TestSeekCurrentContextTrackSelectsLoadedAutoplayItem(t *testing.T) {
+	first := "spotify:track:1111111111111111111111"
+	second := "spotify:track:2222222222222222222222"
+	p, _ := newSkipTestPlayer(t, nil, []string{first, second})
+	p.state.player.ContextUri = "spotify:station:test"
+
+	if !p.seekCurrentContextTrack(context.Background(), p.state.player.ContextUri, "2222222222222222222222") {
+		t.Fatal("expected loaded autoplay item to be selectable without resolving the station again")
+	}
+	if got := p.state.tracks.CurrentTrack().Uri; got != second {
+		t.Fatalf("selected track = %q, want %q", got, second)
+	}
+}
+
+func TestSeekCurrentContextTrackMissLeavesTrackListUsable(t *testing.T) {
+	first := "spotify:track:1111111111111111111111"
+	p, _ := newSkipTestPlayer(t, nil, []string{first})
+	p.state.player.ContextUri = "spotify:station:test"
+
+	if p.seekCurrentContextTrack(context.Background(), p.state.player.ContextUri, "9999999999999999999999") {
+		t.Fatal("unexpectedly found a track outside the active context")
+	}
+	if got := p.state.tracks.CurrentTrack().Uri; got != first {
+		t.Fatalf("failed lookup corrupted current context track: got %q, want %q", got, first)
+	}
+}
+
 func waitClosed(t *testing.T, src *fakeAudioSource) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

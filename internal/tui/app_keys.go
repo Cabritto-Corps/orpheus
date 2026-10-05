@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -28,6 +29,17 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if kind := m.modalKind(); kind != modalNone {
 		return m.routeModalKey(msg, kind)
 	}
+	// Search is a global navigation command: it must work even if a local
+	// list filter is open, where most other global shortcuts are suppressed.
+	if keyMatches(msg, k.Search) {
+		m.ui.activeTab = tabSearch
+		m.resetLibraryFilterOnEntry()
+		focus := m.browse.search.input.Focus()
+		return m, tea.Batch(focus, m.loadSelectedSearchCoverCmd(), m.kittyOverlayCmd())
+	}
+	if m.ui.activeTab == tabSearch && m.browse.search.input.Focused() {
+		return m.handleSearchKey(msg)
+	}
 
 	switch {
 	case keyMatches(msg, k.Quit):
@@ -51,17 +63,28 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if keyMatches(msg, k.Tab) {
 		if !filtering {
+			previousTab := m.ui.activeTab
 			switch m.ui.activeTab {
 			case tabPlaylists:
 				m.ui.activeTab = tabAlbums
 			case tabAlbums:
+				m.ui.activeTab = tabRecents
+			case tabRecents:
+				m.ui.activeTab = tabSearch
+				m.browse.search.input.Focus()
+			case tabSearch:
 				m.ui.activeTab = tabPlayer
 			case tabPlayer:
 				m.ui.activeTab = tabPlaylists
 			}
+			m.resetLibraryFilterOnEntry()
 			m.normalizeLibraryPagination()
+			var recentsCmd tea.Cmd
+			if previousTab != tabRecents && m.ui.activeTab == tabRecents {
+				recentsCmd = m.focusCurrentRecentOnEntry()
+			}
 			m.ui.coverRefreshTick = 0
-			return m, tea.Batch(m.loadVisiblePlaylistCoversCmd(), m.kittyOverlayCmd())
+			return m, tea.Batch(recentsCmd, m.loadVisiblePlaylistCoversCmd(), m.loadSelectedSearchCoverCmd(), m.kittyOverlayCmd())
 		}
 	}
 	if !filtering && m.ui.authLoginURL != "" && !m.ui.authLoginOpen &&
@@ -79,13 +102,85 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.ui.activeTab {
+	case tabRecents:
+		return m.handleRecentsKey(msg)
 	case tabPlaylists:
 		return m.handlePlaylistKey(msg)
 	case tabAlbums:
 		return m.handleAlbumKey(msg)
+	case tabSearch:
+		return m.handleSearchKey(msg)
 	default:
 		return m.handlePlaybackKey(msg)
 	}
+}
+
+func (m *model) resetLibraryFilterOnEntry() {
+	switch m.ui.activeTab {
+	case tabRecents:
+		m.browse.recentsList.ResetFilter()
+	case tabPlaylists:
+		m.browse.playlistList.ResetFilter()
+	case tabAlbums:
+		m.browse.albumList.ResetFilter()
+	}
+	m.browse.filterRestorable = false
+}
+
+func (m model) handleRecentsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	k := m.ui.keys
+	if m.browse.recentsList.FilterState() == list.Filtering {
+		if keyMatches(msg, k.Select) {
+			if selected, ok := m.browse.recentsList.SelectedItem().(trackItem); ok {
+				return m.playRecentSong(selected.item)
+			}
+		}
+	}
+	if keyMatches(msg, k.Select) {
+		if selected, ok := m.browse.recentsList.SelectedItem().(trackItem); ok {
+			return m.playRecentSong(selected.item)
+		}
+	}
+	return m.updateRecentsList(msg)
+}
+
+func (m model) updateRecentsList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	previous := selectedRecentImageURL(m.browse.recentsList)
+	previousID := ""
+	if selected, ok := m.browse.recentsList.SelectedItem().(trackItem); ok {
+		previousID = recentIdentity(selected.item.ID)
+	}
+	previousPage := m.browse.recentsList.Paginator.Page
+	var cmd tea.Cmd
+	if m.browse.recentsList.FilterState() == list.Filtering {
+		cmd = m.updateBrowseList(&m.browse.recentsList, msg)
+	} else {
+		m.browse.recentsList, cmd = m.browse.recentsList.Update(msg)
+	}
+	current := selectedRecentImageURL(m.browse.recentsList)
+	currentID := ""
+	if selected, ok := m.browse.recentsList.SelectedItem().(trackItem); ok {
+		currentID = recentIdentity(selected.item.ID)
+	}
+	if previousID != currentID || previousPage != m.browse.recentsList.Paginator.Page {
+		m.browse.recentsSelectionTouched = true
+	}
+	cmds := []tea.Cmd{cmd, m.scheduleNavDebounceCmd(), m.kittyOverlayCmd()}
+	if current != "" && current != previous {
+		cmds = append(cmds, m.loadImageCmd(current, true))
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) playRecentSong(track spotify.QueueItem) (tea.Model, tea.Cmd) {
+	uri := track.ID
+	if !strings.HasPrefix(uri, "spotify:") {
+		uri = "spotify:track:" + uri
+	}
+	next, cmd := m.playSingleTrack(uri, track.ImageURL)
+	played := next.(model)
+	played.ui.activeTab = tabRecents
+	return played, tea.Batch(cmd, played.kittyOverlayCmd())
 }
 
 // updateBrowseList forwards a key to a browse list and restores the
@@ -120,6 +215,11 @@ func (m *model) updateBrowseList(l *list.Model, msg tea.KeyPressMsg) tea.Cmd {
 func (m model) handlePlaylistKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	if m.browse.playlistList.FilterState() == list.Filtering {
+		if keyMatches(msg, k.Select) {
+			if sel, ok := m.browse.playlistList.SelectedItem().(playlistItem); ok {
+				return m.selectAndPlayPlaylist(sel)
+			}
+		}
 		prevURL := selectedImageURLFromList(m.browse.playlistList)
 		cmd := m.updateBrowseList(&m.browse.playlistList, msg)
 		nextURL := selectedImageURLFromList(m.browse.playlistList)
@@ -164,6 +264,11 @@ func (m model) handlePlaylistKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m model) handleAlbumKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := m.ui.keys
 	if m.browse.albumList.FilterState() == list.Filtering {
+		if keyMatches(msg, k.Select) {
+			if sel, ok := m.browse.albumList.SelectedItem().(playlistItem); ok {
+				return m.selectAndPlayPlaylist(sel)
+			}
+		}
 		prevURL := selectedImageURLFromList(m.browse.albumList)
 		cmd := m.updateBrowseList(&m.browse.albumList, msg)
 		nextURL := selectedImageURLFromList(m.browse.albumList)
@@ -234,6 +339,9 @@ func (m model) routeModalKey(msg tea.KeyPressMsg, kind modalKind) (tea.Model, te
 }
 
 func (m model) isFiltering() bool {
+	if m.ui.activeTab == tabSearch && m.browse.search.input.Focused() {
+		return true
+	}
 	for _, l := range m.filterableLists() {
 		if l.FilterState() == list.Filtering {
 			return true
@@ -308,7 +416,7 @@ func (m *model) handleQueueKey(msg tea.KeyPressMsg) tea.Cmd {
 
 // New filterable surfaces register their list here.
 func (m *model) allFilterLists() []*list.Model {
-	return []*list.Model{&m.browse.playlistList, &m.browse.albumList, &m.ui.trackPopupList}
+	return []*list.Model{&m.browse.recentsList, &m.browse.playlistList, &m.browse.albumList, &m.browse.search.list, &m.ui.trackPopupList}
 }
 
 // Tab-scoping is load-bearing: an inactive tab's filter must not freeze the new tab's keys.
@@ -317,10 +425,14 @@ func (m model) filterableLists() []*list.Model {
 		return []*list.Model{&m.ui.trackPopupList}
 	}
 	switch m.ui.activeTab {
+	case tabRecents:
+		return []*list.Model{&m.browse.recentsList}
 	case tabPlaylists:
 		return []*list.Model{&m.browse.playlistList}
 	case tabAlbums:
 		return []*list.Model{&m.browse.albumList}
+	case tabSearch:
+		return nil
 	}
 	return nil
 }
@@ -514,6 +626,7 @@ func (m model) handleTrackPopupKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 	m.ui.activeTab = tabPlayer
+	m.freezeSessionTrack(m.transport.status)
 	if m.transport.status != nil && m.transport.status.TrackID != "" {
 		m.transport.pendingContextFrom = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
 		m.transport.pendingContextFromAt = time.Now()
@@ -549,6 +662,7 @@ func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 func (m model) selectAndPlayPlaylist(sel playlistItem) (tea.Model, tea.Cmd) {
 	m.ui.activeTab = tabPlayer
 	m.transport.playbackErr = nil
+	m.freezeSessionTrack(m.transport.status)
 	if m.transport.status != nil {
 		m.transport.pendingContextFrom = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
 		m.transport.pendingContextFromAt = time.Now()

@@ -13,8 +13,11 @@ import (
 )
 
 type fakeCatalog struct {
-	playlists func(offset, limit int) (*spotify.PlaylistPage, error)
-	albums    func(offset, limit int) (*spotify.PlaylistPage, error)
+	playlists     func(offset, limit int) (*spotify.PlaylistPage, error)
+	albums        func(offset, limit int) (*spotify.PlaylistPage, error)
+	playlistItems func(id string, offset, limit int) (*spotify.PlaylistItemsPage, error)
+	albumItems    func(id string, offset, limit int) (*spotify.PlaylistItemsPage, error)
+	recent        func(limit int) ([]spotify.QueueItem, error)
 }
 
 func (f fakeCatalog) ListUserPlaylistsPage(_ context.Context, offset, limit int) (*spotify.PlaylistPage, error) {
@@ -25,16 +28,68 @@ func (f fakeCatalog) ListSavedAlbumsPage(_ context.Context, offset, limit int) (
 	return f.albums(offset, limit)
 }
 
-func (f fakeCatalog) ListPlaylistItemsPage(_ context.Context, _ string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
+func (f fakeCatalog) ListSavedTracksPage(_ context.Context, offset, limit int) (*spotify.PlaylistItemsPage, error) {
 	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 }
 
-func (f fakeCatalog) ListAlbumTracksPage(_ context.Context, _ string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
+func (f fakeCatalog) ListRecentlyPlayedTracks(_ context.Context, limit int) ([]spotify.QueueItem, error) {
+	if f.recent != nil {
+		return f.recent(limit)
+	}
+	return nil, nil
+}
+
+func TestSavedTracksExcludedFromRecents(t *testing.T) {
+	catalog := fakeCatalog{
+		playlists: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset}, nil
+		},
+		albums: func(offset, limit int) (*spotify.PlaylistPage, error) {
+			return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset}, nil
+		},
+		recent: func(limit int) ([]spotify.QueueItem, error) {
+			return []spotify.QueueItem{{ID: "recent-id", Name: "Recent Song", Artist: "Artist", ImageURL: "recent-art"}}, nil
+		},
+	}
+	m := newModel(context.Background(), catalog, config.Config{DeviceName: "orpheus"}, nil, nil, nil)
+	msg := m.loadPlaylistsCmd()().(playlistsMsg)
+	next, _ := m.handlePlaylistsMsg(msg)
+	got := next.(model)
+	rmsg := got.loadRecentsLibraryCmd()().(recentsLibraryMsg)
+	next, _ = got.handleRecentsLibraryMsg(rmsg)
+	got = next.(model)
+	if len(got.browse.recentsList.Items()) != 1 || got.browse.recentsList.Items()[0].(trackItem).item.ID != "recent-id" {
+		t.Fatalf("Recents must hold recent plays only: %#v", got.browse.recentsList.Items())
+	}
+	if len(got.browse.playlistList.Items()) == 0 {
+		t.Fatal("Liked Songs disappeared from Playlists")
+	}
+	liked, ok := got.browse.playlistList.Items()[0].(playlistItem)
+	if !ok || liked.summary.Kind != spotify.ContextKindLikedSongs {
+		t.Fatalf("first playlist item is not Liked Songs: %#v", got.browse.playlistList.Items()[0])
+	}
+}
+
+func (f fakeCatalog) ListPlaylistItemsPage(_ context.Context, id string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
+	if f.playlistItems != nil {
+		return f.playlistItems(id, offset, limit)
+	}
+	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+}
+
+func (f fakeCatalog) ListAlbumTracksPage(_ context.Context, id string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
+	if f.albumItems != nil {
+		return f.albumItems(id, offset, limit)
+	}
 	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 }
 
 func (f fakeCatalog) ResolveContextImageURL(_ context.Context, _ string, _ string) (string, error) {
 	return "", nil
+}
+
+func (f fakeCatalog) SearchPage(_ context.Context, _ string, offset, limit int) (*spotify.SearchPage, error) {
+	return &spotify.SearchPage{Offset: offset, Limit: limit, NextOffset: offset + limit}, nil
 }
 
 func TestInitBootstrapsLibraryLoad(t *testing.T) {

@@ -559,6 +559,7 @@ keys_json_template() {
   "tab": ["tab"],
   "refresh": ["r"],
   "filter": ["/"],
+  "search": ["ctrl+f", "ctrl+l", "f3"],
   "select": ["enter", "return"],
   "toggle_help": ["?"],
   "settings": ["o"],
@@ -585,7 +586,7 @@ env_template() {
 # SPOTIFY_CLIENT_ID=PASTE_YOUR_CLIENT_ID_HERE
 #
 # spotify_redirect_uri=http://127.0.0.1:8989/callback
-# spotify_scopes=streaming,user-read-playback-state,user-modify-playback-state,user-read-currently-playing,playlist-read-private,playlist-read-collaborative,user-library-read
+# spotify_scopes=streaming,user-read-playback-state,user-modify-playback-state,user-read-currently-playing,user-read-recently-played,playlist-read-private,playlist-read-collaborative,user-library-read
 # spotify_device_name=orpheus
 #
 # These usually stay unset because config.json manages them in the UI:

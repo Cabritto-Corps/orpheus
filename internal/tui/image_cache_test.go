@@ -334,10 +334,16 @@ func TestHandleImageLoadedMsgSchedulesRetryOnError(t *testing.T) {
 
 func TestHandleImageLoadedMsgForCurrentPlayerCoverForcesKittyRedraw(t *testing.T) {
 	m := NewLoaderModel()
+	m.ui.width = 120
+	m.ui.height = 40
+	m.browse.librarySettled = true
 	m.ui.activeTab = tabPlayer
 	m.ui.imgs.protocol = imageProtocolKitty
 	m.transport.status = &spotify.PlaybackStatus{AlbumImageURL: "u1"}
-	intent := overlayIntent{tab: tabPlayer, url: "u1"}
+	m.transport.status.TrackID = "track-1"
+	m.ui.imgs.encoded["u1"] = "ZmFrZQ=="
+	layout := m.bodyLayout()
+	intent := overlayIntent{art: m.coverArt(layout.coverCols, layout.coverRows), tab: tabPlayer, subject: "track-1", url: "u1"}
 	if emit, _, _ := m.ui.imgs.commitOverlayIntent(intent); !emit {
 		t.Fatal("expected initial overlay commit to emit")
 	}
@@ -355,12 +361,13 @@ func TestHandleImageLoadedMsgForCurrentPlayerCoverForcesKittyRedraw(t *testing.T
 	if !ok {
 		t.Fatalf("expected tea.RawMsg, got %T", cmd())
 	}
-	if !strings.Contains(fmt.Sprint(msg.Msg), "d=i") {
+	if !strings.Contains(fmt.Sprint(msg.Msg), "a=T") {
 		t.Fatalf("expected the overlay command to carry the redraw, got %q", fmt.Sprint(msg.Msg))
 	}
-	// The load forces retransmission so the new encoding reaches the terminal.
-	if emit, _, _ := got.ui.imgs.commitOverlayIntent(intent); !emit {
-		t.Fatal("expected successful current player cover load to force kitty redraw")
+	// The immediate command consumed the forced redraw; an identical intent
+	// stays quiet on the next render.
+	if emit, _, _ := got.ui.imgs.commitOverlayIntent(intent); emit {
+		t.Fatal("expected immediate redraw to suppress a duplicate render")
 	}
 }
 
@@ -746,7 +753,7 @@ func TestKittyOverlayStaysSilentWhenUnchanged(t *testing.T) {
 	}
 }
 
-func TestKittyOverlayDeletesOnceWhenImageDisappears(t *testing.T) {
+func TestKittyOverlayKeepsDeletingWhenImageDisappears(t *testing.T) {
 	m := NewLoaderModel()
 	m.ui.width = 120
 	m.ui.height = 40
@@ -762,10 +769,10 @@ func TestKittyOverlayDeletesOnceWhenImageDisappears(t *testing.T) {
 
 	overlay := m.kittyOverlay()
 	if !strings.Contains(overlay, "a=d,d=i") {
-		t.Fatal("expected delete-all when image disappears")
+		t.Fatal("expected the preview placement to be hidden when image disappears")
 	}
-	if again := m.kittyOverlay(); again != "" {
-		t.Fatalf("expected repeated empty state to avoid repeated delete, got %q", again)
+	if again := m.kittyOverlay(); !strings.Contains(again, "a=d,d=i") {
+		t.Fatalf("expected empty preview to keep self-healing, got %q", again)
 	}
 }
 

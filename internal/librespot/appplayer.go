@@ -75,6 +75,11 @@ type AppPlayer struct {
 	primaryStream   *player.Stream
 	secondaryStream *player.Stream
 
+	// autoplaySourceContextURI remembers the playlist/track context that
+	// produced a Spotify autoplay station so subsequent station rollovers can
+	// request more recommendations from the same source.
+	autoplaySourceContextURI string
+
 	prefetchTimer       *time.Timer
 	shuffleRefreshTimer *time.Timer
 	connectStateTimer   *time.Timer

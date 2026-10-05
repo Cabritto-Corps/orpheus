@@ -22,6 +22,26 @@ Deleting one of them just resets that part:
 - delete `token.json` → run `orpheus auth login` again for library browsing
 - delete `theme.json` / `keys.json` → back to the default theme and default keys
 
+## Key bindings (`keys.json`)
+
+Every action can be rebound in **Settings → Keybinds** (`o`), or by editing `keys.json`. Keys are arrays so an action may have aliases. Search's default is `ctrl+f`, with `ctrl+l` and `f3` as additional shortcuts; some terminals reserve `ctrl+l` to redraw the screen. `/` remains the local filter for the current list.
+
+```json
+{
+  "search": ["ctrl+f", "ctrl+l", "f3"],
+  "filter": ["/"]
+}
+```
+
+The file only needs to contain the actions you want to override. Key names are case-sensitive lowercase names such as `ctrl+f`, `f3`, `tab`, `up`, or a printable character. Search opens the Spotify Search tab; the local filter stays scoped to the current Recents, Playlists, or Albums tab.
+
+Recents combines up to 100 unique tracks: the current track, this session's
+plays, then Spotify recent plays, in that order.
+The Recents filter matches titles and all listed artists. Including playback/recent tracks
+does not save them to your Spotify library. Recent plays need the
+`user-read-recently-played` scope; after adding that scope, run `orpheus auth login`
+again to grant it to the existing token.
+
 ## The `.env` loading order
 
 Only one `.env` is read, in this order:
@@ -63,6 +83,10 @@ Settings > Images selects `rendered` or `pixelated`:
 - `rendered`: use kitty graphics when the terminal supports the kitty protocol. On other terminals, the existing half-block fallback still applies.
 - `pixelated`: always use half-block ANSI art, even on a terminal where kitty graphics would work.
 
+This selection applies to both the large preview and list thumbnails in Search
+and Recents. For non-pixelated thumbnails, use `rendered` in a Kitty-compatible
+terminal (such as Kitty or Ghostty). ANSI fallback has limited cell resolution.
+
 Inside tmux, kitty graphics additionally need `set -g allow-passthrough on` in `~/.tmux.conf` (tmux 3.3+ defaults it off): without it the multiplexer swallows the image sequences and covers stay blank. orpheus wraps its graphics for tmux passthrough automatically when `$TMUX` is set.
 
 An explicit `config.json` choice wins over `ORPHEUS_IMAGE_PROTOCOL`. If `config.json` leaves `images.style` unset, the environment controls startup: `kitty`, `ansi`, or `none`.
@@ -75,7 +99,7 @@ An explicit `config.json` choice wins over `ORPHEUS_IMAGE_PROTOCOL`. If `config.
 | --- | --- | --- |
 | `SPOTIFY_CLIENT_ID` | *(required)* | your app's client id from the [developer dashboard](https://developer.spotify.com/dashboard/) |
 | `spotify_redirect_uri` | `http://127.0.0.1:8989/callback` | must match your dashboard redirect |
-| `spotify_scopes` | the set orpheus needs | comma separated scope list |
+| `spotify_scopes` | `streaming,user-read-playback-state,user-modify-playback-state,user-read-currently-playing,user-read-recently-played,playlist-read-private,playlist-read-collaborative,user-library-read` | comma separated scope list |
 | `spotify_device_name` | `orpheus` | how the player shows up in Spotify's device picker |
 
 ### Player

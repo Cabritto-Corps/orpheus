@@ -203,6 +203,139 @@ func (m model) albumsTabView() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 }
 
+func (m model) searchTabView() string {
+	layout := m.bodyLayout()
+	if m.ui.width < 64 {
+		return lipgloss.NewStyle().Width(m.ui.width).MaxHeight(layout.bodyH).Render(m.searchBrowserPanel(m.ui.width, layout.bodyH))
+	}
+	left := m.searchPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
+	divider := m.styles.verticalDivider(layout.bodyH)
+	right := m.searchBrowserPanel(layout.rightW, layout.bodyH)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
+}
+
+func (m model) recentsTabView() string {
+	layout := m.bodyLayout()
+	if m.ui.width < 64 {
+		w := m.ui.width
+		label := m.styles.styleSectionLabel.Render("Recents")
+		count := m.recentsCountLabel()
+		return lipgloss.NewStyle().Width(w).MaxHeight(layout.bodyH).Render(label + "\n" + count + "\n" + m.styles.sectionDivider(w-1) + "\n" + m.browse.recentsList.View())
+	}
+	left := m.recentsPreviewPanel(layout.leftW-1, layout.bodyH, layout.coverCols, layout.coverRows)
+	divider := m.styles.verticalDivider(layout.bodyH)
+	w := layout.rightW
+	label := m.styles.styleSectionLabel.Render("Recents")
+	count := m.recentsCountLabel()
+	inner := m.browse.recentsList.View()
+	if len(m.browse.recentsList.Items()) == 0 {
+		inner = m.styles.styleDimmed.Render("No recent tracks")
+	}
+	if m.browse.recentsLoadErr != nil && !m.browse.recentsLoading {
+		inner += "\n" + m.styles.styleDimmed.Render("Some Spotify sources could not be loaded; re-run 'orpheus auth login' to refresh permissions")
+	}
+	right := lipgloss.NewStyle().Width(w).MaxHeight(layout.bodyH).Render(label + "\n" + count + "\n" + m.styles.sectionDivider(w-1) + "\n" + inner)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
+}
+
+func (m model) recentsCountLabel() string {
+	count := len(m.browse.recentsList.Items())
+	label := fmt.Sprintf("%d recent tracks", count)
+	if count == maxRecentsTracks {
+		label += " (max 100)"
+	}
+	if m.browse.recentsLoading {
+		label += " • loading recent tracks…"
+	} else if m.browse.recentsLoadErr != nil {
+		label += " • some sources unavailable"
+	}
+	return m.styles.styleDimmed.Render(label)
+}
+
+func (m model) recentsPreviewPanel(w, h, coverCols, coverRows int) string {
+	label := m.styles.styleSectionLabel.Render("Preview")
+	content := label + "\n" + m.styles.sectionDivider(w)
+	selected, ok := m.browse.recentsList.SelectedItem().(trackItem)
+	if !ok {
+		content += "\n" + m.placeholderArt(coverCols, coverRows) + "\n" + m.styles.styleDimmed.Render("your recent tracks")
+	} else {
+		cover := m.placeholderArt(coverCols, coverRows)
+		if selected.item.ImageURL != "" {
+			cover = m.coverOrPlaceholder(selected.item.ImageURL, coverCols, coverRows)
+		}
+		content += "\n" + cover + "\n" +
+			m.styles.stylePlaylistName.Render(truncate(selected.item.Name, max(1, w-2))) + "\n" +
+			m.styles.stylePlaylistOwner.Render(truncate(selected.item.Artist, max(1, w-2)))
+		if album := strings.TrimSpace(selected.item.Album); album != "" {
+			content += "\n" + m.styles.stylePlaylistOwner.Render(truncate(album, max(1, w-2)))
+		}
+	}
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
+}
+
+func (m model) searchBrowserPanel(w, h int) string {
+	s := m.browse.search
+	label := m.styles.styleSectionLabel.Render("Search")
+	status := "type at least 2 characters"
+	switch {
+	case s.loading && len(s.list.Items()) > 0:
+		status = "loading more…"
+	case s.err != nil:
+		status = "search failed — press r to retry"
+	case len(s.list.Items()) > 0 && s.hasMore:
+		status = fmt.Sprintf("%d+ results", len(s.list.Items()))
+	case len(s.list.Items()) > 0:
+		status = fmt.Sprintf("%d results", len(s.list.Items()))
+	case s.query != "" && !s.loading:
+		status = "no results"
+	}
+	status = truncate(status, max(1, w-2))
+	labelLine := label + "\n" + m.styles.styleDimmed.Render(status) + "\n" + m.styles.sectionDivider(w-1)
+	inputLine := s.input.View()
+	var inner string
+	switch {
+	case s.err != nil && len(s.list.Items()) == 0:
+		inner = m.styles.styleError.Render(truncate(s.err.Error(), w-2))
+	case len(s.list.Items()) == 0 && s.query == "":
+		inner = ""
+	case len(s.list.Items()) == 0 && !s.loading:
+		inner = m.styles.styleDimmed.Render("No results for this search")
+	case s.loading && len(s.list.Items()) == 0:
+		inner = m.styles.styleDimmed.Render(m.ui.spinner.View() + " searching Spotify...")
+	default:
+		inner = s.list.View()
+	}
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(labelLine + "\n" + inputLine + "\n\n" + inner)
+}
+
+func (m model) searchPreviewPanel(w, h, coverCols, coverRows int) string {
+	labelLine := m.styles.styleSectionLabel.Render("Preview") + "\n" + m.styles.sectionDivider(w)
+	cover := m.placeholderArt(coverCols, coverRows)
+	content := labelLine + "\n" + cover
+	if selected, ok := m.browse.search.list.SelectedItem().(searchResultItem); ok {
+		if selected.result.ImageURL != "" {
+			cover = m.coverOrPlaceholder(selected.result.ImageURL, coverCols, coverRows)
+		}
+		lines := []string{labelLine, cover,
+			m.styles.stylePlaylistName.Render(truncate(selected.result.Name, max(1, w-2)))}
+		sub := strings.TrimSpace(selected.result.Owner)
+		if selected.result.Kind == "album" && selected.result.TrackCount > 0 {
+			sub += fmt.Sprintf(" • %d tracks", selected.result.TrackCount)
+		}
+		if selected.result.Kind == "artist" {
+			sub = strings.Join(selected.result.Genres, ", ")
+		}
+		if sub != "" {
+			lines = append(lines, m.styles.stylePlaylistOwner.Render(truncate(sub, max(1, w-2))))
+		}
+		if album := strings.TrimSpace(selected.result.AlbumName); selected.result.Kind == "track" && album != "" {
+			lines = append(lines, m.styles.stylePlaylistOwner.Render(truncate(album, max(1, w-2))))
+		}
+		content = lipgloss.JoinVertical(lipgloss.Left, lines...)
+	}
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
+}
+
 func (m model) albumBrowserPanel(w, h int) string {
 	count := len(m.browse.albumList.Items())
 	label := m.styles.styleSectionLabel.Render("Albums")

@@ -45,7 +45,7 @@ func LoadFromEnv() (Config, error) {
 	cfg := Config{
 		SpotifyClientID:   envAny("spotify_client_id", "SPOTIFY_CLIENT_ID"),
 		RedirectURI:       envDefault("spotify_redirect_uri", "http://127.0.0.1:8989/callback"),
-		Scopes:            splitCSV(envDefault("spotify_scopes", "streaming,user-read-playback-state,user-modify-playback-state,user-read-currently-playing,playlist-read-private,playlist-read-collaborative,user-library-read")),
+		Scopes:            splitCSV(envDefault("spotify_scopes", "streaming,user-read-playback-state,user-modify-playback-state,user-read-currently-playing,user-read-recently-played,playlist-read-private,playlist-read-collaborative,user-library-read")),
 		DeviceName:        envDefault("spotify_device_name", "orpheus"),
 		TokenPath:         envDefault("orpheus_token_path", defaultTokenPath()),
 		SettingsPath:      envDefault("orpheus_config_file", defaultSettingsPath()),

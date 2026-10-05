@@ -103,7 +103,7 @@ func newCachedPlaylistDelegate(s *themeStyles) cachedDelegate {
 // trackRow right-aligns the duration at the row edge (the default delegate
 // leaves the right half empty). Filtering falls back to the framework
 // renderer, so no duration shows while filtering.
-func (d cachedDelegate) trackRow(m list.Model, index int, item trackItem) (string, bool) {
+func (d cachedDelegate) trackRow(m list.Model, index int, name, artist string, durMS int) (string, bool) {
 	if m.Width() <= 0 {
 		return "", false
 	}
@@ -114,19 +114,19 @@ func (d cachedDelegate) trackRow(m list.Model, index int, item trackItem) (strin
 		return "", false
 	}
 	dur := ""
-	if item.item.DurationMS > 0 {
-		dur = fmtDuration(item.item.DurationMS)
+	if durMS > 0 {
+		dur = fmtDuration(durMS)
 	}
 	avail := m.Width() - 2
 	nameW := max(4, avail-lipgloss.Width(dur)-2)
-	line := padCell(truncate(item.item.Name, nameW), nameW) + dur
+	line := padCell(truncate(name, nameW), nameW) + dur
 	key := delegateKey{
 		width:    m.Width(),
 		height:   d.Height(),
 		selected: index == m.Index(),
 		filter:   m.FilterValue(),
 		filtered: m.FilterState() == list.FilterApplied,
-		text:     item.item.Name + "\x00" + item.item.Artist + "\x00" + dur,
+		text:     name + "\x00" + artist + "\x00" + dur,
 	}
 	if s, hit := d.cache.get(key); hit {
 		return s, true
@@ -134,10 +134,10 @@ func (d cachedDelegate) trackRow(m list.Model, index int, item trackItem) (strin
 	var out string
 	if index == m.Index() {
 		out = d.Styles.SelectedTitle.Render(line) + "\n" +
-			d.Styles.SelectedDesc.Render(item.item.Artist)
+			d.Styles.SelectedDesc.Render(artist)
 	} else {
 		out = d.Styles.NormalTitle.Render(line) + "\n" +
-			d.Styles.NormalDesc.Render(item.item.Artist)
+			d.Styles.NormalDesc.Render(artist)
 	}
 	d.cache.put(key, out)
 	return out, true
@@ -177,7 +177,13 @@ func (d cachedDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	pi, ok := item.(playlistItem)
 	if !ok {
 		if ti, isTrack := item.(trackItem); isTrack {
-			if line, ok := d.trackRow(m, index, ti); ok {
+			if line, ok := d.trackRow(m, index, ti.item.Name, ti.item.Artist, ti.item.DurationMS); ok {
+				fmt.Fprint(w, line)
+				return
+			}
+		}
+		if si, isResult := item.(searchResultItem); isResult && si.result.Kind == "track" {
+			if line, ok := d.trackRow(m, index, si.result.Name, si.result.Owner, si.result.DurationMS); ok {
 				fmt.Fprint(w, line)
 				return
 			}
