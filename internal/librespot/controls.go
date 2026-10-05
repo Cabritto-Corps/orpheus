@@ -1398,7 +1398,7 @@ func resolveAutoplayContextWithRetry(
 			return spotCtx, nil
 		}
 		if err == nil {
-			err = errors.New("Spotify returned an empty autoplay context URI")
+			err = errors.New("spotify returned an empty autoplay context URI")
 		}
 		delay := time.Duration(min(attempt, 6)) * autoplayResolveRetryDelay
 		if waitErr := wait(ctx, delay); waitErr != nil {
