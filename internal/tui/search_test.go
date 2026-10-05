@@ -164,6 +164,28 @@ func TestSearchPanelStatusAndSingleSpinner(t *testing.T) {
 	}
 }
 
+func TestSearchEnterOnArtistStartsStation(t *testing.T) {
+	m := NewLoaderModel()
+	m.ui.activeTab = tabSearch
+	m.tuiCmdCh = make(chan librespot.TUICommand, 2)
+	m.browse.search.list.SetItems([]list.Item{
+		searchResultItem{result: spotify.SearchResultItem{ID: "artist-id", URI: "spotify:artist:artist-id", Kind: "artist", Name: "Artist"}},
+	})
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(model)
+	if m.ui.activeTab != tabPlayer {
+		t.Fatalf("artist station did not open Player: %q", m.ui.activeTab)
+	}
+	select {
+	case command := <-m.tuiCmdCh:
+		if command.Kind != librespot.TUICommandPlayStation || command.URI != "spotify:artist:artist-id" {
+			t.Fatalf("wrong station command: %#v", command)
+		}
+	default:
+		t.Fatal("artist Enter sent no station command")
+	}
+}
+
 func TestSearchInputQueryDebouncesAndClearsShortQueries(t *testing.T) {
 	m := NewLoaderModel()
 	m.ui.activeTab = tabSearch

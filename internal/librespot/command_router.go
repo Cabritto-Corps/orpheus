@@ -8,6 +8,7 @@ import (
 	golibrespot "github.com/elxgy/go-librespot"
 	"github.com/elxgy/go-librespot/player"
 	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
+	playerpb "github.com/elxgy/go-librespot/proto/spotify/player"
 	"github.com/elxgy/go-librespot/tracks"
 
 	"orpheus/internal/playbackdomain"
@@ -28,6 +29,23 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 			FeatureVersion:    golibrespot.VersionNumberString(),
 		}
 		return true, p.loadContext(ctx, spotCtx, nil, false, true)
+	case TUICommandPlayStation:
+		stationCtx, err := resolveAutoplayContextWithRetry(ctx, func(resolveCtx context.Context) (*connectpb.Context, error) {
+			return p.sess.Spclient().ContextResolveAutoplay(resolveCtx, &playerpb.AutoplayContextRequest{
+				ContextUri: new(cmd.URI),
+			})
+		}, waitAutoplayResolveRetry)
+		if err != nil {
+			return true, fmt.Errorf("failed resolving station for %s: %w", cmd.URI, err)
+		}
+		p.state.setActive(true)
+		golibrespot.SetPaused(p.state.player, false)
+		p.state.player.Suppressions = &connectpb.Suppressions{}
+		p.state.player.PlayOrigin = &connectpb.PlayOrigin{
+			FeatureIdentifier: "go-librespot",
+			FeatureVersion:    golibrespot.VersionNumberString(),
+		}
+		return true, p.loadAutoplayContext(ctx, stationCtx, true)
 	case TUICommandPlayContextFromTrack:
 		targetID := golibrespot.NormalizeSpotifyId(cmd.TrackID)
 		if targetID == "" {

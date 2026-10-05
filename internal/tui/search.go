@@ -186,10 +186,7 @@ func (m model) loadMoreSearchIfNeeded() (model, tea.Cmd) {
 
 func (m model) selectSearchResult(result spotify.SearchResultItem) (tea.Model, tea.Cmd) {
 	if result.Kind == "artist" {
-		return m.selectAndPlayPlaylist(playlistItem{summary: spotify.PlaylistSummary{
-			ID: result.ID, Name: result.Name, URI: result.URI,
-			Kind: spotify.ContextKindPlaylist, ImageURL: result.ImageURL,
-		}})
+		return m.playArtistStation(result)
 	}
 	if result.Kind == "album" {
 		return m.selectAndPlayPlaylist(playlistItem{summary: spotify.PlaylistSummary{
@@ -201,9 +198,31 @@ func (m model) selectSearchResult(result spotify.SearchResultItem) (tea.Model, t
 	next, cmd := m.playSingleTrack(result.URI, result.ImageURL)
 	played := next.(model)
 	// Keep the search results available after playing a song. Arrows browse;
-	// Enter plays another result. Album/artist contexts still open Player.
+	// Enter plays another result. Album contexts and artist stations open Player.
 	played.ui.activeTab = tabSearch
 	return played, tea.Batch(cmd, played.kittyOverlayCmd())
+}
+
+func (m model) playArtistStation(result spotify.SearchResultItem) (tea.Model, tea.Cmd) {
+	m.ui.activeTab = tabPlayer
+	m.transport.playbackErr = nil
+	m.freezeSessionTrack(m.transport.status)
+	if m.transport.status != nil {
+		m.transport.pendingContextFrom = golibrespot.NormalizeSpotifyId(m.transport.status.TrackID)
+		m.transport.pendingContextFromAt = time.Now()
+	}
+	m.transport.queue = nil
+	m.transport.queueHasMore = false
+	m.transport.stableQueueLen = 0
+	if m.transport.status != nil {
+		m.transport.status.ProgressMS = 0
+		m.transport.status.DurationMS = 0
+	}
+	m.transport.interpolationSyncAt = time.Time{}
+	m.transport.interpolationProgressMS = 0
+	m.beginTransportTransition()
+	cmd := librespot.TUICommand{Kind: librespot.TUICommandPlayStation, URI: result.URI}
+	return m, tea.Batch(m.sendTUICommandOrRetry(cmd), m.loadImageCmd(result.ImageURL, true))
 }
 
 func (m model) playSingleTrack(uri, imageURL string) (tea.Model, tea.Cmd) {
