@@ -275,17 +275,15 @@ func (m model) searchBrowserPanel(w, h int) string {
 	label := m.styles.styleSectionLabel.Render("Search")
 	status := "type at least 2 characters"
 	switch {
-	case s.loading && len(s.list.Items()) == 0:
-		status = m.ui.spinner.View() + " searching Spotify..."
-	case s.loading:
-		status = m.ui.spinner.View() + " loading more..."
+	case s.loading && len(s.list.Items()) > 0:
+		status = "loading more…"
 	case s.err != nil:
 		status = "search failed — press r to retry"
 	case len(s.list.Items()) > 0 && s.hasMore:
 		status = fmt.Sprintf("%d+ results", len(s.list.Items()))
 	case len(s.list.Items()) > 0:
 		status = fmt.Sprintf("%d results", len(s.list.Items()))
-	case s.query != "":
+	case s.query != "" && !s.loading:
 		status = "no results"
 	}
 	status = truncate(status, max(1, w-2))
@@ -296,7 +294,7 @@ func (m model) searchBrowserPanel(w, h int) string {
 	case s.err != nil && len(s.list.Items()) == 0:
 		inner = m.styles.styleError.Render(truncate(s.err.Error(), w-2))
 	case len(s.list.Items()) == 0 && s.query == "":
-		inner = m.styles.styleDimmed.Render("Type to search songs, albums and artists • ↑/↓ browse • Enter plays")
+		inner = ""
 	case len(s.list.Items()) == 0 && !s.loading:
 		inner = m.styles.styleDimmed.Render("No results for this search")
 	case s.loading && len(s.list.Items()) == 0:
@@ -308,30 +306,12 @@ func (m model) searchBrowserPanel(w, h int) string {
 }
 
 func (m model) searchPreviewPanel(w, h, coverCols, coverRows int) string {
-	label := m.styles.styleSectionLabel.Render("Preview")
-	labelLine := label + "\n" + m.styles.sectionDivider(w)
-	innerW := w - 2
-	selected, ok := m.browse.search.list.SelectedItem().(searchResultItem)
-	if !ok {
-		return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(labelLine + "\n" + m.placeholderArt(coverCols, coverRows) + "\n" + m.styles.styleDimmed.Render("search Spotify to preview art"))
-	}
+	labelLine := m.styles.styleSectionLabel.Render("Preview") + "\n" + m.styles.sectionDivider(w)
 	cover := m.placeholderArt(coverCols, coverRows)
-	if selected.result.ImageURL != "" {
+	if selected, ok := m.browse.search.list.SelectedItem().(searchResultItem); ok && selected.result.ImageURL != "" {
 		cover = m.coverOrPlaceholder(selected.result.ImageURL, coverCols, coverRows)
 	}
-	kind := selected.result.Kind
-	meta := selected.result.Owner
-	if selected.result.Kind == "album" {
-		meta += fmt.Sprintf(" • %d tracks", selected.result.TrackCount)
-	} else if selected.result.Kind == "artist" {
-		meta = strings.Join(selected.result.Genres, ", ")
-	} else if selected.result.AlbumName != "" {
-		meta += " • " + selected.result.AlbumName
-	}
-	content := labelLine + "\n" + cover + "\n" +
-		m.styles.stylePlaylistName.Render(truncate(selected.result.Name, innerW)) + "\n" +
-		m.styles.stylePlaylistOwner.Render(truncate(kind+" • "+meta, innerW))
-	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(content)
+	return lipgloss.NewStyle().Width(w).MaxHeight(h).Render(labelLine + "\n" + cover)
 }
 
 func (m model) albumBrowserPanel(w, h int) string {

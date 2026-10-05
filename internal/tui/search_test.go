@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"charm.land/bubbles/v2/list"
@@ -93,6 +94,40 @@ func TestSearchPaginationLoadsNearEnd(t *testing.T) {
 	next, cmd := m.loadMoreSearchIfNeeded()
 	if cmd == nil || !next.browse.search.loading {
 		t.Fatal("expected another page to load near the end of the results")
+	}
+}
+
+func TestSearchPanelStatusAndSingleSpinner(t *testing.T) {
+	m := NewLoaderModel()
+	m.ui.width, m.ui.height = 120, 40
+	m.ui.activeTab = tabSearch
+
+	panel := m.searchBrowserPanel(60, 20)
+	if strings.Contains(panel, "Type to search") {
+		t.Fatalf("empty search must not show hint text: %q", panel)
+	}
+	if !strings.Contains(panel, "type at least 2 characters") {
+		t.Fatalf("empty search must keep the short-query indicator: %q", panel)
+	}
+
+	m.browse.search.query = "ab"
+	m.browse.search.loading = true
+	panel = m.searchBrowserPanel(60, 20)
+	if !strings.Contains(panel, "type at least 2 characters") {
+		t.Fatalf("loading must not replace the indicator with a spinner: %q", panel)
+	}
+	if got := strings.Count(panel, m.ui.spinner.View()); got != 1 {
+		t.Fatalf("loading search must show exactly one spinner, got %d: %q", got, panel)
+	}
+
+	m.browse.search.loading = false
+	m.browse.search.list.SetItems([]list.Item{
+		searchResultItem{result: spotify.SearchResultItem{ID: "one", Kind: "track", Name: "One"}},
+		searchResultItem{result: spotify.SearchResultItem{ID: "two", Kind: "track", Name: "Two"}},
+	})
+	panel = m.searchBrowserPanel(60, 20)
+	if !strings.Contains(panel, "2 results") {
+		t.Fatalf("loaded search must show the result count: %q", panel)
 	}
 }
 
