@@ -8,6 +8,7 @@ const (
 	trackTransitionTimeout   = 30 * time.Second
 	prefetchJobTimeout       = 30 * time.Second
 	metadataBatchTimeout     = 15 * time.Second
+	metadataSweepTimeout     = 2 * time.Minute
 	queueMetaRetryBudget     = 2
 	stateAdapterBatchTimeout = 8 * time.Second
 	queueTopUpTimeout        = 3 * time.Second

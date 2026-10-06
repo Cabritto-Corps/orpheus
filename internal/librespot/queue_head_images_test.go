@@ -95,7 +95,7 @@ func TestResolveContextQueueMetadataIncludesHeadURIs(t *testing.T) {
 		testProvidedTrack(uriA, "Track A", "Artist A"),
 		testProvidedTrack(uriB, "Track B", "Artist B"),
 	}
-	p.resolveContextQueueMetadata(context.Background(), all, []string{uriA, uriB})
+	p.resolveContextQueueMetadata(context.Background(), all, []string{uriA, uriB}, "")
 
 	for _, u := range []string{uriA, uriB} {
 		found := slices.Contains(requested, u)
@@ -568,18 +568,107 @@ func TestQueueMetaRetrySpendsBudgetThenStops(t *testing.T) {
 		t.Fatal("failed batches must not clear the pending flag")
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for fetches.Load() != 2 && time.Now().Before(deadline) {
+	for fetches.Load() != 3 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if fetches.Load() != 2 {
-		t.Fatalf("scheduled retry did not run, fetches=%d", fetches.Load())
+	if fetches.Load() != 3 {
+		t.Fatalf("chained retry did not run, fetches=%d", fetches.Load())
 	}
 	time.Sleep(100 * time.Millisecond)
 	if left := p.queueMetaRetriesLeft.Load(); left != 0 {
 		t.Fatalf("second failure must drain the budget, left=%d", left)
 	}
-	if n := fetches.Load(); n != 2 {
+	if n := fetches.Load(); n != 3 {
 		t.Fatalf("exhausted budget must stop retrying, fetches=%d", n)
+	}
+}
+
+func TestResolveContextQueueMetadataOrdersUpcomingFirst(t *testing.T) {
+	p := newTestAppPlayer()
+	p.resetQueueMetaForContext()
+
+	var requested []string
+	p.metaBatchFetch = func(ctx context.Context, uris []string) (map[string]spclient.ResolvedEntry, error) {
+		requested = append(requested, uris...)
+		out := make(map[string]spclient.ResolvedEntry, len(uris))
+		for _, u := range uris {
+			out[u] = spclient.ResolvedEntry{Name: "N", Artist: "A", DurationMS: 200000}
+		}
+		return out, nil
+	}
+
+	uris := []string{
+		"spotify:track:0000000000000000000000",
+		"spotify:track:1111111111111111111111",
+		"spotify:track:2222222222222222222222",
+		"spotify:track:3333333333333333333333",
+	}
+	var all []*connectpb.ProvidedTrack
+	for _, u := range uris {
+		all = append(all, &connectpb.ProvidedTrack{Uri: u})
+	}
+	p.resolveContextQueueMetadata(context.Background(), all, nil, uris[1])
+
+	if len(requested) != len(uris) {
+		t.Fatalf("expected %d resolutions, got %v", len(uris), requested)
+	}
+	if requested[0] != uris[2] {
+		t.Fatalf("visible rows must resolve first, got %v", requested)
+	}
+	if requested[len(requested)-2] != uris[0] || requested[len(requested)-1] != uris[1] {
+		t.Fatalf("played rows must resolve last, got %v", requested)
+	}
+}
+
+func TestResolveQueueMetadataBatchCollectsFailedChunksIntoOneRetry(t *testing.T) {
+	p := newTestAppPlayer()
+	p.resetQueueMetaForContext()
+	prevDelay := queueMetaRetryDelay
+	queueMetaRetryDelay = 20 * time.Millisecond
+	defer func() { queueMetaRetryDelay = prevDelay }()
+
+	var mu sync.Mutex
+	fetches := 0
+	p.metaBatchFetch = func(ctx context.Context, uris []string) (map[string]spclient.ResolvedEntry, error) {
+		mu.Lock()
+		fetches++
+		n := fetches
+		mu.Unlock()
+		if n <= 2 {
+			return nil, errQueueHeadProbe
+		}
+		out := make(map[string]spclient.ResolvedEntry, len(uris))
+		for _, u := range uris {
+			out[u] = spclient.ResolvedEntry{Name: "N", Artist: "A", DurationMS: 200000}
+		}
+		return out, nil
+	}
+
+	uris := sweepChunkFillingURIs(queueMetaBatchChunk + 10)
+	if p.resolveQueueMetadataBatch(context.Background(), uris) {
+		t.Fatal("all-failed batch must report unchanged")
+	}
+	if left := p.queueMetaRetriesLeft.Load(); left != int32(queueMetaRetryBudget)-1 {
+		t.Fatalf("one pass must spend exactly one retry, budget=%d", left)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		n := fetches
+		mu.Unlock()
+		if n >= 3 || !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	n := fetches
+	mu.Unlock()
+	if n != 4 {
+		t.Fatalf("single retry must re-run every failed chunk once, fetches=%d", n)
+	}
+	if p.queueMetaPending.Load() {
+		t.Fatal("recovered retry must clear the pending flag")
 	}
 }
 

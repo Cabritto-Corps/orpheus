@@ -805,12 +805,16 @@ func (p *AppPlayer) commitLoadedContext(
 	headURIs := headImageURIs(ctxTracks.UpcomingTracksLoaded(headImageWindow), p.queueHeadImageMissing, headImageWindow)
 	p.scheduleQueueTopUp()
 	p.queueHeadWarmInFlight.Store(true)
+	currentURI := ""
+	if p.state.player.Track != nil {
+		currentURI = p.state.player.Track.Uri
+	}
 	go func() {
 		defer p.queueMetaPending.Store(false)
 		defer p.queueHeadWarmInFlight.Store(false)
-		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
+		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataSweepTimeout)
 		defer metaCancel()
-		p.resolveContextQueueMetadata(metaCtx, allTracks, headURIs)
+		p.resolveContextQueueMetadata(metaCtx, allTracks, headURIs, currentURI)
 	}()
 	if err := p.loadCurrentTrack(ctx, paused, drop); err != nil {
 		if isUnplayableMediaError(err) {
@@ -1028,7 +1032,7 @@ func (p *AppPlayer) queueRemove(index int) error {
 	if p.state == nil || p.state.tracks == nil {
 		return errors.New("no queue loaded")
 	}
-	if !p.state.tracks.RemoveFromQueue(index) {
+	if !p.state.tracks.RemoveUpNext(index) {
 		p.emitQueueEditError("queue changed — retry the edit")
 		return errors.New("queue remove out of range")
 	}
@@ -1040,7 +1044,7 @@ func (p *AppPlayer) queueReorder(from, to int) error {
 	if p.state == nil || p.state.tracks == nil {
 		return errors.New("no queue loaded")
 	}
-	if !p.state.tracks.ReorderQueue(from, to) {
+	if !p.state.tracks.ReorderUpNext(from, to) {
 		p.emitQueueEditError("queue changed — retry the edit")
 		return errors.New("queue reorder out of range")
 	}
