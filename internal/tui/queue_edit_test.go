@@ -165,7 +165,7 @@ func drainCmdCh(ch chan librespot.TUICommand) *librespot.TUICommand {
 	}
 }
 
-func TestQueueRemoveContextRowHints(t *testing.T) {
+func TestQueueRemoveContextRowSends(t *testing.T) {
 	m := queueRegionTestModel()
 	cmdCh := make(chan librespot.TUICommand, 2)
 	m.tuiCmdCh = cmdCh
@@ -173,11 +173,29 @@ func TestQueueRemoveContextRowHints(t *testing.T) {
 
 	next, _ := m.handlePlaybackKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	m = next.(model)
-	if m.transport.playbackErr == nil {
-		t.Fatal("expected a hint error removing a context row")
+	if m.transport.playbackErr != nil {
+		t.Fatalf("context-row remove must not hint, got %v", m.transport.playbackErr)
 	}
-	if cmd := drainCmdCh(cmdCh); cmd != nil {
-		t.Fatalf("context-row remove must not send, got %+v", cmd)
+	cmd := drainCmdCh(cmdCh)
+	if cmd == nil || cmd.Kind != librespot.TUICommandQueueRemove || cmd.QueueIndex != 2 {
+		t.Fatalf("expected remove 2, got %+v", cmd)
+	}
+}
+
+func TestQueueReorderContextRowsSend(t *testing.T) {
+	m := queueRegionTestModel()
+	cmdCh := make(chan librespot.TUICommand, 2)
+	m.tuiCmdCh = cmdCh
+	m.transport.queueCursor = 2
+
+	next, _ := m.handlePlaybackKey(tea.KeyPressMsg{Code: ']', Text: "]"})
+	m = next.(model)
+	if m.transport.playbackErr != nil {
+		t.Fatalf("context reorder must not hint, got %v", m.transport.playbackErr)
+	}
+	cmd := drainCmdCh(cmdCh)
+	if cmd == nil || cmd.Kind != librespot.TUICommandQueueReorder || cmd.QueueIndex != 2 || cmd.QueueTargetIndex != 3 {
+		t.Fatalf("expected reorder 2->3, got %+v", cmd)
 	}
 }
 

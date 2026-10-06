@@ -105,6 +105,77 @@ func TestQueueReorderCommand(t *testing.T) {
 	}
 }
 
+func newContextEditTestPlayer(t *testing.T, uris []string) *AppPlayer {
+	t.Helper()
+	var page []*connectpb.ContextTrack
+	for _, uri := range uris {
+		page = append(page, &connectpb.ContextTrack{Uri: uri})
+	}
+	spotCtx := &connectpb.Context{
+		Uri:   "spotify:playlist:test",
+		Pages: []*connectpb.ContextPage{{Tracks: page}},
+	}
+	tl, err := tracks.NewTrackListFromContext(context.Background(), &golibrespot.NullLogger{}, nil, spotCtx, 0)
+	if err != nil {
+		t.Fatalf("failed building track list: %v", err)
+	}
+	if err := tl.Seek(context.Background(), func(track *connectpb.ContextTrack) bool { return track.Uri == uris[0] }); err != nil {
+		t.Fatalf("seek failed: %v", err)
+	}
+
+	runtime := &Runtime{
+		Log:             noopLogger{},
+		PlaybackStateCh: make(chan *PlaybackStateUpdate, 8),
+	}
+	p := &AppPlayer{
+		runtime:           runtime,
+		connectStateTimer: time.NewTimer(time.Hour),
+		prefetchTimer:     time.NewTimer(time.Hour),
+	}
+	p.runtime.Cfg = DefaultConfig()
+	p.state = &State{
+		device: golibrespot.DefaultDeviceInfo(golibrespot.DeviceInfoOpts{
+			DeviceName:  "test",
+			DeviceType:  devicespb.DeviceType_COMPUTER,
+			ClientId:    golibrespot.ClientIdHex,
+			VolumeSteps: p.runtime.Cfg.VolumeSteps,
+		}),
+		player: golibrespot.NewPlayerState(),
+	}
+	p.state.tracks = tl
+	return p
+}
+
+func TestQueueReorderContextCommand(t *testing.T) {
+	p := newContextEditTestPlayer(t, []string{"spotify:track:0000000000000000000000", "spotify:track:1111111111111111111111", "spotify:track:2222222222222222222222", "spotify:track:3333333333333333333333"})
+
+	if _, err := p.handleTUIPlaybackCommand(context.Background(), TUICommand{Kind: TUICommandQueueReorder, QueueIndex: 0, QueueTargetIndex: 2}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ids := visibleIDs(p)
+	want := []string{"spotify:track:2222222222222222222222", "spotify:track:3333333333333333333333", "spotify:track:1111111111111111111111"}
+	if len(ids) != len(want) {
+		t.Fatalf("after reorder queue = %v, want %v", ids, want)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Fatalf("after reorder queue = %v, want %v", ids, want)
+		}
+	}
+}
+
+func TestQueueRemoveContextCommand(t *testing.T) {
+	p := newContextEditTestPlayer(t, []string{"spotify:track:0000000000000000000000", "spotify:track:1111111111111111111111", "spotify:track:2222222222222222222222"})
+
+	if _, err := p.handleTUIPlaybackCommand(context.Background(), TUICommand{Kind: TUICommandQueueRemove, QueueIndex: 1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ids := visibleIDs(p)
+	if len(ids) != 1 || ids[0] != "spotify:track:1111111111111111111111" {
+		t.Fatalf("after remove queue = %v", ids)
+	}
+}
+
 func TestQueueRemoveNilState(t *testing.T) {
 	p := &AppPlayer{runtime: &Runtime{Log: noopLogger{}}}
 	if _, err := p.handleTUIPlaybackCommand(context.Background(), TUICommand{Kind: TUICommandQueueRemove}); err == nil {

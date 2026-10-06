@@ -386,15 +386,11 @@ func (m *model) handleQueueKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueJump, QueueIndex: cursor})
 	case keyMatches(msg, k.QueueRemove):
-		if !q[cursor].Queued {
-			m.transport.playbackErr = errors.New("only queued tracks can be removed")
-			return nil
-		}
 		return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueRemove, QueueIndex: cursor})
 	case keyMatches(msg, k.QueueMoveUp):
 		if cursor > 0 {
-			if !q[cursor].Queued || !q[cursor-1].Queued {
-				m.transport.playbackErr = errors.New("only queued tracks can be reordered")
+			if q[cursor].Queued != q[cursor-1].Queued {
+				m.transport.playbackErr = errors.New("can't move across queue and context rows")
 				return nil
 			}
 			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueReorder, QueueIndex: cursor, QueueTargetIndex: cursor - 1})
@@ -402,8 +398,8 @@ func (m *model) handleQueueKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case keyMatches(msg, k.QueueMoveDown):
 		if cursor < len(q)-1 {
-			if !q[cursor].Queued || !q[cursor+1].Queued {
-				m.transport.playbackErr = errors.New("only queued tracks can be reordered")
+			if q[cursor].Queued != q[cursor+1].Queued {
+				m.transport.playbackErr = errors.New("can't move across queue and context rows")
 				return nil
 			}
 			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueReorder, QueueIndex: cursor, QueueTargetIndex: cursor + 1})
