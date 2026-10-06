@@ -36,8 +36,6 @@ type PlaylistImage struct {
 	Width  int    `json:"width"`
 }
 
-const displayImageMinPixels = 250
-
 func imagePixelSize(width, height int) int {
 	if width > 0 {
 		return width
@@ -57,7 +55,6 @@ func pickDisplayImageURL(images []PlaylistImage) string {
 	best := ""
 	bestSize := 0
 	fallback := ""
-	fallbackSize := 0
 	for _, img := range images {
 		url := strings.TrimSpace(img.URL)
 		if url == "" {
@@ -70,13 +67,9 @@ func pickDisplayImageURL(images []PlaylistImage) string {
 			}
 			continue
 		}
-		if size >= displayImageMinPixels && (best == "" || size < bestSize) {
+		if size > bestSize {
 			best = url
 			bestSize = size
-		}
-		if size > fallbackSize {
-			fallback = url
-			fallbackSize = size
 		}
 	}
 	if best != "" {

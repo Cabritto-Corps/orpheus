@@ -115,7 +115,7 @@ If your terminal uses a Nerd Font (`orpheus_nerd_fonts=true` in your `.env`), th
 
 ## Terminal background
 
-Orpheus sets the terminal's own background color to the page color while it runs, so the padding around the grid becomes part of the theme instead of a frame of whatever color your terminal was. Terminals that report their background get it restored when you exit; terminals without support for it ignore the whole thing, and ANSI-only themes like `minimal` are left alone.
+Orpheus sets the terminal's own background color to the page color while it runs, so the padding around the grid becomes part of the theme instead of a frame of whatever color your terminal was. Terminals that report their background get it restored when you exit; terminals without support for it ignore the whole thing, and ANSI-only page colors are left alone (their real RGB is terminal-dependent, so there is nothing exact to set).
 
 ## Examples
 
