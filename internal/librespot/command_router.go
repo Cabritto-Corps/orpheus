@@ -111,6 +111,19 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 			FeatureVersion:    golibrespot.VersionNumberString(),
 		}
 		return true, p.loadContext(ctx, spotCtx, nil, false, true)
+	case TUICommandPlayTracks:
+		spotCtx, err := trackListContext(cmd.URI, cmd.URIs)
+		if err != nil {
+			return true, err
+		}
+		p.state.setActive(true)
+		golibrespot.SetPaused(p.state.player, false)
+		p.state.player.Suppressions = &connectpb.Suppressions{}
+		p.state.player.PlayOrigin = &connectpb.PlayOrigin{
+			FeatureIdentifier: "go-librespot",
+			FeatureVersion:    golibrespot.VersionNumberString(),
+		}
+		return true, p.loadContext(ctx, spotCtx, nil, false, true)
 	case TUICommandGetContextTracks:
 		resultCh := cmd.ResultCh
 		reqToken := cmd.ReqToken
@@ -264,6 +277,32 @@ func singleTrackContext(uri string) (*connectpb.Context, error) {
 		Uri: trackURI,
 		Pages: []*connectpb.ContextPage{{
 			Tracks: []*connectpb.ContextTrack{{Uri: trackURI}},
+		}},
+	}, nil
+}
+
+func trackListContext(contextURI string, uris []string) (*connectpb.Context, error) {
+	contextURI = strings.TrimSpace(contextURI)
+	if len(uris) == 0 {
+		return nil, fmt.Errorf("empty track list")
+	}
+	tracks := make([]*connectpb.ContextTrack, 0, len(uris))
+	for _, uri := range uris {
+		uri = strings.TrimSpace(uri)
+		id, err := golibrespot.SpotifyIdFromUri(uri)
+		if err != nil || id == nil || id.Type() != golibrespot.SpotifyIdTypeTrack {
+			return nil, fmt.Errorf("invalid Spotify track URI %q", uri)
+		}
+		trackURI := id.Uri()
+		tracks = append(tracks, &connectpb.ContextTrack{Uri: trackURI})
+	}
+	if contextURI == "" {
+		contextURI = tracks[0].Uri
+	}
+	return &connectpb.Context{
+		Uri: contextURI,
+		Pages: []*connectpb.ContextPage{{
+			Tracks: tracks,
 		}},
 	}, nil
 }

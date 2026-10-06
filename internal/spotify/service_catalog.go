@@ -628,6 +628,170 @@ func (s *Service) ListAlbumTracksPage(ctx context.Context, albumID string, offse
 	return out, nil
 }
 
+const (
+	artistAlbumsMaxPages  = 4
+	artistAlbumsFetchCap  = 10
+	artistTracksTargetPad = 20
+)
+
+func (s *Service) ListArtistAlbumsPage(ctx context.Context, artistID string, offset, limit int) (*PlaylistPage, error) {
+	artistID = strings.TrimSpace(artistID)
+	if artistID == "" {
+		return nil, errors.New("artist ID must not be empty")
+	}
+	if offset < 0 {
+		return nil, errors.New("artist album offset must be >= 0")
+	}
+	if limit <= 0 || limit > 10 {
+		limit = 10
+	}
+	if s.itemsHTTPClient == nil {
+		return nil, errors.New("items http client is not configured")
+	}
+	params := url.Values{}
+	params.Set("limit", strconv.Itoa(limit))
+	params.Set("offset", strconv.Itoa(offset))
+	params.Set("include_groups", "album,single")
+	u := spotifyAPIBase + "artists/" + url.PathEscape(artistID) + "/albums?" + params.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.itemsHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("webapi artist albums: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var raw struct {
+		Items []struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			URI         string `json:"uri"`
+			TotalTracks int    `json:"total_tracks"`
+			Artists     []struct {
+				Name string `json:"name"`
+			} `json:"artists"`
+			Images []PlaylistImage `json:"images"`
+		} `json:"items"`
+		Next *string `json:"next"`
+	}
+	if err := DecodeWebAPIJSON(resp, http.StatusOK, &raw, func(status int, body string) error {
+		return &httpStatusError{status: status, err: fmt.Errorf("artist albums: %s", body)}
+	}); err != nil {
+		return nil, err
+	}
+	out := &PlaylistPage{Offset: offset, Limit: limit}
+	if len(raw.Items) == 0 {
+		out.NextOffset = offset
+		return out, nil
+	}
+	out.Items = make([]PlaylistSummary, 0, len(raw.Items))
+	for _, item := range raw.Items {
+		if item.ID == "" {
+			continue
+		}
+		artists := make([]string, 0, len(item.Artists))
+		for _, a := range item.Artists {
+			if name := strings.TrimSpace(a.Name); name != "" {
+				artists = append(artists, name)
+			}
+		}
+		out.Items = append(out.Items, PlaylistSummary{
+			ID: item.ID, Name: item.Name, URI: item.URI, Kind: ContextKindAlbum,
+			Owner: strings.Join(artists, ", "), TrackCount: item.TotalTracks,
+			ImageURL: pickDisplayImageURL(item.Images),
+		})
+	}
+	out.NextOffset = offset + len(raw.Items)
+	out.HasMore = raw.Next != nil && *raw.Next != ""
+	return out, nil
+}
+
+func CollectArtistTracks(ctx context.Context, catalog PlaylistCatalog, artistID string, target int) ([]string, error) {
+	artistID = strings.TrimSpace(artistID)
+	if artistID == "" {
+		return nil, errors.New("artist ID must not be empty")
+	}
+	if catalog == nil {
+		return nil, errors.New("spotify catalog is not ready")
+	}
+	if target <= 0 {
+		target = 50
+	}
+	seenAlbums := make(map[string]struct{})
+	var albumIDs []string
+	offset := 0
+	for range artistAlbumsMaxPages {
+		if ctx.Err() != nil {
+			break
+		}
+		page, err := catalog.ListArtistAlbumsPage(ctx, artistID, offset, 10)
+		if err != nil {
+			return nil, err
+		}
+		if page == nil || len(page.Items) == 0 {
+			break
+		}
+		for _, item := range page.Items {
+			if item.ID == "" {
+				continue
+			}
+			if _, ok := seenAlbums[item.ID]; ok {
+				continue
+			}
+			seenAlbums[item.ID] = struct{}{}
+			albumIDs = append(albumIDs, item.ID)
+			if len(albumIDs) >= artistAlbumsFetchCap {
+				break
+			}
+		}
+		if !page.HasMore || len(albumIDs) >= artistAlbumsFetchCap {
+			break
+		}
+		offset = page.NextOffset
+	}
+	seen := make(map[string]struct{})
+	var uris []string
+	for _, albumID := range albumIDs {
+		if len(uris) >= target+artistTracksTargetPad {
+			break
+		}
+		trackOffset := 0
+		for ctx.Err() == nil {
+			page, err := catalog.ListAlbumTracksPage(ctx, albumID, trackOffset, 50)
+			if err != nil {
+				break
+			}
+			if page == nil || len(page.ItemIDs) == 0 {
+				break
+			}
+			for _, id := range page.ItemIDs {
+				id = strings.TrimSpace(id)
+				if id == "" {
+					continue
+				}
+				if _, ok := seen[id]; ok {
+					continue
+				}
+				seen[id] = struct{}{}
+				uris = append(uris, "spotify:track:"+id)
+				if len(uris) >= target+artistTracksTargetPad {
+					break
+				}
+			}
+			if !page.HasMore {
+				break
+			}
+			trackOffset = page.NextOffset
+		}
+	}
+	if len(uris) == 0 {
+		return nil, errors.New("no playable tracks found for artist")
+	}
+	return uris, nil
+}
+
 func (s *Service) SearchPage(ctx context.Context, query string, offset, limit int) (*SearchPage, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {

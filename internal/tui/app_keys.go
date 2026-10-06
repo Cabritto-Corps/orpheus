@@ -335,6 +335,9 @@ func (m model) routeModalKey(msg tea.KeyPressMsg, kind modalKind) (tea.Model, te
 	if kind == modalTrackPopup {
 		return m.handleTrackPopupKey(msg)
 	}
+	if kind == modalArtistChoice {
+		return m.handleArtistChoiceKey(msg)
+	}
 	return m.handleSettingsKey(msg)
 }
 

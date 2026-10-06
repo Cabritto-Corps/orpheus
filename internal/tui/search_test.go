@@ -164,25 +164,26 @@ func TestSearchPanelStatusAndSingleSpinner(t *testing.T) {
 	}
 }
 
-func TestSearchEnterOnArtistStartsStation(t *testing.T) {
+func TestSearchEnterOnArtistOpensChoiceModal(t *testing.T) {
 	m := NewLoaderModel()
 	m.ui.activeTab = tabSearch
+	m.ui.width, m.ui.height = 120, 40
 	m.tuiCmdCh = make(chan librespot.TUICommand, 2)
 	m.browse.search.list.SetItems([]list.Item{
 		searchResultItem{result: spotify.SearchResultItem{ID: "artist-id", URI: "spotify:artist:artist-id", Kind: "artist", Name: "Artist"}},
 	})
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(model)
-	if m.ui.activeTab != tabPlayer {
-		t.Fatalf("artist station did not open Player: %q", m.ui.activeTab)
+	if !m.ui.artistChoiceOpen {
+		t.Fatal("artist Enter did not open the choice modal")
+	}
+	if m.ui.activeTab != tabSearch {
+		t.Fatalf("choice modal must stay on Search, got %q", m.ui.activeTab)
 	}
 	select {
 	case command := <-m.tuiCmdCh:
-		if command.Kind != librespot.TUICommandPlayStation || command.URI != "spotify:artist:artist-id" {
-			t.Fatalf("wrong station command: %#v", command)
-		}
+		t.Fatalf("choice modal must not send playback yet, got %#v", command)
 	default:
-		t.Fatal("artist Enter sent no station command")
 	}
 }
 

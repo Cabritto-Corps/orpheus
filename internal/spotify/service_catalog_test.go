@@ -268,3 +268,126 @@ func TestResolveAlbumImagesBatchesTwentyPerRequest(t *testing.T) {
 		t.Fatalf("expected 2 batched requests for 25 albums, got %d", requests)
 	}
 }
+
+func TestListArtistAlbumsPageParsesAlbums(t *testing.T) {
+	s := &Service{
+		itemsHTTPClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.Path != "/v1/artists/a1/albums" {
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
+				}
+				if req.URL.Query().Get("include_groups") != "album,single" {
+					t.Fatalf("expected album,single groups, got %q", req.URL.Query().Get("include_groups"))
+				}
+				if req.URL.Query().Get("limit") != "10" {
+					t.Fatalf("expected capped limit 10, got %q", req.URL.Query().Get("limit"))
+				}
+				return httpJSONResponse(http.StatusOK, `{
+					"items":[
+						{"id":"al1","name":"Album One","uri":"spotify:album:al1","total_tracks":2,"artists":[{"name":"A1"}],"images":[{"url":"cover-1","width":640,"height":640}]},
+						{"id":"al2","name":"Single One","uri":"spotify:album:al2","total_tracks":1,"artists":[{"name":"A1"}],"images":[]}
+					],
+					"next":null
+				}`), nil
+			}),
+		},
+	}
+	page, err := s.ListArtistAlbumsPage(context.Background(), "a1", 0, 50)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(page.Items) != 2 || page.Items[0].ID != "al1" || page.Items[1].ID != "al2" {
+		t.Fatalf("unexpected albums: %#v", page.Items)
+	}
+	if page.Items[0].ImageURL != "cover-1" || page.Items[0].Kind != ContextKindAlbum {
+		t.Fatalf("unexpected album metadata: %#v", page.Items[0])
+	}
+	if page.HasMore {
+		t.Fatal("expected hasMore false")
+	}
+}
+
+func TestListArtistAlbumsPageValidation(t *testing.T) {
+	s := &Service{itemsHTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return httpJSONResponse(http.StatusOK, `{"items":[],"next":null}`), nil
+	})}}
+	if _, err := s.ListArtistAlbumsPage(context.Background(), "", 0, 50); err == nil {
+		t.Fatal("expected error for empty artist ID")
+	}
+	if _, err := s.ListArtistAlbumsPage(context.Background(), "a1", -1, 50); err == nil {
+		t.Fatal("expected error for negative offset")
+	}
+	if _, err := (&Service{}).ListArtistAlbumsPage(context.Background(), "a1", 0, 50); err == nil {
+		t.Fatal("expected error without http client")
+	}
+}
+
+type artistStubCatalog struct {
+	PlaylistCatalog
+	albums map[string][]string
+	tracks map[string][]string
+}
+
+func (f artistStubCatalog) ListArtistAlbumsPage(_ context.Context, _ string, offset, limit int) (*PlaylistPage, error) {
+	all := f.albums["a1"]
+	if offset >= len(all) {
+		return &PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset}, nil
+	}
+	end := min(offset+limit, len(all))
+	items := make([]PlaylistSummary, 0, end-offset)
+	for _, id := range all[offset:end] {
+		items = append(items, PlaylistSummary{ID: id, URI: "spotify:album:" + id, Kind: ContextKindAlbum})
+	}
+	return &PlaylistPage{Items: items, Offset: offset, Limit: limit, NextOffset: end, HasMore: end < len(all)}, nil
+}
+
+func (f artistStubCatalog) ListAlbumTracksPage(_ context.Context, albumID string, _, _ int) (*PlaylistItemsPage, error) {
+	ids := f.tracks[albumID]
+	return &PlaylistItemsPage{ItemIDs: ids, NextOffset: len(ids)}, nil
+}
+
+func TestCollectArtistTracksDedupesAcrossAlbums(t *testing.T) {
+	catalog := artistStubCatalog{
+		albums: map[string][]string{"a1": {"al1", "al2"}},
+		tracks: map[string][]string{"al1": {"t1", "t2"}, "al2": {"t2", "t3"}},
+	}
+	uris, err := CollectArtistTracks(context.Background(), catalog, "a1", 50)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(uris) != 3 {
+		t.Fatalf("expected 3 deduped tracks, got %v", uris)
+	}
+	for _, u := range uris {
+		if len(u) < 14 || u[:14] != "spotify:track:" {
+			t.Fatalf("track URI not normalized: %q", u)
+		}
+	}
+}
+
+func TestCollectArtistTracksSkipsFailedAlbums(t *testing.T) {
+	catalog := artistStubCatalog{
+		albums: map[string][]string{"a1": {"al1", "al2"}},
+		tracks: map[string][]string{"al2": {"t9"}},
+	}
+	uris, err := CollectArtistTracks(context.Background(), catalog, "a1", 50)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(uris) != 1 || uris[0] != "spotify:track:t9" {
+		t.Fatalf("expected surviving album tracks, got %v", uris)
+	}
+}
+
+func TestCollectArtistTracksErrorsWhenEmpty(t *testing.T) {
+	catalog := artistStubCatalog{albums: map[string][]string{}, tracks: map[string][]string{}}
+	if _, err := CollectArtistTracks(context.Background(), catalog, "a1", 50); err == nil {
+		t.Fatal("expected error for artist with no tracks")
+	}
+	if _, err := CollectArtistTracks(context.Background(), catalog, "", 50); err == nil {
+		t.Fatal("expected error for empty artist ID")
+	}
+	if _, err := CollectArtistTracks(context.Background(), nil, "a1", 50); err == nil {
+		t.Fatal("expected error for nil catalog")
+	}
+}

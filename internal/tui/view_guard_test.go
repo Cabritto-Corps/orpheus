@@ -127,6 +127,10 @@ func guardModel(tb testing.TB, v frameVariant) model {
 		m.ui.trackPopupList = popup
 		m.ui.trackPopupWidth = listW - 4
 		m.retruncateTrackPopupTitles()
+	case "artist-choice":
+		m.ui.artistChoiceOpen = true
+		m.ui.artistChoiceResult = spotify.SearchResultItem{ID: "artist-id", URI: "spotify:artist:artist-id", Kind: "artist", Name: "Some Artist With A Long Name"}
+		m.ui.artistChoiceCursor = 1
 	}
 	return m
 }
@@ -204,7 +208,7 @@ func TestViewFrameContractBackgroundModes(t *testing.T) {
 func TestViewFrameContractModals(t *testing.T) {
 	sizes := [][2]int{{40, 12}, {50, 16}, {80, 24}, {120, 40}}
 	for _, size := range sizes {
-		for _, modal := range []string{"settings", "settings-theme", "settings-theme-options", "settings-keys", "settings-capture", "help", "popup"} {
+		for _, modal := range []string{"settings", "settings-theme", "settings-theme-options", "settings-keys", "settings-capture", "help", "popup", "artist-choice"} {
 			variant := frameVariant{name: modal, width: size[0], height: size[1], tab: tabPlayer, playing: true, hasQueue: true, modal: modal}
 			m := guardModel(t, variant)
 			assertFrameContract(t, fmt.Sprintf("modal-%s-%dx%d", modal, size[0], size[1]), m.View().Content, variant.width, variant.height)

@@ -186,7 +186,7 @@ func (m model) loadMoreSearchIfNeeded() (model, tea.Cmd) {
 
 func (m model) selectSearchResult(result spotify.SearchResultItem) (tea.Model, tea.Cmd) {
 	if result.Kind == "artist" {
-		return m.playArtistStation(result)
+		return m.openArtistChoice(result)
 	}
 	if result.Kind == "album" {
 		return m.selectAndPlayPlaylist(playlistItem{summary: spotify.PlaylistSummary{

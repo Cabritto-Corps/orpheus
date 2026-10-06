@@ -147,6 +147,12 @@ type uiModel struct {
 	trackPopupReqToken      int
 	trackPopupWaitTicks     int
 	trackPopupWidth         int
+	artistChoiceOpen        bool
+	artistChoiceResult      spotify.SearchResultItem
+	artistChoiceCursor      int
+	artistChoiceLoading     bool
+	artistChoiceErr         error
+	artistChoiceReq         int
 	width                   int
 	height                  int
 	nerdFonts               bool
@@ -205,6 +211,7 @@ const (
 	modalSettingsCapture
 	modalSettingsThemeOptions
 	modalTrackPopup
+	modalArtistChoice
 )
 
 func (m model) modalKind() modalKind {
@@ -230,6 +237,9 @@ func (m model) modalKind() modalKind {
 		default:
 			return modalSettingsRoot
 		}
+	}
+	if m.ui.artistChoiceOpen {
+		return modalArtistChoice
 	}
 	if m.ui.trackPopupOpen {
 		return modalTrackPopup

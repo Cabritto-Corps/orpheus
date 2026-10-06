@@ -19,6 +19,7 @@ const (
 	TUICommandQueueJump
 	TUICommandPlayTrack
 	TUICommandPlayStation
+	TUICommandPlayTracks
 )
 
 // Queue commands address entries by VISIBLE position (up-next view, current
@@ -26,6 +27,7 @@ const (
 type TUICommand struct {
 	Kind             TUICommandKind
 	URI              string
+	URIs             []string
 	TrackID          string
 	Position         int64
 	Volume           int
