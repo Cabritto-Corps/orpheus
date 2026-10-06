@@ -82,17 +82,17 @@ var themeRegistry = []themeEntry{
 	{"minimal", themeColors{
 		Blue:      "7",
 		BlueLight: "15",
-		OffWhite:  "7",
+		OffWhite:  "#CFC7B4",
 		Gray:      "8",
 		MutedBlue: "8",
-		DimBlue:   "0",
+		DimBlue:   "#5A5A5A",
 		Divider:   "8",
 		Error:     "1",
 
-		Scrim:       "0",
+		Scrim:       "#000000",
 		SelectionFg: "0",
 		SelectionBg: "7",
-		Page:        "0",
+		Page:        "#000000",
 	}},
 	{"high_contrast", themeColors{
 		Blue:      "#00FF87",

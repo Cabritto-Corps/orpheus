@@ -176,14 +176,14 @@ func TestResolveContextImageURLAlbum(t *testing.T) {
 	}
 }
 
-func TestPickDisplayImageURLPrefersMidSize(t *testing.T) {
+func TestPickDisplayImageURLPrefersLargest(t *testing.T) {
 	images := []PlaylistImage{
 		{URL: "https://i.scdn.co/image/large", Width: 640, Height: 640},
 		{URL: "https://i.scdn.co/image/mid", Width: 300, Height: 300},
 		{URL: "https://i.scdn.co/image/small", Width: 64, Height: 64},
 	}
-	if got := pickDisplayImageURL(images); got != "https://i.scdn.co/image/mid" {
-		t.Fatalf("expected mid-size image, got %q", got)
+	if got := pickDisplayImageURL(images); got != "https://i.scdn.co/image/large" {
+		t.Fatalf("expected largest image, got %q", got)
 	}
 }
 
@@ -254,12 +254,12 @@ func TestResolveAlbumImagesBatchesTwentyPerRequest(t *testing.T) {
 	wg.Wait()
 	for i := range total {
 		id := fmt.Sprintf("album-%02d", i)
-		want := "https://i.scdn.co/image/" + id + "/mid"
+		want := "https://i.scdn.co/image/" + id + "/large"
 		if results[i].err != nil {
 			t.Fatalf("album %s error: %v", id, results[i].err)
 		}
 		if results[i].url != want {
-			t.Fatalf("album %s: expected mid-size %q, got %q", id, want, results[i].url)
+			t.Fatalf("album %s: expected largest %q, got %q", id, want, results[i].url)
 		}
 	}
 	mu.Lock()

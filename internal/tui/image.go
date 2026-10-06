@@ -625,9 +625,10 @@ func resizeBilinear(src image.Image, width, height int) *image.RGBA {
 	if sb.Dx() <= 0 || sb.Dy() <= 0 || width <= 0 || height <= 0 {
 		return dst
 	}
-	// Nearest/bilinear mix; preserves source alpha instead of forcing
-	// opaque.
-	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, sb, draw.Src, nil)
+	// Bilinear, not the fast approximation: this feeds the kitty PNG
+	// (downscale once per image, off the render path) and the difference
+	// is visible on art with fine detail.
+	draw.BiLinear.Scale(dst, dst.Bounds(), src, sb, draw.Src, nil)
 	return dst
 }
 

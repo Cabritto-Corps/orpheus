@@ -48,8 +48,9 @@ On Linux, missing ALSA/FLAC/Ogg/Vorbis libraries are detected with `ldd` and the
 
 ![Orpheus Screenshot](assets/orpheus_playlist.png)
 ![Orpheus Screenshot 2](assets/orpheus_albums.png)
-![Orpheus Screenshot 3](assets/orpheus_player.png)
-
+![Orpheus Screenshot 3](assets/orpheus_recents.png)
+![Orpheus Screenshot 4](assets/orpheus_search.png)
+![Orpheus Screenshot 6](assets/orpheus_player.png)
 ### Features
 
 | Feature | Description | Keybind |

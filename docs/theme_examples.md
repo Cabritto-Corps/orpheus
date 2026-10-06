@@ -112,7 +112,7 @@ A full theme from scratch, no preset dependency left:
 
 ## ANSI only (for limited terminals)
 
-Uses terminal palette indices instead of hex, like the built-in `minimal` preset. No terminal background is touched:
+Uses terminal palette indices instead of hex. Note the page must be hex for the terminal-background sync above to work — a fully ANSI theme keeps its frame but the padding around the grid stays the terminal default:
 
 ```json
 {
