@@ -697,3 +697,71 @@ func TestPlaybackStateCarriesQueueMetaPending(t *testing.T) {
 		t.Fatal("cleared flag must be absent from the push")
 	}
 }
+
+func TestSeededEntriesSkipMetadataBatch(t *testing.T) {
+	p := newTestAppPlayer()
+	p.resetQueueMetaForContext()
+	p.seedQueueMeta([]PlaybackStateQueueEntry{
+		{ID: "0000000000000000000000", Name: "Seeded Song", Artist: "Seeded Artist", DurationMS: 180000},
+		{ID: "", Name: "Nameless"},
+		{ID: "1111111111111111111111", Name: ""},
+	})
+	var requested []string
+	p.metaBatchFetch = func(ctx context.Context, uris []string) (map[string]spclient.ResolvedEntry, error) {
+		requested = append(requested, uris...)
+		out := make(map[string]spclient.ResolvedEntry, len(uris))
+		for _, u := range uris {
+			out[u] = spclient.ResolvedEntry{Name: "N", Artist: "A", DurationMS: 200000}
+		}
+		return out, nil
+	}
+	all := []*connectpb.ProvidedTrack{
+		{Uri: "spotify:track:0000000000000000000000"},
+		{Uri: "spotify:track:1111111111111111111111"},
+	}
+	p.resolveContextQueueMetadata(context.Background(), all, nil, "")
+	if len(requested) != 1 || requested[0] != "spotify:track:1111111111111111111111" {
+		t.Fatalf("seeded entries must not enter the batch, requested=%v", requested)
+	}
+	if e := p.getCachedQueueMeta("0000000000000000000000"); e == nil || e.Name != "Seeded Song" || e.Artist != "Seeded Artist" {
+		t.Fatalf("seeded entry lost: %#v", e)
+	}
+}
+
+func TestResetQueueMetaForContextKeepsCache(t *testing.T) {
+	p := newTestAppPlayer()
+	p.resetQueueMetaForContext()
+	p.setCachedQueueMeta("0000000000000000000000", PlaybackStateQueueEntry{ID: "0000000000000000000000", Name: "Cached"})
+	p.queueMetaRetriesLeft.Store(0)
+	p.resetQueueMetaForContext()
+	if e := p.getCachedQueueMeta("0000000000000000000000"); e == nil || e.Name != "Cached" {
+		t.Fatalf("context reset must keep cached entries: %#v", e)
+	}
+	if left := p.queueMetaRetriesLeft.Load(); left != int32(queueMetaRetryBudget) {
+		t.Fatalf("context reset must rearm the retry budget, left=%d", left)
+	}
+	if !p.queueMetaPending.Load() {
+		t.Fatal("context reset must arm the pending flag")
+	}
+}
+
+func TestMergeQueueBatchResultKeepsCachedNamesOnEmptyResolve(t *testing.T) {
+	p := newTestAppPlayer()
+	p.setCachedQueueMeta("0000000000000000000000", PlaybackStateQueueEntry{ID: "0000000000000000000000", Name: "Seeded Song", Artist: "Seeded Artist", DurationMS: 180000})
+	p.mergeQueueBatchResult(map[string]spclient.ResolvedEntry{
+		"spotify:track:0000000000000000000000": {Name: "", Artist: "", DurationMS: 200000},
+	})
+	if e := p.getCachedQueueMeta("0000000000000000000000"); e == nil || e.Name != "Seeded Song" || e.Artist != "Seeded Artist" {
+		t.Fatalf("empty resolve must not clobber seeded names: %#v", e)
+	}
+}
+
+func TestQueueMetaRetryExhaustClearsPending(t *testing.T) {
+	p := newTestAppPlayer()
+	p.resetQueueMetaForContext()
+	p.queueMetaRetriesLeft.Store(0)
+	p.scheduleQueueMetaRetry([]string{"spotify:track:7GhIk7Il098yCjg4BQjzvb"})
+	if p.queueMetaPending.Load() {
+		t.Fatal("exhausted retries must clear the pending flag")
+	}
+}

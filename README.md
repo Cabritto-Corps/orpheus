@@ -91,9 +91,10 @@ On Linux, missing ALSA/FLAC/Ogg/Vorbis libraries are detected with `ldd` and the
 
 Every keybind can be changed in settings (`o` → Keybinds).
 
-In Search, results update as you type. Use `↑` / `↓` to browse and `enter` to play.
-Playing a song in Search or Recents keeps the list open so you can choose another; albums and artists
-open Player. `tab` switches tabs, and `/` focuses the search field again after `esc`.
+In Search, results update as you type. Use `↑` / `↓` to browse (`pgup` / `pgdn` page) and `enter` to play.
+Playing a song in Search or Recents keeps the list open so you can choose another; albums
+open Player, and artists offer a choice between shuffled artist tracks and an artist station.
+`tab` switches tabs, and `/` focuses the search field again after `esc`.
 Search and Recents thumbnails use full-resolution graphics on Kitty-compatible
 terminals when Images is set to `rendered`; other terminals use pixelated ANSI art.
 

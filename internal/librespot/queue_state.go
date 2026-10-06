@@ -47,9 +47,25 @@ func (p *AppPlayer) setCachedQueueMeta(id string, e PlaybackStateQueueEntry) {
 func (p *AppPlayer) resetQueueMetaForContext() {
 	p.queueMetaMu.Lock()
 	defer p.queueMetaMu.Unlock()
-	p.queueMetaCache = cache.NewLRU[string, PlaybackStateQueueEntry](8192)
+	if p.queueMetaCache == nil {
+		p.queueMetaCache = cache.NewLRU[string, PlaybackStateQueueEntry](8192)
+	}
 	p.queueMetaPending.Store(true)
 	p.queueMetaRetriesLeft.Store(int32(queueMetaRetryBudget))
+}
+
+func (p *AppPlayer) seedQueueMeta(seeds []PlaybackStateQueueEntry) {
+	for _, e := range seeds {
+		id := golibrespot.NormalizeSpotifyId(e.ID)
+		if id == "" || strings.TrimSpace(e.Name) == "" {
+			continue
+		}
+		e.ID = id
+		if e.Artist == "" {
+			e.Artist = "-"
+		}
+		p.setCachedQueueMeta(id, e)
+	}
 }
 
 const (
@@ -210,6 +226,9 @@ func (p *AppPlayer) scheduleQueueMetaRetry(uris []string) {
 	}
 	if p.queueMetaRetriesLeft.Load() <= 0 {
 		p.queueMetaRetryArmed.Store(false)
+		if p.queueMetaPending.CompareAndSwap(true, false) {
+			p.signalQueueMetaUpdated()
+		}
 		return
 	}
 	p.queueMetaRetriesLeft.Add(-1)
@@ -268,6 +287,12 @@ func (p *AppPlayer) mergeQueueBatchResult(batch map[string]spclient.ResolvedEntr
 		}
 		e.ImageURL = queueMetaImageURL(p, entry.AlbumCoverFileId)
 		prev := p.getCachedQueueMeta(id)
+		if e.Name == "" && prev != nil {
+			e.Name = prev.Name
+		}
+		if (e.Artist == "" || e.Artist == "-") && prev != nil && prev.Artist != "" && prev.Artist != "-" {
+			e.Artist = prev.Artist
+		}
 		if prev == nil || prev.Name != e.Name || prev.ImageURL != e.ImageURL {
 			changed = true
 		}
@@ -297,7 +322,7 @@ func (p *AppPlayer) maybeSweepQueueImages() {
 	}
 	go func() {
 		defer p.queueSweepWarmInFlight.Store(false)
-		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
+		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataSweepTimeout)
 		defer metaCancel()
 		p.resolveQueueMetadataBatch(metaCtx, uris)
 	}()
@@ -318,7 +343,7 @@ func (p *AppPlayer) maybeWarmQueueHeadImages() {
 	}
 	go func() {
 		defer p.queueHeadWarmInFlight.Store(false)
-		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
+		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataSweepTimeout)
 		defer metaCancel()
 		p.resolveQueueMetadataBatch(metaCtx, uris)
 	}()

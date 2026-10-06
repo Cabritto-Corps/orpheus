@@ -53,7 +53,7 @@ func TestPlaySingleTrackFreezesOutgoingDuration(t *testing.T) {
 		TrackID: "spotify:track:aaa", TrackName: "A", ArtistName: "Artist",
 		DurationMS: 180000, AlbumImageURL: "cover-a",
 	}
-	next, _ := m.playSingleTrack("spotify:track:bbb", "")
+	next, _ := m.playSingleTrack("spotify:track:bbb", "", nil)
 	got := next.(model)
 	if len(got.browse.sessionRecentTracks) != 1 {
 		t.Fatalf("outgoing track was not frozen: %#v", got.browse.sessionRecentTracks)

@@ -51,7 +51,8 @@ func TestSearchTrackSelectionSendsSingleTrackCommand(t *testing.T) {
 	m := NewLoaderModel()
 	m.tuiCmdCh = commands
 	next, _ := m.selectSearchResult(spotify.SearchResultItem{
-		ID: "track-id", URI: "spotify:track:track-id", Kind: "track", ImageURL: "cover",
+		ID: "track-id", URI: "spotify:track:track-id", Kind: "track", Name: "Song", Owner: "Singer",
+		AlbumName: "Album", ImageURL: "cover", DurationMS: 180000,
 	})
 	if next.(model).ui.activeTab != tabSearch {
 		t.Fatal("track selection should keep Search open for browsing")
@@ -59,6 +60,9 @@ func TestSearchTrackSelectionSendsSingleTrackCommand(t *testing.T) {
 	cmd := <-commands
 	if cmd.Kind != librespot.TUICommandPlayTrack || cmd.URI != "spotify:track:track-id" {
 		t.Fatalf("unexpected playback command: %#v", cmd)
+	}
+	if len(cmd.Seed) != 1 || cmd.Seed[0].ID != "track-id" || cmd.Seed[0].Name != "Song" || cmd.Seed[0].Artist != "Singer" || cmd.Seed[0].DurationMS != 180000 || cmd.Seed[0].ImageURL != "cover" {
+		t.Fatalf("single-track play must seed known metadata: %#v", cmd.Seed)
 	}
 }
 
@@ -164,25 +168,26 @@ func TestSearchPanelStatusAndSingleSpinner(t *testing.T) {
 	}
 }
 
-func TestSearchEnterOnArtistStartsStation(t *testing.T) {
+func TestSearchEnterOnArtistOpensChoiceModal(t *testing.T) {
 	m := NewLoaderModel()
 	m.ui.activeTab = tabSearch
+	m.ui.width, m.ui.height = 120, 40
 	m.tuiCmdCh = make(chan librespot.TUICommand, 2)
 	m.browse.search.list.SetItems([]list.Item{
 		searchResultItem{result: spotify.SearchResultItem{ID: "artist-id", URI: "spotify:artist:artist-id", Kind: "artist", Name: "Artist"}},
 	})
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(model)
-	if m.ui.activeTab != tabPlayer {
-		t.Fatalf("artist station did not open Player: %q", m.ui.activeTab)
+	if !m.ui.artistChoiceOpen {
+		t.Fatal("artist Enter did not open the choice modal")
+	}
+	if m.ui.activeTab != tabSearch {
+		t.Fatalf("choice modal must stay on Search, got %q", m.ui.activeTab)
 	}
 	select {
 	case command := <-m.tuiCmdCh:
-		if command.Kind != librespot.TUICommandPlayStation || command.URI != "spotify:artist:artist-id" {
-			t.Fatalf("wrong station command: %#v", command)
-		}
+		t.Fatalf("choice modal must not send playback yet, got %#v", command)
 	default:
-		t.Fatal("artist Enter sent no station command")
 	}
 }
 
@@ -328,4 +333,52 @@ func TestSearchShortcutNavigatesToSearchTab(t *testing.T) {
 			t.Fatalf("Search shortcut was blocked by the local filter: tab=%q", got.ui.activeTab)
 		}
 	})
+}
+
+func searchPageModel(count int) model {
+	m := NewLoaderModel()
+	m.ui.activeTab = tabSearch
+	items := make([]list.Item, count)
+	for i := range items {
+		items[i] = searchResultItem{result: spotify.SearchResultItem{ID: "r", Kind: "track", Name: "Song"}}
+	}
+	m.browse.search.list.SetItems(items)
+	m.browse.search.list.Select(0)
+	m.browse.search.input.Focus()
+	return m
+}
+
+func TestSearchPgDownPagesResultsWhileInputFocused(t *testing.T) {
+	m := searchPageModel(30)
+	perPage := m.browse.search.list.Paginator.PerPage
+	if perPage <= 0 {
+		t.Fatalf("test setup has no page size: %d", perPage)
+	}
+	next, _ := m.handleSearchKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	got := next.(model)
+	want := min(perPage, 29)
+	if got.browse.search.list.Index() != want {
+		t.Fatalf("pgdn moved to %d, want %d", got.browse.search.list.Index(), want)
+	}
+	if !got.browse.search.input.Focused() {
+		t.Fatal("pgdn must keep the search input focused")
+	}
+	next, _ = got.handleSearchKey(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if next.(model).browse.search.list.Index() != 0 {
+		t.Fatalf("pgup did not return to top: %d", next.(model).browse.search.list.Index())
+	}
+}
+
+func TestSearchPgDownNearEndLoadsMore(t *testing.T) {
+	m := searchPageModel(30)
+	m.browse.search.query = "ab"
+	m.browse.search.requestID = 1
+	m.browse.search.offset = 20
+	m.browse.search.hasMore = true
+	m.browse.search.list.Select(27)
+	next, cmd := m.handleSearchKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	got := next.(model)
+	if cmd == nil || !got.browse.search.loading {
+		t.Fatal("pgdn past the loaded end must trigger the next page fetch")
+	}
 }

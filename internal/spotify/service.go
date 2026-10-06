@@ -151,6 +151,7 @@ type PlaylistCatalog interface {
 	ListRecentlyPlayedTracks(ctx context.Context, limit int) ([]QueueItem, error)
 	ListPlaylistItemsPage(ctx context.Context, playlistID string, offset, limit int) (*PlaylistItemsPage, error)
 	ListAlbumTracksPage(ctx context.Context, albumID string, offset, limit int) (*PlaylistItemsPage, error)
+	ListArtistAlbumsPage(ctx context.Context, artistID string, offset, limit int) (*PlaylistPage, error)
 	ResolveContextImageURL(ctx context.Context, kind, id string) (string, error)
 	SearchPage(ctx context.Context, query string, offset, limit int) (*SearchPage, error)
 }
