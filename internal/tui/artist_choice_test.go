@@ -22,8 +22,15 @@ func artistChoiceCatalog() fakeCatalog {
 			}, nil
 		},
 		albumItems: func(id string, offset, limit int) (*spotify.PlaylistItemsPage, error) {
+			infos := []spotify.QueueItem{
+				{ID: "t1", Name: "Song One", Artist: "Artist", DurationMS: 200000},
+				{ID: "t2", Name: "Song Two", Artist: "Artist", DurationMS: 210000},
+				{ID: "t3", Name: "Song Three", Artist: "Artist", DurationMS: 220000},
+			}
+			ids := []string{"t1", "t2", "t3"}
 			return &spotify.PlaylistItemsPage{
-				ItemIDs:    []string{"t1", "t2", "t3"},
+				ItemIDs:    ids,
+				ItemInfos:  infos,
 				Offset:     offset,
 				Limit:      limit,
 				NextOffset: 3,
@@ -108,6 +115,18 @@ func TestArtistChoiceTracksPlayShuffledQueue(t *testing.T) {
 		for _, want := range []string{"spotify:track:t1", "spotify:track:t2", "spotify:track:t3"} {
 			if !seen[want] {
 				t.Fatalf("queued set lost %s: %v", want, command.URIs)
+			}
+		}
+		if len(command.Seed) != 3 {
+			t.Fatalf("expected 3 seeded entries, got %#v", command.Seed)
+		}
+		named := map[string]bool{}
+		for _, e := range command.Seed {
+			named[e.ID] = e.Name != ""
+		}
+		for _, want := range []string{"t1", "t2", "t3"} {
+			if !named[want] {
+				t.Fatalf("seed lost name for %s: %#v", want, command.Seed)
 			}
 		}
 	default:

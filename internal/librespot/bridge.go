@@ -28,6 +28,7 @@ type TUICommand struct {
 	Kind             TUICommandKind
 	URI              string
 	URIs             []string
+	Seed             []PlaybackStateQueueEntry
 	TrackID          string
 	Position         int64
 	Volume           int

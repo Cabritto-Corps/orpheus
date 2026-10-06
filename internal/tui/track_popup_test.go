@@ -7,6 +7,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 
+	"orpheus/internal/librespot"
 	"orpheus/internal/spotify"
 )
 
@@ -68,4 +69,22 @@ func lastLine(s string) string {
 		return s[i+1:]
 	}
 	return s
+}
+
+func TestPlayFromTrackSeedsPopupMetadata(t *testing.T) {
+	m := NewLoaderModel()
+	m.tuiCmdCh = make(chan librespot.TUICommand, 2)
+	m.ui.trackPopupURI = "spotify:playlist:pl"
+	m.ui.trackPopupItems = []spotify.QueueItem{
+		{ID: "t1", Name: "Song One", Artist: "Artist", DurationMS: 200000, ImageURL: "cover-1"},
+		{ID: "t2", Name: "", Artist: "Artist", DurationMS: 200000},
+	}
+	next, _ := m.playFromTrack(0)
+	cmd := <-next.(model).tuiCmdCh
+	if cmd.Kind != librespot.TUICommandPlayContextFromTrack || cmd.TrackID != "t1" {
+		t.Fatalf("wrong play-from-track command: %#v", cmd)
+	}
+	if len(cmd.Seed) != 1 || cmd.Seed[0].ID != "t1" || cmd.Seed[0].Name != "Song One" || cmd.Seed[0].ImageURL != "cover-1" {
+		t.Fatalf("popup play must seed named rows only: %#v", cmd.Seed)
+	}
 }

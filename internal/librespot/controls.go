@@ -814,7 +814,9 @@ func (p *AppPlayer) commitLoadedContext(
 		defer p.queueHeadWarmInFlight.Store(false)
 		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataSweepTimeout)
 		defer metaCancel()
+		sweepStart := time.Now()
 		p.resolveContextQueueMetadata(metaCtx, allTracks, headURIs, currentURI)
+		p.runtime.Log.WithField("elapsed_ms", time.Since(sweepStart).Milliseconds()).WithField("tracks", len(allTracks)).Debug("queue metadata sweep finished")
 	}()
 	if err := p.loadCurrentTrack(ctx, paused, drop); err != nil {
 		if isUnplayableMediaError(err) {

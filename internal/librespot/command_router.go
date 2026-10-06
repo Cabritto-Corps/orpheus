@@ -99,6 +99,7 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 		}
 		return true, nil
 	case TUICommandPlayTrack:
+		p.seedQueueMeta(cmd.Seed)
 		spotCtx, err := singleTrackContext(cmd.URI)
 		if err != nil {
 			return true, err
@@ -112,6 +113,7 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 		}
 		return true, p.loadContext(ctx, spotCtx, nil, false, true)
 	case TUICommandPlayTracks:
+		p.seedQueueMeta(cmd.Seed)
 		spotCtx, err := trackListContext(cmd.URI, cmd.URIs)
 		if err != nil {
 			return true, err

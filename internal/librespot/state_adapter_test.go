@@ -122,8 +122,11 @@ func TestMetadataDurationMS(t *testing.T) {
 }
 
 func TestFallbackQueueLabel(t *testing.T) {
-	if got := fallbackQueueLabel(); got != "Unknown track" {
+	if got := fallbackQueueLabel(false); got != "Unknown track" {
 		t.Fatalf("expected 'Unknown track', got %s", got)
+	}
+	if got := fallbackQueueLabel(true); got != "Loading…" {
+		t.Fatalf("expected resolving rows to show loading, got %s", got)
 	}
 }
 
@@ -213,5 +216,38 @@ func TestBuildUpdateThreadsContextURI(t *testing.T) {
 	}
 	if len(u.Queue) != 1 || !u.Queue[0].Queued {
 		t.Fatalf("queue head must be flagged manual, got %+v", u.Queue)
+	}
+}
+
+func TestBuildPlaybackStateFallsBackToCachedMetaForCurrentTrack(t *testing.T) {
+	p, _ := newQueueHeadSignalPlayer(t, []string{"spotify:track:7GhIk7Il098yCjg4BQjzvb"})
+	p.state.player.Track = &connectpb.ProvidedTrack{Uri: "spotify:track:7GhIk7Il098yCjg4BQjzvb"}
+	p.setCachedQueueMeta("7GhIk7Il098yCjg4BQjzvb", PlaybackStateQueueEntry{ID: "7GhIk7Il098yCjg4BQjzvb", Name: "Seeded Song", Artist: "Seeded Artist"})
+	out := p.BuildPlaybackStateUpdate()
+	if out.TrackName != "Seeded Song" || out.ArtistName != "Seeded Artist" {
+		t.Fatalf("header must use cached metadata before the stream loads: %#v", out)
+	}
+}
+
+func TestBuildPlaybackStatePrefersPageMetadataOverCache(t *testing.T) {
+	p, _ := newQueueHeadSignalPlayer(t, []string{"spotify:track:7GhIk7Il098yCjg4BQjzvb"})
+	p.state.player.Track = &connectpb.ProvidedTrack{Uri: "spotify:track:7GhIk7Il098yCjg4BQjzvb", Metadata: map[string]string{"title": "Page Song", "artist_name": "Page Artist"}}
+	p.setCachedQueueMeta("7GhIk7Il098yCjg4BQjzvb", PlaybackStateQueueEntry{ID: "7GhIk7Il098yCjg4BQjzvb", Name: "Seeded Song", Artist: "Seeded Artist"})
+	out := p.BuildPlaybackStateUpdate()
+	if out.TrackName != "Page Song" || out.ArtistName != "Page Artist" {
+		t.Fatalf("page metadata must win over cache: %#v", out)
+	}
+}
+
+func TestQueueEntriesShowLoadingWhileResolving(t *testing.T) {
+	p := newTestAppPlayer()
+	all := []*connectpb.ProvidedTrack{{Uri: "spotify:track:7GhIk7Il098yCjg4BQjzvb"}}
+	p.queueMetaPending.Store(true)
+	if entries := providedTracksToQueueEntries(p, all); len(entries) != 1 || entries[0].Name != "Loading…" {
+		t.Fatalf("resolving rows must show loading: %#v", entries)
+	}
+	p.queueMetaPending.Store(false)
+	if entries := providedTracksToQueueEntries(p, all); len(entries) != 1 || entries[0].Name != "Unknown track" {
+		t.Fatalf("settled rows must show unknown: %#v", entries)
 	}
 }

@@ -177,7 +177,9 @@ func (m model) playRecentSong(track spotify.QueueItem) (tea.Model, tea.Cmd) {
 	if !strings.HasPrefix(uri, "spotify:") {
 		uri = "spotify:track:" + uri
 	}
-	next, cmd := m.playSingleTrack(uri, track.ImageURL)
+	next, cmd := m.playSingleTrack(uri, track.ImageURL, []librespot.PlaybackStateQueueEntry{
+		{ID: track.ID, Name: track.Name, Artist: track.Artist, DurationMS: track.DurationMS, ImageURL: track.ImageURL},
+	})
 	played := next.(model)
 	played.ui.activeTab = tabRecents
 	return played, tea.Batch(cmd, played.kittyOverlayCmd())
@@ -647,10 +649,18 @@ func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 	}
 
 	if m.tuiCmdCh != nil {
+		seeds := make([]librespot.PlaybackStateQueueEntry, 0, len(m.ui.trackPopupItems))
+		for _, item := range m.ui.trackPopupItems {
+			if strings.TrimSpace(item.ID) == "" || strings.TrimSpace(item.Name) == "" {
+				continue
+			}
+			seeds = append(seeds, librespot.PlaybackStateQueueEntry{ID: item.ID, Name: item.Name, Artist: item.Artist, DurationMS: item.DurationMS, ImageURL: item.ImageURL})
+		}
 		cmd := librespot.TUICommand{
 			Kind:    librespot.TUICommandPlayContextFromTrack,
 			URI:     m.ui.trackPopupURI,
 			TrackID: trackID,
+			Seed:    seeds,
 		}
 		return m, m.sendTUICommandOrRetry(cmd)
 	}

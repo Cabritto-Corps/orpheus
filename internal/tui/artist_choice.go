@@ -21,7 +21,7 @@ const artistTrackQueueSize = 50
 type artistTracksMsg struct {
 	token    int
 	artistID string
-	uris     []string
+	tracks   []spotify.QueueItem
 	err      error
 }
 
@@ -40,8 +40,8 @@ func (m model) artistTracksCmd(token int, artistID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, catalogRequestTimeout)
 		defer cancel()
-		uris, err := spotify.CollectArtistTracks(ctx, catalog, artistID, artistTrackQueueSize)
-		return artistTracksMsg{token: token, artistID: artistID, uris: uris, err: err}
+		tracks, err := spotify.CollectArtistTracks(ctx, catalog, artistID, artistTrackQueueSize)
+		return artistTracksMsg{token: token, artistID: artistID, tracks: tracks, err: err}
 	}
 }
 
@@ -58,21 +58,30 @@ func (m model) handleArtistTracksMsg(msg artistTracksMsg) (tea.Model, tea.Cmd) {
 		m.ui.artistChoiceErr = msg.err
 		return m, m.kittyOverlayCmd()
 	}
-	if len(msg.uris) == 0 {
+	if len(msg.tracks) == 0 {
 		m.ui.artistChoiceErr = errors.New("no playable tracks found for artist")
 		return m, m.kittyOverlayCmd()
 	}
-	rand.Shuffle(len(msg.uris), func(i, j int) { msg.uris[i], msg.uris[j] = msg.uris[j], msg.uris[i] })
-	if len(msg.uris) > artistTrackQueueSize {
-		msg.uris = msg.uris[:artistTrackQueueSize]
+	rand.Shuffle(len(msg.tracks), func(i, j int) { msg.tracks[i], msg.tracks[j] = msg.tracks[j], msg.tracks[i] })
+	if len(msg.tracks) > artistTrackQueueSize {
+		msg.tracks = msg.tracks[:artistTrackQueueSize]
 	}
 	result := m.ui.artistChoiceResult
 	m.ui.artistChoiceOpen = false
 	m.ui.artistChoiceReq++
-	return m.playArtistTracks(result.URI, result.ImageURL, msg.uris)
+	uris := make([]string, 0, len(msg.tracks))
+	seeds := make([]librespot.PlaybackStateQueueEntry, 0, len(msg.tracks))
+	for _, t := range msg.tracks {
+		if strings.TrimSpace(t.ID) == "" {
+			continue
+		}
+		uris = append(uris, "spotify:track:"+strings.TrimSpace(t.ID))
+		seeds = append(seeds, librespot.PlaybackStateQueueEntry{ID: strings.TrimSpace(t.ID), Name: t.Name, Artist: t.Artist, DurationMS: t.DurationMS})
+	}
+	return m.playArtistTracks(result.URI, result.ImageURL, uris, seeds)
 }
 
-func (m model) playArtistTracks(artistURI, imageURL string, uris []string) (tea.Model, tea.Cmd) {
+func (m model) playArtistTracks(artistURI, imageURL string, uris []string, seeds []librespot.PlaybackStateQueueEntry) (tea.Model, tea.Cmd) {
 	m.ui.activeTab = tabPlayer
 	m.transport.playbackErr = nil
 	m.freezeSessionTrack(m.transport.status)
@@ -90,7 +99,7 @@ func (m model) playArtistTracks(artistURI, imageURL string, uris []string) (tea.
 	m.transport.interpolationSyncAt = time.Time{}
 	m.transport.interpolationProgressMS = 0
 	m.beginTransportTransition()
-	cmd := librespot.TUICommand{Kind: librespot.TUICommandPlayTracks, URI: artistURI, URIs: uris}
+	cmd := librespot.TUICommand{Kind: librespot.TUICommandPlayTracks, URI: artistURI, URIs: uris, Seed: seeds}
 	return m, tea.Batch(m.sendTUICommandOrRetry(cmd), m.loadImageCmd(imageURL, true))
 }
 

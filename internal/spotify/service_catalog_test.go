@@ -343,7 +343,12 @@ func (f artistStubCatalog) ListArtistAlbumsPage(_ context.Context, _ string, off
 
 func (f artistStubCatalog) ListAlbumTracksPage(_ context.Context, albumID string, _, _ int) (*PlaylistItemsPage, error) {
 	ids := f.tracks[albumID]
-	return &PlaylistItemsPage{ItemIDs: ids, NextOffset: len(ids)}, nil
+	out := &PlaylistItemsPage{NextOffset: len(ids)}
+	for _, id := range ids {
+		out.ItemIDs = append(out.ItemIDs, id)
+		out.ItemInfos = append(out.ItemInfos, QueueItem{ID: id, Name: "Song " + id, Artist: "A1", DurationMS: 180000})
+	}
+	return out, nil
 }
 
 func TestCollectArtistTracksDedupesAcrossAlbums(t *testing.T) {
@@ -351,17 +356,15 @@ func TestCollectArtistTracksDedupesAcrossAlbums(t *testing.T) {
 		albums: map[string][]string{"a1": {"al1", "al2"}},
 		tracks: map[string][]string{"al1": {"t1", "t2"}, "al2": {"t2", "t3"}},
 	}
-	uris, err := CollectArtistTracks(context.Background(), catalog, "a1", 50)
+	tracks, err := CollectArtistTracks(context.Background(), catalog, "a1", 50)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(uris) != 3 {
-		t.Fatalf("expected 3 deduped tracks, got %v", uris)
+	if len(tracks) != 3 {
+		t.Fatalf("expected 3 deduped tracks, got %v", tracks)
 	}
-	for _, u := range uris {
-		if len(u) < 14 || u[:14] != "spotify:track:" {
-			t.Fatalf("track URI not normalized: %q", u)
-		}
+	if tracks[0].Name != "Song t1" || tracks[0].Artist != "A1" || tracks[0].DurationMS != 180000 {
+		t.Fatalf("track metadata lost: %#v", tracks[0])
 	}
 }
 
@@ -370,12 +373,12 @@ func TestCollectArtistTracksSkipsFailedAlbums(t *testing.T) {
 		albums: map[string][]string{"a1": {"al1", "al2"}},
 		tracks: map[string][]string{"al2": {"t9"}},
 	}
-	uris, err := CollectArtistTracks(context.Background(), catalog, "a1", 50)
+	tracks, err := CollectArtistTracks(context.Background(), catalog, "a1", 50)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(uris) != 1 || uris[0] != "spotify:track:t9" {
-		t.Fatalf("expected surviving album tracks, got %v", uris)
+	if len(tracks) != 1 || tracks[0].ID != "t9" || tracks[0].Name != "Song t9" {
+		t.Fatalf("expected surviving album tracks, got %v", tracks)
 	}
 }
 

@@ -708,7 +708,7 @@ func (s *Service) ListArtistAlbumsPage(ctx context.Context, artistID string, off
 	return out, nil
 }
 
-func CollectArtistTracks(ctx context.Context, catalog PlaylistCatalog, artistID string, target int) ([]string, error) {
+func CollectArtistTracks(ctx context.Context, catalog PlaylistCatalog, artistID string, target int) ([]QueueItem, error) {
 	artistID = strings.TrimSpace(artistID)
 	if artistID == "" {
 		return nil, errors.New("artist ID must not be empty")
@@ -752,9 +752,9 @@ func CollectArtistTracks(ctx context.Context, catalog PlaylistCatalog, artistID 
 		offset = page.NextOffset
 	}
 	seen := make(map[string]struct{})
-	var uris []string
+	var tracks []QueueItem
 	for _, albumID := range albumIDs {
-		if len(uris) >= target+artistTracksTargetPad {
+		if len(tracks) >= target+artistTracksTargetPad {
 			break
 		}
 		trackOffset := 0
@@ -763,20 +763,20 @@ func CollectArtistTracks(ctx context.Context, catalog PlaylistCatalog, artistID 
 			if err != nil {
 				break
 			}
-			if page == nil || len(page.ItemIDs) == 0 {
+			if page == nil || len(page.ItemInfos) == 0 {
 				break
 			}
-			for _, id := range page.ItemIDs {
-				id = strings.TrimSpace(id)
-				if id == "" {
+			for _, item := range page.ItemInfos {
+				item.ID = strings.TrimSpace(item.ID)
+				if item.ID == "" || strings.TrimSpace(item.Name) == "" {
 					continue
 				}
-				if _, ok := seen[id]; ok {
+				if _, ok := seen[item.ID]; ok {
 					continue
 				}
-				seen[id] = struct{}{}
-				uris = append(uris, "spotify:track:"+id)
-				if len(uris) >= target+artistTracksTargetPad {
+				seen[item.ID] = struct{}{}
+				tracks = append(tracks, item)
+				if len(tracks) >= target+artistTracksTargetPad {
 					break
 				}
 			}
@@ -786,10 +786,10 @@ func CollectArtistTracks(ctx context.Context, catalog PlaylistCatalog, artistID 
 			trackOffset = page.NextOffset
 		}
 	}
-	if len(uris) == 0 {
+	if len(tracks) == 0 {
 		return nil, errors.New("no playable tracks found for artist")
 	}
-	return uris, nil
+	return tracks, nil
 }
 
 func (s *Service) SearchPage(ctx context.Context, query string, offset, limit int) (*SearchPage, error) {
