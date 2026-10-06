@@ -656,7 +656,7 @@ func TestResolveQueueMetadataBatchCollectsFailedChunksIntoOneRetry(t *testing.T)
 		mu.Lock()
 		n := fetches
 		mu.Unlock()
-		if n >= 3 || !time.Now().Before(deadline) {
+		if n >= 4 || !time.Now().Before(deadline) {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
