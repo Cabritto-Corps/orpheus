@@ -55,10 +55,19 @@ func (p *AppPlayer) buildPlaybackStateUpdate(includeQueue bool) *PlaybackStateUp
 		out.TrackID = golibrespot.NormalizeSpotifyId(p.state.player.Track.Uri)
 	}
 	out.ContextURI = strings.TrimSpace(p.state.player.ContextUri)
-	if p.primaryStream == nil && p.state.player.Track != nil && p.state.player.Track.Metadata != nil {
-		out.TrackName = metadataValue(p.state.player.Track.Metadata, "title", "name", "track_name")
-		out.ArtistName = metadataValue(p.state.player.Track.Metadata, "artist_name", "artist", "artists", "show_name")
-		out.AlbumName = metadataValue(p.state.player.Track.Metadata, "album_title", "album_name", "album")
+	if p.primaryStream == nil && p.state.player.Track != nil {
+		trackID := golibrespot.NormalizeSpotifyId(p.state.player.Track.Uri)
+		if p.state.player.Track.Metadata != nil {
+			out.TrackName = metadataValue(p.state.player.Track.Metadata, "title", "name", "track_name")
+			out.ArtistName = metadataValue(p.state.player.Track.Metadata, "artist_name", "artist", "artists", "show_name")
+			out.AlbumName = metadataValue(p.state.player.Track.Metadata, "album_title", "album_name", "album")
+		}
+		if out.TrackName == "" && trackID != "" {
+			if cached := p.getCachedQueueMeta(trackID); cached != nil {
+				out.TrackName = cached.Name
+				out.ArtistName = cached.Artist
+			}
+		}
 	}
 	prod := p.prodInfoSnapshot()
 	if p.primaryStream != nil && prod != nil {
@@ -113,7 +122,7 @@ func providedTracksToQueueEntries(p *AppPlayer, tracks []*connectpb.ProvidedTrac
 			e.DurationMS = metadataDurationMS(t.Metadata)
 		}
 		if e.Name == "" {
-			e.Name = fallbackQueueLabel()
+			e.Name = fallbackQueueLabel(p.queueMetaPending.Load())
 		}
 		if e.Artist == "" {
 			e.Artist = "-"
@@ -132,7 +141,10 @@ func metadataValue(metadata map[string]string, keys ...string) string {
 	return ""
 }
 
-func fallbackQueueLabel() string {
+func fallbackQueueLabel(resolving bool) string {
+	if resolving {
+		return "Loading…"
+	}
 	return "Unknown track"
 }
 

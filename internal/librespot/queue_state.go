@@ -47,9 +47,25 @@ func (p *AppPlayer) setCachedQueueMeta(id string, e PlaybackStateQueueEntry) {
 func (p *AppPlayer) resetQueueMetaForContext() {
 	p.queueMetaMu.Lock()
 	defer p.queueMetaMu.Unlock()
-	p.queueMetaCache = cache.NewLRU[string, PlaybackStateQueueEntry](8192)
+	if p.queueMetaCache == nil {
+		p.queueMetaCache = cache.NewLRU[string, PlaybackStateQueueEntry](8192)
+	}
 	p.queueMetaPending.Store(true)
 	p.queueMetaRetriesLeft.Store(int32(queueMetaRetryBudget))
+}
+
+func (p *AppPlayer) seedQueueMeta(seeds []PlaybackStateQueueEntry) {
+	for _, e := range seeds {
+		id := golibrespot.NormalizeSpotifyId(e.ID)
+		if id == "" || strings.TrimSpace(e.Name) == "" {
+			continue
+		}
+		e.ID = id
+		if e.Artist == "" {
+			e.Artist = "-"
+		}
+		p.setCachedQueueMeta(id, e)
+	}
 }
 
 const (
@@ -85,11 +101,12 @@ func (p *AppPlayer) queueHeadImageMissing(id string) bool {
 	return e == nil || strings.TrimSpace(e.ImageURL) == ""
 }
 
-func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*connectpb.ProvidedTrack, headURIs []string) {
+func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*connectpb.ProvidedTrack, headURIs []string, currentURI string) {
 	if len(all) == 0 && len(headURIs) == 0 {
 		return
 	}
 
+	all = orderUpcomingFirst(all, currentURI)
 	seen := make(map[string]struct{}, len(all))
 	toResolve := make([]string, 0, len(all))
 	changed := false
@@ -153,46 +170,80 @@ func (p *AppPlayer) resolveContextQueueMetadata(ctx context.Context, all []*conn
 	p.resolveQueueMetadataBatch(ctx, toResolve)
 }
 
+func orderUpcomingFirst(all []*connectpb.ProvidedTrack, currentURI string) []*connectpb.ProvidedTrack {
+	id := golibrespot.NormalizeSpotifyId(currentURI)
+	if id == "" {
+		return all
+	}
+	for i, t := range all {
+		if t == nil {
+			continue
+		}
+		if golibrespot.NormalizeSpotifyId(t.Uri) == id {
+			return append(all[i+1:], all[:i+1]...)
+		}
+	}
+	return all
+}
+
 func (p *AppPlayer) resolveQueueMetadataBatch(ctx context.Context, uris []string) bool {
 	if len(uris) == 0 {
 		return false
 	}
 	changed := false
+	var failed []string
 	for start := 0; start < len(uris); start += queueMetaBatchChunk {
 		if ctx.Err() != nil {
+			failed = append(failed, uris[start:]...)
 			break
 		}
 		end := min(start+queueMetaBatchChunk, len(uris))
-		if !p.resolveQueueMetadataChunk(ctx, uris[start:end]) {
-			p.scheduleQueueMetaRetry(uris[start:end])
+		chunkCtx, cancel := context.WithTimeout(ctx, metadataBatchTimeout)
+		ok := p.resolveQueueMetadataChunk(chunkCtx, uris[start:end])
+		cancel()
+		if !ok {
+			failed = append(failed, uris[start:end]...)
 			continue
 		}
 		changed = true
 		p.queueMetaPending.Store(false)
 		p.signalQueueMetaUpdated()
 	}
+	if len(failed) > 0 {
+		p.scheduleQueueMetaRetry(failed)
+	} else if p.runtime != nil {
+		p.runtime.Log.WithField("tracks", len(uris)).Debug("queue metadata batch resolved")
+	}
 	return changed
 }
 
-func (p *AppPlayer) scheduleQueueMetaRetry(chunk []string) {
-	if p == nil || p.queueMetaRetriesLeft.Load() <= 0 {
+func (p *AppPlayer) scheduleQueueMetaRetry(uris []string) {
+	if p == nil || len(uris) == 0 {
 		return
 	}
-	p.queueMetaRetriesLeft.Add(-1)
 	if !p.queueMetaRetryArmed.CompareAndSwap(false, true) {
 		return
 	}
+	if p.queueMetaRetriesLeft.Load() <= 0 {
+		p.queueMetaRetryArmed.Store(false)
+		if p.queueMetaPending.CompareAndSwap(true, false) {
+			p.signalQueueMetaUpdated()
+		}
+		return
+	}
+	p.queueMetaRetriesLeft.Add(-1)
 	delay := queueMetaRetryDelay
 	go func() {
-		defer p.queueMetaRetryArmed.Store(false)
 		select {
 		case <-time.After(delay):
 		case <-p.ownerContext().Done():
+			p.queueMetaRetryArmed.Store(false)
 			return
 		}
+		p.queueMetaRetryArmed.Store(false)
 		metaCtx, cancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
 		defer cancel()
-		p.resolveQueueMetadataBatch(metaCtx, chunk)
+		p.resolveQueueMetadataBatch(metaCtx, uris)
 	}()
 }
 
@@ -216,6 +267,9 @@ func (p *AppPlayer) resolveQueueMetadataChunk(ctx context.Context, uris []string
 		}
 		return false
 	}
+	if p.runtime != nil {
+		p.runtime.Log.WithField("resolved", len(batch)).WithField("requested", len(uris)).Debug("metadata chunk resolved")
+	}
 	return p.mergeQueueBatchResult(batch)
 }
 
@@ -233,6 +287,12 @@ func (p *AppPlayer) mergeQueueBatchResult(batch map[string]spclient.ResolvedEntr
 		}
 		e.ImageURL = queueMetaImageURL(p, entry.AlbumCoverFileId)
 		prev := p.getCachedQueueMeta(id)
+		if e.Name == "" && prev != nil {
+			e.Name = prev.Name
+		}
+		if (e.Artist == "" || e.Artist == "-") && prev != nil && prev.Artist != "" && prev.Artist != "-" {
+			e.Artist = prev.Artist
+		}
 		if prev == nil || prev.Name != e.Name || prev.ImageURL != e.ImageURL {
 			changed = true
 		}
@@ -262,7 +322,7 @@ func (p *AppPlayer) maybeSweepQueueImages() {
 	}
 	go func() {
 		defer p.queueSweepWarmInFlight.Store(false)
-		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
+		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataSweepTimeout)
 		defer metaCancel()
 		p.resolveQueueMetadataBatch(metaCtx, uris)
 	}()
@@ -283,7 +343,7 @@ func (p *AppPlayer) maybeWarmQueueHeadImages() {
 	}
 	go func() {
 		defer p.queueHeadWarmInFlight.Store(false)
-		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataBatchTimeout)
+		metaCtx, metaCancel := context.WithTimeout(p.ownerContext(), metadataSweepTimeout)
 		defer metaCancel()
 		p.resolveQueueMetadataBatch(metaCtx, uris)
 	}()

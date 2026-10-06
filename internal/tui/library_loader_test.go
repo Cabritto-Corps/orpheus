@@ -17,6 +17,7 @@ type fakeCatalog struct {
 	albums        func(offset, limit int) (*spotify.PlaylistPage, error)
 	playlistItems func(id string, offset, limit int) (*spotify.PlaylistItemsPage, error)
 	albumItems    func(id string, offset, limit int) (*spotify.PlaylistItemsPage, error)
+	artistAlbums  func(id string, offset, limit int) (*spotify.PlaylistPage, error)
 	recent        func(limit int) ([]spotify.QueueItem, error)
 }
 
@@ -82,6 +83,13 @@ func (f fakeCatalog) ListAlbumTracksPage(_ context.Context, id string, offset, l
 		return f.albumItems(id, offset, limit)
 	}
 	return &spotify.PlaylistItemsPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
+}
+
+func (f fakeCatalog) ListArtistAlbumsPage(_ context.Context, id string, offset, limit int) (*spotify.PlaylistPage, error) {
+	if f.artistAlbums != nil {
+		return f.artistAlbums(id, offset, limit)
+	}
+	return &spotify.PlaylistPage{Offset: offset, Limit: limit, NextOffset: offset, HasMore: false}, nil
 }
 
 func (f fakeCatalog) ResolveContextImageURL(_ context.Context, _ string, _ string) (string, error) {

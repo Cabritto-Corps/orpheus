@@ -99,7 +99,22 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 		}
 		return true, nil
 	case TUICommandPlayTrack:
+		p.seedQueueMeta(cmd.Seed)
 		spotCtx, err := singleTrackContext(cmd.URI)
+		if err != nil {
+			return true, err
+		}
+		p.state.setActive(true)
+		golibrespot.SetPaused(p.state.player, false)
+		p.state.player.Suppressions = &connectpb.Suppressions{}
+		p.state.player.PlayOrigin = &connectpb.PlayOrigin{
+			FeatureIdentifier: "go-librespot",
+			FeatureVersion:    golibrespot.VersionNumberString(),
+		}
+		return true, p.loadContext(ctx, spotCtx, nil, false, true)
+	case TUICommandPlayTracks:
+		p.seedQueueMeta(cmd.Seed)
+		spotCtx, err := trackListContext(cmd.URI, cmd.URIs)
 		if err != nil {
 			return true, err
 		}
@@ -147,48 +162,88 @@ func (p *AppPlayer) handleTUIContextCommand(ctx context.Context, cmd TUICommand)
 			}
 			allProvided := ctxTracks.AllTracks(bgCtx)
 
-			trackURIs := make([]string, 0, len(allProvided))
 			result := make([]PlaybackStateQueueEntry, 0, len(allProvided))
+			indexesByID := make(map[string][]int, len(allProvided))
+			seenMissing := make(map[string]struct{}, len(allProvided))
+			var missingURIs []string
 			for _, t := range allProvided {
 				if t == nil {
 					continue
 				}
 				id := golibrespot.NormalizeSpotifyId(t.Uri)
-				trackURIs = append(trackURIs, t.Uri)
-				result = append(result, PlaybackStateQueueEntry{ID: id, Name: "Unknown track", Artist: "-"})
+				e := PlaybackStateQueueEntry{ID: id}
+				if t.Metadata != nil {
+					e.Name = metadataValue(t.Metadata, "title", "name", "track_name", "entity_name", "track_title")
+					e.Artist = metadataValue(t.Metadata, "artist_name", "artist", "artists", "show_name", "album_artist_name")
+					e.DurationMS = metadataDurationMS(t.Metadata)
+				}
+				if e.Artist == "" {
+					e.Artist = "-"
+				}
+				if e.Name == "" {
+					e.Name = "Unknown track"
+					if _, ok := seenMissing[id]; !ok {
+						seenMissing[id] = struct{}{}
+						missingURIs = append(missingURIs, t.Uri)
+					}
+				}
+				indexesByID[id] = append(indexesByID[id], len(result))
+				result = append(result, e)
 			}
 
-			if len(trackURIs) > 0 {
-				metaCtx, metaCancel := context.WithTimeout(bgCtx, metadataBatchTimeout)
-				batchMeta, metaErr := p.sess.Spclient().ResolveTrackOrEpisodeMetadataBatch(metaCtx, trackURIs)
-				metaCancel()
-				if metaErr == nil {
-					byID := make(map[string]PlaybackStateQueueEntry, len(batchMeta))
-					for uri, entry := range batchMeta {
-						id := golibrespot.NormalizeSpotifyId(uri)
-						artist := entry.Artist
-						if artist == "" {
-							artist = "-"
-						}
-						byID[id] = PlaybackStateQueueEntry{ID: id, Name: entry.Name, Artist: artist, DurationMS: entry.DurationMS, ImageURL: queueMetaImageURL(p, entry.AlbumCoverFileId)}
+			send := func() {
+				if bgCtx.Err() == nil && resultCh != nil {
+					select {
+					case resultCh <- ContextTracksResult{ReqToken: reqToken, Entries: append([]PlaybackStateQueueEntry(nil), result...)}:
+					default:
+						p.runtime.Log.Warn("dropped context tracks result, no receiver")
 					}
-					for i := range result {
-						if meta, ok := byID[result[i].ID]; ok {
-							result[i] = meta
-						}
-					}
-				} else if bgCtx.Err() == nil {
-					p.runtime.Log.WithError(metaErr).Warn("failed resolving track metadata batch for context tracks")
 				}
 			}
-
-			if bgCtx.Err() == nil && resultCh != nil {
-				select {
-				case resultCh <- ContextTracksResult{ReqToken: reqToken, Entries: result}:
-				default:
-					p.runtime.Log.Warn("dropped context tracks result, no receiver")
+			sent := len(missingURIs) == 0
+			if sent {
+				send()
+			}
+			resolved := 0
+			for start := 0; start < len(missingURIs); start += queueMetaBatchChunk {
+				if bgCtx.Err() != nil {
+					break
+				}
+				end := min(start+queueMetaBatchChunk, len(missingURIs))
+				chunkCtx, chunkCancel := context.WithTimeout(bgCtx, metadataBatchTimeout)
+				batchMeta, metaErr := p.sess.Spclient().ResolveTrackOrEpisodeMetadataBatch(chunkCtx, missingURIs[start:end])
+				chunkCancel()
+				if metaErr != nil {
+					if bgCtx.Err() == nil {
+						p.runtime.Log.WithError(metaErr).Warn("failed resolving track metadata batch for context tracks")
+					}
+					continue
+				}
+				chunkResolved := 0
+				for uri, entry := range batchMeta {
+					idxs, ok := indexesByID[golibrespot.NormalizeSpotifyId(uri)]
+					if !ok || entry.Name == "" {
+						continue
+					}
+					artist := entry.Artist
+					if artist == "" {
+						artist = "-"
+					}
+					for _, idx := range idxs {
+						result[idx] = PlaybackStateQueueEntry{ID: result[idx].ID, Name: entry.Name, Artist: artist, DurationMS: entry.DurationMS, ImageURL: queueMetaImageURL(p, entry.AlbumCoverFileId)}
+					}
+					chunkResolved++
+				}
+				resolved += chunkResolved
+				if chunkResolved > 0 {
+					send()
+					sent = true
 				}
 			}
+			if !sent {
+				send()
+			}
+			p.runtime.Log.WithField("uri", uri).WithField("resolved", resolved).WithField("tracks", len(result)).Debug("context tracks resolved")
 		}()
 		return true, nil
 	default:
@@ -224,6 +279,32 @@ func singleTrackContext(uri string) (*connectpb.Context, error) {
 		Uri: trackURI,
 		Pages: []*connectpb.ContextPage{{
 			Tracks: []*connectpb.ContextTrack{{Uri: trackURI}},
+		}},
+	}, nil
+}
+
+func trackListContext(contextURI string, uris []string) (*connectpb.Context, error) {
+	contextURI = strings.TrimSpace(contextURI)
+	if len(uris) == 0 {
+		return nil, fmt.Errorf("empty track list")
+	}
+	tracks := make([]*connectpb.ContextTrack, 0, len(uris))
+	for _, uri := range uris {
+		uri = strings.TrimSpace(uri)
+		id, err := golibrespot.SpotifyIdFromUri(uri)
+		if err != nil || id == nil || id.Type() != golibrespot.SpotifyIdTypeTrack {
+			return nil, fmt.Errorf("invalid Spotify track URI %q", uri)
+		}
+		trackURI := id.Uri()
+		tracks = append(tracks, &connectpb.ContextTrack{Uri: trackURI})
+	}
+	if contextURI == "" {
+		contextURI = tracks[0].Uri
+	}
+	return &connectpb.Context{
+		Uri: contextURI,
+		Pages: []*connectpb.ContextPage{{
+			Tracks: tracks,
 		}},
 	}, nil
 }

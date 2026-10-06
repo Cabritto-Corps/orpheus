@@ -177,7 +177,9 @@ func (m model) playRecentSong(track spotify.QueueItem) (tea.Model, tea.Cmd) {
 	if !strings.HasPrefix(uri, "spotify:") {
 		uri = "spotify:track:" + uri
 	}
-	next, cmd := m.playSingleTrack(uri, track.ImageURL)
+	next, cmd := m.playSingleTrack(uri, track.ImageURL, []librespot.PlaybackStateQueueEntry{
+		{ID: track.ID, Name: track.Name, Artist: track.Artist, DurationMS: track.DurationMS, ImageURL: track.ImageURL},
+	})
 	played := next.(model)
 	played.ui.activeTab = tabRecents
 	return played, tea.Batch(cmd, played.kittyOverlayCmd())
@@ -335,6 +337,9 @@ func (m model) routeModalKey(msg tea.KeyPressMsg, kind modalKind) (tea.Model, te
 	if kind == modalTrackPopup {
 		return m.handleTrackPopupKey(msg)
 	}
+	if kind == modalArtistChoice {
+		return m.handleArtistChoiceKey(msg)
+	}
 	return m.handleSettingsKey(msg)
 }
 
@@ -386,15 +391,11 @@ func (m *model) handleQueueKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueJump, QueueIndex: cursor})
 	case keyMatches(msg, k.QueueRemove):
-		if !q[cursor].Queued {
-			m.transport.playbackErr = errors.New("only queued tracks can be removed")
-			return nil
-		}
 		return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueRemove, QueueIndex: cursor})
 	case keyMatches(msg, k.QueueMoveUp):
 		if cursor > 0 {
-			if !q[cursor].Queued || !q[cursor-1].Queued {
-				m.transport.playbackErr = errors.New("only queued tracks can be reordered")
+			if q[cursor].Queued != q[cursor-1].Queued {
+				m.transport.playbackErr = errors.New("can't move across queue and context rows")
 				return nil
 			}
 			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueReorder, QueueIndex: cursor, QueueTargetIndex: cursor - 1})
@@ -402,8 +403,8 @@ func (m *model) handleQueueKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case keyMatches(msg, k.QueueMoveDown):
 		if cursor < len(q)-1 {
-			if !q[cursor].Queued || !q[cursor+1].Queued {
-				m.transport.playbackErr = errors.New("only queued tracks can be reordered")
+			if q[cursor].Queued != q[cursor+1].Queued {
+				m.transport.playbackErr = errors.New("can't move across queue and context rows")
 				return nil
 			}
 			return m.sendTUICommandOrRetry(librespot.TUICommand{Kind: librespot.TUICommandQueueReorder, QueueIndex: cursor, QueueTargetIndex: cursor + 1})
@@ -648,10 +649,18 @@ func (m model) playFromTrack(trackIndex int) (tea.Model, tea.Cmd) {
 	}
 
 	if m.tuiCmdCh != nil {
+		seeds := make([]librespot.PlaybackStateQueueEntry, 0, len(m.ui.trackPopupItems))
+		for _, item := range m.ui.trackPopupItems {
+			if strings.TrimSpace(item.ID) == "" || strings.TrimSpace(item.Name) == "" {
+				continue
+			}
+			seeds = append(seeds, librespot.PlaybackStateQueueEntry{ID: item.ID, Name: item.Name, Artist: item.Artist, DurationMS: item.DurationMS, ImageURL: item.ImageURL})
+		}
 		cmd := librespot.TUICommand{
 			Kind:    librespot.TUICommandPlayContextFromTrack,
 			URI:     m.ui.trackPopupURI,
 			TrackID: trackID,
+			Seed:    seeds,
 		}
 		return m, m.sendTUICommandOrRetry(cmd)
 	}

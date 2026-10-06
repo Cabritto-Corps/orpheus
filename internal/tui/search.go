@@ -36,6 +36,15 @@ func (m model) handleSearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m.moveSearchSelection(-1)
 			}
 			return m.moveSearchSelection(1)
+		case msg.Code == tea.KeyPgUp, msg.Code == tea.KeyPgDown:
+			perPage := s.list.Paginator.PerPage
+			if perPage <= 0 {
+				perPage = 10
+			}
+			if msg.Code == tea.KeyPgUp {
+				return m.pageSearchSelection(-perPage)
+			}
+			return m.pageSearchSelection(perPage)
 		}
 		oldQuery := s.input.Value()
 		var cmd tea.Cmd
@@ -105,6 +114,13 @@ func (m model) moveSearchSelection(delta int) (tea.Model, tea.Cmd) {
 		m.scheduleNavDebounceCmd(),
 		m.kittyOverlayCmd(),
 	)
+}
+
+func (m model) pageSearchSelection(delta int) (tea.Model, tea.Cmd) {
+	next, cmd := m.moveSearchSelection(delta)
+	moved := next.(model)
+	moved, more := moved.loadMoreSearchIfNeeded()
+	return moved, tea.Batch(cmd, more)
 }
 
 func (m model) setSearchQuery(query string) (model, tea.Cmd) {
@@ -186,7 +202,7 @@ func (m model) loadMoreSearchIfNeeded() (model, tea.Cmd) {
 
 func (m model) selectSearchResult(result spotify.SearchResultItem) (tea.Model, tea.Cmd) {
 	if result.Kind == "artist" {
-		return m.playArtistStation(result)
+		return m.openArtistChoice(result)
 	}
 	if result.Kind == "album" {
 		return m.selectAndPlayPlaylist(playlistItem{summary: spotify.PlaylistSummary{
@@ -195,7 +211,9 @@ func (m model) selectSearchResult(result spotify.SearchResultItem) (tea.Model, t
 			TrackCount: result.TrackCount, ImageURL: result.ImageURL,
 		}})
 	}
-	next, cmd := m.playSingleTrack(result.URI, result.ImageURL)
+	next, cmd := m.playSingleTrack(result.URI, result.ImageURL, []librespot.PlaybackStateQueueEntry{
+		{ID: result.ID, Name: result.Name, Artist: result.Owner, DurationMS: result.DurationMS, ImageURL: result.ImageURL},
+	})
 	played := next.(model)
 	// Keep the search results available after playing a song. Arrows browse;
 	// Enter plays another result. Album contexts and artist stations open Player.
@@ -225,7 +243,7 @@ func (m model) playArtistStation(result spotify.SearchResultItem) (tea.Model, te
 	return m, tea.Batch(m.sendTUICommandOrRetry(cmd), m.loadImageCmd(result.ImageURL, true))
 }
 
-func (m model) playSingleTrack(uri, imageURL string) (tea.Model, tea.Cmd) {
+func (m model) playSingleTrack(uri, imageURL string, seeds []librespot.PlaybackStateQueueEntry) (tea.Model, tea.Cmd) {
 	m.ui.activeTab = tabPlayer
 	m.transport.playbackErr = nil
 	m.freezeSessionTrack(m.transport.status)
@@ -241,7 +259,7 @@ func (m model) playSingleTrack(uri, imageURL string) (tea.Model, tea.Cmd) {
 	m.transport.interpolationSyncAt = time.Time{}
 	m.transport.interpolationProgressMS = 0
 	m.beginTransportTransition()
-	cmd := librespot.TUICommand{Kind: librespot.TUICommandPlayTrack, URI: uri}
+	cmd := librespot.TUICommand{Kind: librespot.TUICommandPlayTrack, URI: uri, Seed: seeds}
 	return m, tea.Batch(m.sendTUICommandOrRetry(cmd), m.loadImageCmd(imageURL, true))
 }
 

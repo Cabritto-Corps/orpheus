@@ -76,6 +76,8 @@ func (m model) modalView(kind modalKind) string {
 		return m.helpModalView()
 	case modalTrackPopup:
 		return m.trackPopupView()
+	case modalArtistChoice:
+		return m.artistChoiceView()
 	case modalNone:
 		return ""
 	default:

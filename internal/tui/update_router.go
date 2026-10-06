@@ -145,6 +145,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.pumpInputExecutor()
 	case trackPopupItemsMsg:
 		return m.handleTrackPopupItemsMsg(msg)
+	case artistTracksMsg:
+		return m.handleArtistTracksMsg(msg)
 	case list.FilterMatchesMsg:
 		return m.handleFilterMatchesMsg(msg)
 	case tea.KeyPressMsg:

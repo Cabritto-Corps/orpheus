@@ -483,6 +483,76 @@ func (c *playlistCatalog) ListAlbumTracksPage(ctx context.Context, albumID strin
 	return out, nil
 }
 
+func (c *playlistCatalog) ListArtistAlbumsPage(ctx context.Context, artistID string, offset, limit int) (*spotify.PlaylistPage, error) {
+	artistID = strings.TrimSpace(artistID)
+	if artistID == "" {
+		return nil, fmt.Errorf("artist ID must not be empty")
+	}
+	if offset < 0 {
+		return nil, fmt.Errorf("artist album offset must be >= 0")
+	}
+	if limit <= 0 || limit > 10 {
+		limit = 10
+	}
+	q := url.Values{}
+	q.Set("limit", strconv.Itoa(limit))
+	q.Set("offset", strconv.Itoa(offset))
+	q.Set("include_groups", "album,single")
+	resp, err := c.doWith429Retry(ctx, "GET", "v1/artists/"+url.PathEscape(artistID)+"/albums", q, nil)
+	if err != nil {
+		return nil, fmt.Errorf("webapi artist albums: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var raw struct {
+		Items []struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			URI         string `json:"uri"`
+			TotalTracks int    `json:"total_tracks"`
+			Artists     []struct {
+				Name string `json:"name"`
+			} `json:"artists"`
+			Images []struct {
+				URL string `json:"url"`
+			} `json:"images"`
+		} `json:"items"`
+		Next *string `json:"next"`
+	}
+	if err := spotify.DecodeWebAPIJSON(resp, http.StatusOK, &raw, func(status int, body string) error {
+		return fmt.Errorf("webapi artist albums: %d %s", status, body)
+	}); err != nil {
+		return nil, err
+	}
+	out := &spotify.PlaylistPage{Offset: offset, Limit: limit}
+	if len(raw.Items) == 0 {
+		out.NextOffset = offset
+		return out, nil
+	}
+	out.Items = make([]spotify.PlaylistSummary, 0, len(raw.Items))
+	for _, item := range raw.Items {
+		if item.ID == "" {
+			continue
+		}
+		artists := make([]string, 0, len(item.Artists))
+		for _, a := range item.Artists {
+			if name := strings.TrimSpace(a.Name); name != "" {
+				artists = append(artists, name)
+			}
+		}
+		imageURL := ""
+		if len(item.Images) > 0 {
+			imageURL = item.Images[0].URL
+		}
+		out.Items = append(out.Items, spotify.PlaylistSummary{
+			ID: item.ID, Name: item.Name, URI: item.URI, Kind: spotify.ContextKindAlbum,
+			Owner: strings.Join(artists, ", "), TrackCount: item.TotalTracks, ImageURL: imageURL,
+		})
+	}
+	out.NextOffset = offset + len(raw.Items)
+	out.HasMore = raw.Next != nil && *raw.Next != ""
+	return out, nil
+}
+
 func (c *playlistCatalog) SearchPage(ctx context.Context, query string, offset, limit int) (*spotify.SearchPage, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
