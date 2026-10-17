@@ -9,7 +9,7 @@ require (
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886
-	github.com/charmbracelet/x/ansi v0.11.8
+	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/elxgy/go-librespot v0.0.0-20261006151337-a818cdb1bc54
 	github.com/joho/godotenv v1.5.1
 	github.com/muesli/termenv v0.16.0
